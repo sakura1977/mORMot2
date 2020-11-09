@@ -86,3 +86,20 @@ _FOSSIL_
 
 backup/
 .idea/
+mormot2static.7z
+static/delphi/crc32c64.obj
+static/delphi/deflate.obj
+static/delphi/sha512-x64sse4.obj
+static/delphi/sha512-x86.obj
+static/delphi/sqlite3.obj
+static/delphi/SynEcc32O2.obj
+static/delphi/trees.obj
+static/delphi/zlibadler32.obj
+static/delphi/zlibcompress.obj
+static/delphi/zlibcrc32.obj
+static/delphi/zlibdeflate.obj
+static/delphi/zlibinfback.obj
+static/delphi/zlibinffast.obj
+static/delphi/zlibinflate.obj
+static/delphi/zlibinftrees.obj
+static/delphi/zlibtrees.obj
