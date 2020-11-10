@@ -32,7 +32,8 @@ uses
   sysutils,
   classes,
   mormot.core.base,
-  mormot.core.os;
+  mormot.core.os,
+  mormot.core.unicode;
 
 
 { ****************** Low-Level libgssapi_krb5/libgssapi.so Library Access }
@@ -293,6 +294,7 @@ function gss_compare_oid(oid1, oid2: gss_OID): boolean;
 
 type
   /// GSSAPI Auth context
+  // - first field should be an Int64 ID
   TSecContext = record
     ID: Int64;
     CredHandle: pointer;
@@ -405,8 +407,13 @@ procedure ServerForceKeytab(const aKeytab: RawUTF8);
 const
   /// HTTP header to be set for authentication
   SECPKGNAMEHTTPWWWAUTHENTICATE = 'WWW-Authenticate: Negotiate';
+
   /// HTTP header pattern received for authentication
   SECPKGNAMEHTTPAUTHORIZATION = 'AUTHORIZATION: NEGOTIATE ';
+
+  /// character used as marker in user name to indicates the associated domain
+  SSPI_USER_CHAR = '@';
+
 
 /// help converting fully qualified domain names to NT4-style NetBIOS names
 // - to use same value for TAuthUser.LogonName on all platforms user name
@@ -425,6 +432,12 @@ procedure ServerDomainMapUnRegister(const aOld, aNew: RawUTF8);
 
 /// help converting fully qualified domain names to NT4-style NetBIOS names
 procedure ServerDomainMapUnRegisterAll;
+
+
+/// high-level cross-platform initialization function
+// - as called e.g. by mormot.rest.client/server.pas
+// - in this unit, will just call LoadGSSAPI('')
+procedure InitializeDomainAuth;
 
 
 implementation
@@ -489,33 +502,43 @@ procedure LoadGSSAPI(const LibraryName: TFileName);
 var
   i: PtrInt;
   P: PPointerArray;
+  api: TGSSAPI;
 begin
   if GSSAPI <> nil then
     // already loaded
     exit;
-  GSSAPI := TGSSAPI.Create;
-  with GSSAPI do
+  api := TGSSAPI.Create;
+  if api.TryLoadLibrary([LibraryName, GSSLib_MIT, GSSLib_Heimdal], nil) then
   begin
-    if TryLoadLibrary([LibraryName, GSSLib_MIT, GSSLib_Heimdal], nil) then
+    P := @@api.gss_import_name;
+    for i := 0 to high(GSS_NAMES) do
+      api.GetProc(GSS_NAMES[i], @P^[i]);
+    if not Assigned(api.krb5_gss_register_acceptor_identity) then
+      // try alternate function name
+      api.GetProc('gsskrb5_register_acceptor_identity',
+        @api.krb5_gss_register_acceptor_identity);
+    if Assigned(api.gss_acquire_cred) and
+       Assigned(api.gss_accept_sec_context) and
+       Assigned(api.gss_release_buffer) and
+       Assigned(api.gss_inquire_context) and
+       Assigned(api.gss_display_name) and
+       Assigned(api.gss_release_name) then
     begin
-      P := @gss_import_name;
-      for i := 0 to high(GSS_NAMES) do
-        GetProc(GSS_NAMES[i], P^[i]);
-      if not Assigned(krb5_gss_register_acceptor_identity) then
-        // try alternate function name
-        GetProc('gsskrb5_register_acceptor_identity',
-          @krb5_gss_register_acceptor_identity);
-      if Assigned(gss_acquire_cred) and
-         Assigned(gss_accept_sec_context) and
-         Assigned(gss_release_buffer) and
-         Assigned(gss_inquire_context) and
-         Assigned(gss_display_name) and
-         Assigned(gss_release_name) then
-       // minimal API to work on server side
-       exit;
+      // minimal API to work on server side -> thread safe setup into GSSAPI
+      GlobalLock;
+      try
+        if GSSAPI = nil then
+        begin
+          GSSAPI := api;
+          exit;
+        end;
+      finally
+        GlobalUnlock;
+      end;
     end;
   end;
-  FreeAndNil(GSSAPI);
+  // always release on setup failure
+  api.Free;
 end;
 
 function GSSAPILoaded: boolean;
@@ -526,9 +549,8 @@ end;
 procedure RequireGSSAPI;
 begin
   if GSSAPI = nil then
-    raise ENotSupportedException.Create(
-      'No GSSAPI library found - please install ' +
-      'either MIT or Heimdal GSSAPI implementation');
+    raise ENotSupportedException.Create('No GSSAPI library found - please ' +
+      'install either MIT or Heimdal GSSAPI implementation');
 end;
 
 
@@ -754,41 +776,6 @@ begin
     aSecContext, aInData, ForceSecKerberosSPN, aOutData);
 end;
 
-function IdemPChar(p, up: PUTF8Char): boolean;
-var
-  c, u: AnsiChar;
-begin
-  result := false;
-  if (p = nil) or
-     (up = nil) then
-    exit;
-  repeat
-    u := up^;
-    if u = #0 then
-      break;
-    inc(up);
-    c := p^;
-    inc(p);
-    if (c >= 'a') and
-       (c <= 'z') then
-      dec(c, 32);
-    if c <> u then
-      exit;
-  until false;
-  result := true;
-end;
-
-function PosChar(Str: PUTF8Char; Chr: AnsiChar): PUTF8Char; inline;
-begin
-  result := nil;
-  if Str <> nil then
-    repeat
-      if Str^ = #0 then
-        exit;
-    until Str^ = Chr;
-  result := Str;
-end;
-
 function ServerSSPIAuth(var aSecContext: TSecContext;
   const aInData: RawByteString; out aOutData: RawByteString): boolean;
 var
@@ -960,6 +947,11 @@ procedure ServerForceKeytab(const aKeytab: RawUTF8);
 begin
   if Assigned(GSSAPI.krb5_gss_register_acceptor_identity) then
     GSSAPI.krb5_gss_register_acceptor_identity(pointer(aKeytab));
+end;
+
+procedure InitializeDomainAuth;
+begin
+  LoadGSSAPI('');
 end;
 
 {$endif MSWINDOWS}

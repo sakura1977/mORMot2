@@ -38,8 +38,16 @@ uses
 type
   /// used to store a set of 8-bit encoded characters
   TSynAnsicharSet = set of AnsiChar;
+
   /// used to store a set of 8-bit unsigned integers
   TSynByteSet = set of Byte;
+
+  /// a generic callback, which can be used to translate some text on the fly
+  // - maps procedure TLanguageFile.Translate(var English: string) signature
+  // as defined in mORMoti18n.pas
+  // - can be used e.g. for TSynMustache's {{"English text}} callback
+  TOnStringTranslate = procedure(var English: string) of object;
+
 
 /// extract a line from source array of chars
 // - next will contain the beginning of next line, or nil if source if ended
@@ -322,6 +330,7 @@ var
 // - P is expected to be #0 ended
 // - return "string" type, i.e. UnicodeString for Delphi 2009+
 procedure GetCaptionFromPCharLen(P: PUTF8Char; out result: string);
+
 
 
 { ************ CSV-like Iterations over Text Buffers }
@@ -1998,6 +2007,11 @@ type
 
   /// meta-class of the ESynException hierarchy
   ESynExceptionClass = class of ESynException;
+
+/// convert any HTTP_* constant to an integer error code and its English text
+// - see @http://www.w3.org/Protocols/rfc2616/rfc2616-sec10.html
+// - calls StatusCodeToReason() to retrieve the text message
+function StatusCodeToErrorMsg(Code: integer): shortstring;
 
 
 { **************** Hexadecimal Text And Binary Conversion }
@@ -9504,6 +9518,15 @@ end;
 {$endif NOEXCEPTIONINTERCEPT}
 
 
+function StatusCodeToErrorMsg(Code: integer): shortstring;
+var
+  msg: RawUTF8;
+begin
+  msg := StatusCodeToReason(Code);
+  FormatShort('HTTP Error % - %', [Code, msg], result);
+end;
+
+
 { **************** Hexadecimal Text And Binary Conversion }
 
 procedure BinToHex(Bin, Hex: PAnsiChar; BinBytes: integer);
@@ -10193,13 +10216,16 @@ begin // decode from '3F2504E0-4F89-11D3-9A0C-0305E82C3301'
   inc(PByte(guid), 4);
   for i := 1 to 2 do
   begin
-    if (P^ <> '-') or not HexaToByte(P + 1, guid[1]) or
+    if (P^ <> '-') or
+       not HexaToByte(P + 1, guid[1]) or
        not HexaToByte(P + 3, guid[0]) then
       exit;
     inc(P, 5);
     inc(PByte(guid), 2);
   end;
-  if (P[0] <> '-') or (P[5] <> '-') or not HexaToByte(P + 1, guid[0]) or
+  if (P[0] <> '-') or
+     (P[5] <> '-') or
+     not HexaToByte(P + 1, guid[0]) or
      not HexaToByte(P + 3, guid[1]) then
     exit;
   inc(PByte(guid), 2);
@@ -10221,13 +10247,15 @@ begin
   if aStream = nil then
     exit;
   current := aStream.Position;
-  if (current = 0) and aStream.InheritsFrom(TRawByteStringStream) then
+  if (current = 0) and
+     aStream.InheritsFrom(TRawByteStringStream) then
   begin
     result := TRawByteStringStream(aStream).DataString; // fast COW
     exit;
   end;
   size := aStream.Size - current;
-  if (size = 0) or (size > maxInt) then
+  if (size = 0) or
+     (size > maxInt) then
     exit;
   SetLength(result, size);
   aStream.Read(pointer(result)^, size);

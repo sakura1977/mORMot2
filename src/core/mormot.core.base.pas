@@ -3525,7 +3525,8 @@ type
 
 /// retrieve the HTTP reason text from a code
 // - e.g. StatusCodeToReason(200)='OK'
-// - see http://www.w3.org/Protocols/rfc2616/rfc2616-sec10.html
+// - as defined in http://www.w3.org/Protocols/rfc2616/rfc2616-sec10.html
+// - see also StatusCodeToErrorMsg() from mormot.core.text
 function StatusCodeToReason(Code: cardinal): RawUTF8;
 
 /// returns true for successful HTTP status codes, i.e. in 200..399 range
@@ -3535,6 +3536,11 @@ function StatusCodeToReason(Code: cardinal): RawUTF8;
 // request in the internal server statistics
 function StatusCodeIsSuccess(Code: integer): boolean;
   {$ifdef HASINLINE}inline;{$endif}
+
+/// check the supplied HTTP header to not contain more than one EOL
+// - to avoid unexpected HTTP body injection, e.g. from unsafe business code
+function IsInvalidHttpHeader(head: PUTF8Char; headlen: PtrInt): boolean;
+
 
 
 implementation
@@ -7808,7 +7814,7 @@ end;
 
 function TrimU(const S: RawUTF8): RawUTF8;
 begin
-  result := Trim(S);
+  result := mormot.core.base.Trim(S);
 end;
 
 procedure TrimCopy(const S: RawUTF8; start, count: PtrInt;
@@ -8303,7 +8309,8 @@ begin
   // paranoid basic execution on Darwin x64 (as reported by alf)
   CpuFeatures := CpuFeatures - [cfSSE42, cfAESNI, cfAVX, cfAVX2, cfFMA];
   {$else}
-  if not (cfOSXS in CpuFeatures) or not IsXmmYmmOSEnabled then
+  if not (cfOSXS in CpuFeatures) or
+     not IsXmmYmmOSEnabled then
     // available on the CPU, but not supported at OS level during context switch
     CpuFeatures := CpuFeatures - [cfAVX, cfAVX2, cfFMA];
   {$endif DISABLE_SSE42}
@@ -10748,6 +10755,20 @@ begin
   result := (Code >= HTTP_SUCCESS) and
             (Code < HTTP_BADREQUEST); // 200..399
 end;
+
+function IsInvalidHttpHeader(head: PUTF8Char; headlen: PtrInt): boolean;
+var
+  i: PtrInt;
+begin
+  result := true;
+  for i := 0 to headlen - 3 do
+    if (PInteger(head + i)^ = $0a0d0a0d) or
+       (PWord(head + i)^ = $0d0d) or (PWord(head + i)^ = $0a0a) then
+      exit;
+  result := false;
+end;
+
+
 
 procedure InitializeUnit;
 var

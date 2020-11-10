@@ -435,6 +435,7 @@ function ToText(opt: TRestHttpServerOptions): PShortString; overload;
 function ToText(sec: TRestHttpServerSecurity): PShortString; overload;
 
 
+
 { ************ TRestHttpRemoteLogServer to Receive Remote Log Stream }
 
 type
@@ -751,7 +752,8 @@ var
   i: PtrInt;
   log: ISynLog;
 begin
-  if (self <> nil) and not fShutdownInProgress then
+  if (self <> nil) and
+     not fShutdownInProgress then
   begin
     log := fLog.Enter('Shutdown(%)', [BOOL_STR[noRestServerShutdown]], self);
     fShutdownInProgress := true;
@@ -1214,7 +1216,11 @@ const
     TRestServerAuthenticationDefault,
     TRestServerAuthenticationHttpBasic,
     TRestServerAuthenticationNone,
-    TRestServerAuthenticationSSPI{may be nil});
+    {$ifdef DOMAINRESTAUTH}
+    TRestServerAuthenticationSSPI
+    {$else}
+    nil
+    {$endif DOMAINRESTAUTH});
 var
   a: TRestHttpServerRestAuthentication;
   thrdCnt: integer;

@@ -31,6 +31,10 @@ uses
   variants,
   contnrs,
   mormot.lib.z, // zlib's crc32 for private hash
+  {$ifdef DOMAINRESTAUTH}
+  mormot.lib.sspi, // do-nothing units on non compliant system
+  mormot.lib.gssapi,
+  {$endif DOMAINRESTAUTH}
   mormot.core.base,
   mormot.core.os,
   mormot.core.buffers,
@@ -197,13 +201,9 @@ type
     function GetInCookie(CookieName: RawUTF8): RawUTF8;
     procedure SetInCookie(CookieName, CookieValue: RawUTF8);
     function GetUserAgent: RawUTF8;
-      {$ifdef HASINLINE}inline;{$endif}
     function GetRemoteIP: RawUTF8;
-      {$ifdef HASINLINE}inline;{$endif}
     function GetRemoteIPNotLocal: RawUTF8;
-      {$ifdef HASINLINE}inline;{$endif}
     function GetRemoteIPIsLocalHost: boolean;
-      {$ifdef HASINLINE}inline;{$endif}
     function GetResourceFileName: TFileName;
     procedure SetOutSetCookie(aOutSetCookie: RawUTF8);
     procedure InternalSetTableFromTableIndex(Index: integer); virtual;
@@ -580,7 +580,7 @@ type
     // set ckFramework on match
     // - either ckAjax for a classic (AJAX) browser, or any other kind of
     // HTTP client
-    // - will be used e.g. by ClienTOrmOptions to check if the
+    // - will be used e.g. by ClientOrmOptions to check if the
     // current remote client expects standard JSON in all cases
     function ClientKind: TRestServerURIContextClientKind;
     /// identify if the request is about a Table containing nested objects or
@@ -588,7 +588,7 @@ type
     // of plain JSON string (as stored in the database)
     // - will idenfity ClientKind=ckAjax, or check for rsoGetAsJsonNotAsString
     // in TRestServer.Options
-    function ClienTOrmOptions: TJSONSerializerOrmOptions;
+    function ClientOrmOptions: TJSONSerializerOrmOptions;
     /// true if called from TRestServer.AdministrationExecute
     function IsRemoteAdministrationExecute: boolean;
     /// compute the file name corresponding to the URI
@@ -739,6 +739,8 @@ type
     /// low-level statistics merge during service execution
     procedure StatsFromContext(Stats: TSynMonitorInputOutput;
       var Diff: Int64; DiffIsMicroSecs: boolean);
+    /// low-level HTTP header merge of the OutSetCookie value
+    procedure OutHeadFromCookie;
     /// event raised by ExecuteMethod() for interface parameters
     // - match TInterfaceMethodInternalExecuteCallback signature
     procedure ExecuteCallback(var Par: PUTF8Char; ParamInterfaceInfo: TRttiJson;
@@ -1050,7 +1052,7 @@ type
   // - inherit from this class to implement expected authentication scheme
   // - each TRestServerAuthentication class is associated with a
   // TRestClientAuthentication class from mormot.rest.client.pas
-  TRestServerAuthentication = class
+  TRestServerAuthentication = class(TSynLocked)
   protected
     fServer: TRestServer;
     fOptions: TRestServerAuthenticationOptions;
@@ -1092,7 +1094,7 @@ type
   public
     /// initialize the authentication method to a specified server
     // - you can define several authentication schemes for the same server
-    constructor Create(aServer: TRestServer); virtual;
+    constructor Create(aServer: TRestServer); reintroduce; virtual;
     /// called by the Server to implement the Auth RESTful method
     // - overridden method shall return TRUE if the request has been handled
     // - returns FALSE to let the next registered TRestServerAuthentication
@@ -1298,6 +1300,46 @@ type
     // to be supplied as incoming "Authorization: Basic ...." headers
     function Auth(Ctxt: TRestServerURIContext): boolean; override;
   end;
+
+  {$ifdef DOMAINRESTAUTH}
+  { will use mormot.lib.sspi/gssapi units depending on the OS }
+
+  /// authentication of the current logged user using Windows Security Support
+  // Provider Interface (SSPI) or the GSSAPI library on Linux
+  // - is able to authenticate the currently logged user on the client side,
+  // using either NTLM (Windows only) or Kerberos - it will allow to safely
+  // authenticate on a mORMot server without prompting the user to enter its
+  // password
+  // - if ClientSetUser() receives aUserName as '', aPassword should be either
+  // '' if you expect NTLM authentication to take place, or contain the SPN
+  // registration (e.g. 'mymormotservice/myserver.mydomain.tld') for Kerberos
+  // authentication
+  // - if ClientSetUser() receives aUserName as 'DomainName\UserName', then
+  // authentication will take place on the specified domain, with aPassword
+  // as plain password value
+  // - this class is not available on some targets (e.g. Android)
+  TRestServerAuthenticationSSPI = class(TRestServerAuthenticationSignedURI)
+  protected
+    /// Windows built-in authentication
+    // - holds information between calls to ServerSSPIAuth()
+    // - access to this array is made thread-safe thanks to Safe.Lock/Unlock
+    fSSPIAuthContext: TSecContextDynArray;
+    fSSPIAuthContextCount: integer;
+    fSSPIAuthContexts: TDynArray;
+  public
+    /// initialize this SSPI/GSSAPI authentication scheme
+    constructor Create(aServer: TRestServer); override;
+    /// finalize internal sspi/gssapi allocated structures
+    destructor Destroy; override;
+    /// will try to handle the RESTful authentication via SSPI/GSSAPI
+    // - to be called in a two pass algorithm, used to cypher the password
+    // - the client-side logged user will be identified as valid, according
+    // to a Windows SSPI API secure challenge
+    function Auth(Ctxt: TRestServerURIContext): boolean; override;
+  end;
+
+  {$endif DOMAINRESTAUTH}
+
 
 
 { ************ TRestServerMonitor for High-Level Statistics of a REST Server }
@@ -1942,9 +1984,11 @@ type
     function AuthenticationRegister(
       aMethod: TRestServerAuthenticationClass): TRestServerAuthentication; overload;
     /// call this method to add several authentication methods to the server
-    // - if TRestServer.Create() constructor is called with aHandleUserAuthentication
-    // set to TRUE, it will register the two following classes:
-    // ! AuthenticationRegister([TRestServerAuthenticationDefault,TRestServerAuthenticationSSPI]);
+    // - if TRestServer.Create() constructor is called with
+    // aHandleUserAuthentication set to TRUE, it will register the two
+    // following classes:
+    // ! AuthenticationRegister([
+    // !   TRestServerAuthenticationDefault, TRestServerAuthenticationSSPI]);
     procedure AuthenticationRegister(
       const aMethods: array of TRestServerAuthenticationClass); overload;
     /// call this method to remove an authentication method to the server
@@ -2129,7 +2173,7 @@ type
     // server side, so that RecordVersionSynchronizeStartSlave() will be able
     // to receive push notifications of any updates
     // - this method expects the communication channel to be bidirectional, e.g.
-    // a mORMotHTTPServer's TRestHttpServer in useBidirSocket mode
+    // a mormot.rest.http.server's TRestHttpServer in useBidirSocket mode
     function RecordVersionSynchronizeMasterStart(
       ByPassAuthentication: boolean = false): boolean;
     /// initiate asynchronous master/slave replication on a slave TRest
@@ -2162,8 +2206,8 @@ type
     // which will perform all update operations as expected
     // - the callback process will be blocking for the ORM write point of view:
     // so it should be as fast as possible, or asynchronous - note that regular
-    // callbacks using WebSockets, as implemented by SynBidirSock.pas and
-    // mORMotHTTPServer's TRestHttpServer in useBidirSocket mode, are asynchronous
+    // callbacks using WebSockets, as implemented by mormot.net.ws.core.server and
+    // mormot.rest.http.server's TRestHttpServer on useBidirSocket, are asynchronous
     // - if the supplied RecordVersion is not the latest on the server side,
     // this method will return FALSE and the caller should synchronize again via
     // RecordVersionSynchronize() to avoid any missing update
@@ -2325,8 +2369,11 @@ function CurrentServerNonce(Previous: boolean = false): RawUTF8;
 type
   /// supported REST authentication schemes
   // - used by the overloaded TRestHttpServer.Create(TRestHttpServerDefinition)
-  // constructor in mORMotHttpServer.pas, and also in dddInfraSettings.pas
-  // - asSSPI won't be defined under Linux, since it is a Windows-centric feature
+  // constructor in mormot.rest.http.server.pas, and also in dddInfraSettings.pas
+  // - map TRestServerAuthenticationDefault, TRestServerAuthenticationHttpBasic,
+  // TRestServerAuthenticationNone and TRestServerAuthenticationSSPI classes
+  // - asSSPI will use mormot.lib.sspi/gssapi units depending on the OS, and
+  // may be not available on some targets (e.g. Android)
   TRestHttpServerRestAuthentication = (
     adDefault,
     adHttpBasic,
@@ -2391,11 +2438,6 @@ type
     property WebSocketPassword: SPIUTF8
       read fPassWord write fPassWord;
   end;
-
-
-const
-  TRestServerAuthenticationSSPI = nil;
-  { TODO : implement TRestServerAuthenticationSSPI }
 
 
 
@@ -2801,6 +2843,14 @@ begin
   else
     // converted to us
     Diff := Stats.FromExternalQueryPerformanceCounters(Diff);
+end;
+
+procedure TRestServerURIContext.OutHeadFromCookie;
+begin
+  Call.OutHead := Trim(Call.OutHead + #13#10'Set-Cookie: ' + OutSetCookie);
+  if rsoCookieIncludeRootPath in Server.fOptions then
+    // case-sensitive Path=/ModelRoot
+    Call.OutHead := Call.OutHead + '; Path=/';
 end;
 
 procedure TRestServerURIContext.ExecuteCallback(var Par: PUTF8Char;
@@ -3246,7 +3296,7 @@ begin
                      (length(TableIndexes) = 1) then
                   begin
                     InternalSetTableFromTableIndex(TableIndexes[0]);
-                    opt := ClienTOrmOptions;
+                    opt := ClientOrmOptions;
                     if opt <> [] then
                       ConvertOutBodyAsPlainJSON(SQLSelect, opt);
                   end;
@@ -3317,7 +3367,7 @@ begin
                 if Call.OutBody <> '' then
                 begin
                   // if something was found
-                  opt := ClienTOrmOptions;
+                  opt := ClientOrmOptions;
                   if opt <> [] then
                   begin
                     // cached? -> make private
@@ -3414,7 +3464,7 @@ begin
             if Call.OutBody <> '' then
             begin
               // got JSON list '[{...}]' ?
-              opt := ClienTOrmOptions;
+              opt := ClientOrmOptions;
               if opt <> [] then
                 ConvertOutBodyAsPlainJSON(SQLSelect, opt);
               Call.OutStatus := HTTP_SUCCESS;  // 200 OK
@@ -4203,7 +4253,7 @@ begin
             (Call.RestAccessRights = @BYPASS_ACCESS_RIGHTS);
 end;
 
-function TRestServerURIContext.ClienTOrmOptions: TJSONSerializerOrmOptions;
+function TRestServerURIContext.ClientOrmOptions: TJSONSerializerOrmOptions;
 begin
   result := [];
   if (TableModelProps = nil) or
@@ -4312,8 +4362,9 @@ begin
 end;
 
 procedure TRestServerURIContext.ReturnFile(const FileName: TFileName;
-  Handle304NotModified: boolean; const ContentType, AttachmentFileName,
-  Error404Redirect: RawUTF8; CacheControlMaxAge: integer);
+  Handle304NotModified: boolean; const ContentType: RawUTF8;
+  const AttachmentFileName: RawUTF8; const Error404Redirect: RawUTF8;
+  CacheControlMaxAge: integer);
 var
   FileTime: TDateTime;
   clientHash, serverHash: RawUTF8;
@@ -4503,12 +4554,14 @@ begin
        (ErrorMsg[1] = '{') and
        (ErrorMsg[length(ErrorMsg)] = '}') then
     begin
+      // detect and append the error message as JSON object
       AddShort(','#13#10'"error":'#13#10);
       AddNoJSONEscape(pointer(ErrorMsg), length(ErrorMsg));
       AddShorter(#13#10'}');
     end
     else
     begin
+      // regular error message as JSON text
       AddShort(','#13#10'"errorText":"');
       AddJSONEscape(pointer(ErrorMsg));
       AddShorter('"'#13#10'}');
@@ -4897,6 +4950,7 @@ end;
 
 constructor TRestServerAuthentication.Create(aServer: TRestServer);
 begin
+  inherited Create;
   fServer := aServer;
   fOptions := [saoUserByLogonOrID];
 end;
@@ -5392,6 +5446,152 @@ begin
 end;
 
 
+
+{$ifdef DOMAINRESTAUTH}
+{ will use mormot.lib.sspi/gssapi units depending on the OS }
+
+const
+  /// maximum number of Windows Authentication context to be handled at once
+  // - 64 should be big enough
+  MAXSSPIAUTHCONTEXTS = 64;
+
+
+{ TRestServerAuthenticationSSPI }
+
+constructor TRestServerAuthenticationSSPI.Create(aServer: TRestServer);
+begin
+  inherited Create(aServer);
+  fSSPIAuthContexts.InitSpecific(TypeInfo(TSecContextDynArray),
+    fSSPIAuthContext, ptInt64, @fSSPIAuthContextCount);
+end;
+
+destructor TRestServerAuthenticationSSPI.Destroy;
+var
+  i: PtrInt;
+begin
+  for i := 0 to fSSPIAuthContextCount - 1 do
+    FreeSecContext(fSSPIAuthContext[i]);
+  inherited Destroy;
+end;
+
+function TRestServerAuthenticationSSPI.Auth(
+  Ctxt: TRestServerURIContext): boolean;
+var
+  i, ndx: PtrInt;
+  username, indataenc: RawUTF8;
+  ticks, connectionID: Int64;
+  browserauth: Boolean;
+  outdata: RawByteString;
+  user: TAuthUser;
+  session: TAuthSession;
+begin
+  // GET ModelRoot/auth?username=...&data=... -> SSPI/GSSAPI auth
+  result := AuthSessionRelease(Ctxt);
+  if result or
+     not Ctxt.InputExists['username'] or
+     not Ctxt.InputExists['Data'] then
+    exit;
+  // use connectionID to find authentication session
+  connectionID := Ctxt.Call^.LowLevelConnectionID;
+  indataenc := Ctxt.InputUTF8['Data'];
+  if indataenc = '' then
+  begin
+    // client is browser and used HTTP headers to send auth data
+    FindNameValue(Ctxt.Call.InHead, SECPKGNAMEHTTPAUTHORIZATION, indataenc);
+    if indataenc = '' then
+    begin
+      // no auth data sent, reply with supported auth methods
+      Ctxt.Call.OutHead := SECPKGNAMEHTTPWWWAUTHENTICATE;
+      Ctxt.Call.OutStatus := HTTP_UNAUTHORIZED; // (401)
+      Ctxt.Call.OutBody := StatusCodeToReason(HTTP_UNAUTHORIZED);
+      exit;
+    end;
+    browserauth := True;
+  end
+  else
+    browserauth := False;
+  // check for outdated auth context
+  fSafe.Lock;
+  try
+    // thread-safe deletion of deprecated fSSPIAuthContext[] pending auths
+    ticks := GetTickCount64 - 30000;
+    for i := fSSPIAuthContextCount - 1  downto 0 do
+      if ticks > fSSPIAuthContext[i].CreatedTick64 then
+      begin
+        FreeSecContext(fSSPIAuthContext[i]);
+        fSSPIAuthContexts.Delete(i);
+      end;
+    // if no auth context specified, create a new one
+    result := true;
+    ndx := fSSPIAuthContexts.Find(connectionID);
+    if ndx < 0 then
+    begin
+      // 1st call: create SecCtxId
+      if fSSPIAuthContextCount >= MAXSSPIAUTHCONTEXTS then
+      begin
+        fServer.InternalLog('Too many Windows Authenticated session in  pending' +
+          ' state: MAXSSPIAUTHCONTEXTS=%', [MAXSSPIAUTHCONTEXTS], sllUserAuth);
+        exit;
+      end;
+      ndx := fSSPIAuthContexts.New; // add a new entry to fSSPIAuthContext[]
+      InvalidateSecContext(fSSPIAuthContext[ndx], connectionID);
+    end;
+    // call SSPI provider
+    if ServerSSPIAuth(fSSPIAuthContext[ndx], Base64ToBin(indataenc), outdata) then
+    begin
+      if browserauth then
+      begin
+        Ctxt.Call.OutHead :=
+          (SECPKGNAMEHTTPWWWAUTHENTICATE + ' ') + BinToBase64(outdata);
+        Ctxt.Call.OutStatus := HTTP_UNAUTHORIZED; // (401)
+        Ctxt.Call.OutBody := StatusCodeToReason(HTTP_UNAUTHORIZED);
+      end
+      else
+        Ctxt.Returns(['result', '',
+                      'data', BinToBase64(outdata)]);
+      exit; // 1st call: send back outdata to the client
+    end;
+    // 2nd call: user was authenticated -> release used context
+    ServerSSPIAuthUser(fSSPIAuthContext[ndx], username);
+    if sllUserAuth in fServer.fLogFamily.Level then
+      fServer.fLogFamily.SynLog.Log(sllUserAuth, '% Authentication success for %',
+        [SecPackageName(fSSPIAuthContext[ndx]), username], self);
+    // now client is authenticated -> create a session for aUserName
+    // and send back outdata
+    try
+      if username = '' then
+        exit;
+      user := GetUser(Ctxt,username);
+      if user <> nil then
+      try
+        user.PasswordHashHexa := ''; // override with context
+        fServer.SessionCreate(
+          user, Ctxt, session); // call Ctxt.AuthenticationFailed on error
+        if session <> nil then
+          with session.user do
+            if browserauth then
+              SessionCreateReturns(Ctxt, session, session.fPrivateSalt, '',
+                (SECPKGNAMEHTTPWWWAUTHENTICATE + ' ') + BinToBase64(outdata))
+            else
+              SessionCreateReturns(Ctxt, session,
+                BinToBase64(SecEncrypt(fSSPIAuthContext[ndx], session.fPrivateSalt)),
+                BinToBase64(outdata),'');
+      finally
+        user.Free;
+      end else
+        Ctxt.AuthenticationFailed(afUnknownUser);
+    finally
+      FreeSecContext(fSSPIAuthContext[ndx]);
+      fSSPIAuthContexts.Delete(ndx);
+    end;
+  finally
+    fSafe.UnLock; // protect fSSPIAuthContext[] process
+  end;
+end;
+
+{$endif DOMAINRESTAUTH}
+
+
 { ************ TRestServerMonitor for High-Level Statistics of a REST Server }
 
 { TRestServerMonitor }
@@ -5709,8 +5909,11 @@ begin
   fSessionClass := TAuthSession;
   if aHandleUserAuthentication then
     // default mORMot authentication schemes
-    AuthenticationRegister([TRestServerAuthenticationDefault
-      {$ifdef DOMAINAUTH}, TRestServerAuthenticationSSPI{$endif}]);
+    AuthenticationRegister([
+      TRestServerAuthenticationDefault
+      {$ifdef DOMAINRESTAUTH},
+      TRestServerAuthenticationSSPI
+      {$endif DOMAINRESTAUTH}]);
   fAssociatedServices := TServicesPublishedInterfacesList.Create(0);
   inherited Create(aModel);
   fAfterCreation := true;
@@ -6905,8 +7108,8 @@ begin
             Ctxt.Command := execSOAByMethod
         else if Ctxt.Service <> nil then
           Ctxt.Command := execSOAByInterface
-        else if Ctxt.Method in [mLOCK, mGET, mUNLOCK, mSTATE] then
-          // handle read methods
+        else if Ctxt.Method in [mLOCK, mGET, mUNLOCK, mSTATE, mHEAD] then
+          // read methods
           Ctxt.Command := execOrmGet
         else
           // write methods (mPOST, mPUT, mDELETE...)
@@ -6964,12 +7167,7 @@ begin
       // database state may have changed above
       Call.OutInternalState := TRestOrmServer(fOrmInstance).InternalState;
     if Ctxt.OutSetCookie <> '' then
-    begin
-      Call.OutHead := Trim(Call.OutHead + #13#10'Set-Cookie: ' + Ctxt.OutSetCookie);
-      if rsoCookieIncludeRootPath in fOptions then
-        // case-sensitive Path=/ModelRoot
-        Call.OutHead := Call.OutHead + '; Path=/';
-    end;
+      Ctxt.OutHeadFromCookie;
     if not (rsoHttpHeaderCheckDisable in fOptions) and
        IsInvalidHttpHeader(pointer(Call.OutHead), length(Call.OutHead)) then
       Ctxt.Error('Unsafe HTTP header rejected [%]',
@@ -7023,6 +7221,10 @@ initialization
   // should match TPerThreadRunningContext definition in mormot.core.interfaces
   assert(SizeOf(TServiceRunningContext) =
     SizeOf(TObject) + SizeOf(TObject) + SizeOf(TThread));
+  {$ifdef DOMAINRESTAUTH}
+  // setup mormot.lib.sspi/gssapi unit depending on the OS
+  InitializeDomainAuth;
+  {$endif DOMAINRESTAUTH}
 
 end.
 
