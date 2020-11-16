@@ -428,7 +428,7 @@ type
 var
   /// a global hook variable, able to enhance WebSockets logging
   // - when a TRestHttpServer is created from a TRestHttpServerDefinition
-  HttpServerFullWebSocketsLog: Boolean;
+  HttpServerFullWebSocketsLog: boolean;
 
 
 function ToText(opt: TRestHttpServerOptions): PShortString; overload;
@@ -461,7 +461,8 @@ type
     /// release the HTTP server and its internal mORMot server
     destructor Destroy; override;
     /// the associated mORMot server instance running with this HTTP server
-    property Server: TRestServerFullMemory read fServer;
+    property Server: TRestServerFullMemory
+      read fServer;
   published
     /// this HTTP server will publish a 'RemoteLog' method-based service
     // - expecting PUT with text as body, at http://server/root/RemoteLog
@@ -1050,14 +1051,14 @@ begin
         call.OutHead := StringReplaceAll(call.OutHead, '; Path=/' +
           serv.Model.Root, '; Path=/')
     end;
-    Ctxt.OutCustomHeaders := Trim(call.OutHead);
+    Ctxt.OutCustomHeaders := TrimU(call.OutHead);
     if call.OutInternalState <> 0 then
       Ctxt.OutCustomHeaders := FormatUTF8('%'#13#10'Server-InternalState: %',
         [Ctxt.OutCustomHeaders, call.OutInternalState]);
     // handle optional CORS origin
     if fAccessControlAllowOrigin <> '' then
       ComputeAccessControlHeader(Ctxt);
-    Ctxt.OutCustomHeaders := trim(Ctxt.OutCustomHeaders);
+    Ctxt.OutCustomHeaders := TrimU(Ctxt.OutCustomHeaders);
   end;
 end;
 
@@ -1098,7 +1099,8 @@ var
 begin
   fAccessControlAllowOrigin := Value;
   FreeAndNil(fAccessControlAllowOriginsMatch);
-  if (Value = '') or (Value = '*') then
+  if (Value = '') or
+     (Value = '*') then
     exit;
   CSVToRawUTF8DynArray(pointer(Value), patterns);
   if patterns = nil then

@@ -143,6 +143,7 @@ type
     /// the type name, as declared in object pascal
     ArgTypeName: PShortString;
     /// the low-level RTTI information of this argument
+    // - use ArgRtti.Info to retrieve the TypeInfo() of this argument
     ArgRtti: TRttiJson;
     /// we do not handle all kind of object pascal variables
     ValueType: TInterfaceMethodValueType;
@@ -649,16 +650,21 @@ type
     property MethodIndexCurrentFrameCallback: integer
       read fMethodIndexCurrentFrameCallback;
     /// the registered Interface low-level compiler RTTI type
-    property InterfaceTypeInfo: PRttiInfo read fInterfaceTypeInfo;
+    property InterfaceTypeInfo: PRttiInfo
+      read fInterfaceTypeInfo;
     /// the registered Interface GUID
-    property InterfaceIID: TGUID read fInterfaceIID;
+    property InterfaceIID: TGUID
+      read fInterfaceIID;
     /// the interface name, without its initial 'I'
     // - e.g. ICalculator -> 'Calculator'
-    property InterfaceURI: RawUTF8 read fInterfaceURI write fInterfaceURI;
+    property InterfaceURI: RawUTF8
+      read fInterfaceURI write fInterfaceURI;
     /// the registered Interface high-level compiler RTTI type
-    property InterfaceRTTI: TRttiJson read fInterfaceRTTI;
+    property InterfaceRTTI: TRttiJson
+      read fInterfaceRTTI;
     /// the service contract as a JSON array
-    property Contract: RawUTF8 read fContract;
+    property Contract: RawUTF8
+      read fContract;
     /// how this interface will work with variants (including TDocVariant)
     // - by default, contains JSON_OPTIONS_FAST for best performance - i.e.
     // [dvoReturnNullForUnknownProperty,dvoValueCopiedByReference]
@@ -667,7 +673,8 @@ type
   published
     /// will return the interface name, e.g. 'ICalculator'
     // - published property to be serializable as JSON e.g. for debbuging info
-    property InterfaceName: RawUTF8 read fInterfaceName;
+    property InterfaceName: RawUTF8
+      read fInterfaceName;
   end;
 
   {$ifdef HASINTERFACERTTI}
@@ -812,7 +819,8 @@ type
     function Implements(aInterface: PRttiInfo): boolean; override;
   published
     /// the class name which will implement each repository instance
-    property ImplementationClass: RawUTF8 read GetImplementationName;
+    property ImplementationClass: RawUTF8
+      read GetImplementationName;
   end;
 
   /// abstract factory class targetting any kind of interface
@@ -979,7 +987,8 @@ type
     // - including all TInterfaceStub instances as specified to CreateInjected()
     destructor Destroy; override;
     /// access to the associated dependency resolver, if any
-    property Resolver: TInterfaceResolver read fResolver;
+    property Resolver: TInterfaceResolver
+      read fResolver;
   end;
 
   /// class-reference type (metaclass) of a TInjectableObject type
@@ -1021,24 +1030,30 @@ type
     /// call this method if the callback implementation failed
     procedure Error(const Format: RawUTF8; const Args: array of const); overload;
     /// the stubbing / mocking generator
-    property Sender: TInterfaceStub read fSender;
+    property Sender: TInterfaceStub
+      read fSender;
     /// the mocking generator associated test case
     // - will raise an exception if the associated Sender generator is not
     // a TInterfaceMock
-    property TestCase: TSynTestCase read GetSenderAsMockTestCase;
+    property TestCase: TSynTestCase
+      read GetSenderAsMockTestCase;
     /// pointer to the method which is to be executed
-    property Method: PInterfaceMethod read fMethod;
+    property Method: PInterfaceMethod
+      read fMethod;
     /// a custom message, defined at TInterfaceStub.Executes() definition
-    property EventParams: RawUTF8 read fEventParams;
+    property EventParams: RawUTF8
+      read fEventParams;
     /// outgoing values array encoded as JSON
     // - every var, out parameter or the function result shall be encoded as
     // a JSON array into this variable, in the same order than the stubbed
     // method declaration
     // - use Returns() method to create the JSON array directly, from an array
     // of values
-    property result: RawUTF8 read fResult;
+    property result: RawUTF8
+      read fResult;
     /// low-level flag, set to TRUE if one of the Error() method was called
-    property Failed: boolean read fFailed;
+    property Failed: boolean
+      read fFailed;
   end;
 
   /// parameters used by TInterfaceStub.Executes() events callbacks as Variant
@@ -1074,7 +1089,8 @@ type
     // - order shall follow the method const and var parameters
     // ! Stub.Add(10,20) -> Input[0]=10, Input[1]=20
     // - if the supplied Index is out of range, an EInterfaceStub will be raised
-    property Input[Index: integer]: variant read GetInput;
+    property Input[Index: integer]: variant
+      read GetInput;
     /// output parameters returned after method process
     // - order shall follow the method var, out parameters and the function
     // result (if method is not a procedure)
@@ -1123,7 +1139,8 @@ type
     // to work with, and safer in case of method signature change (like parameter
     // add or rename)
     // - slightly easier to use Ctxt.UTF8['str'] than ToUTF8(Ctxt.Named['str'])
-    property UTF8[const ParamName: RawUTF8]: RawUTF8 read GetInUTF8;
+    property UTF8[const ParamName: RawUTF8]: RawUTF8
+      read GetInUTF8;
   end;
 
   /// parameters used by TInterfaceStub.Executes() events callbacks as JSON
@@ -1151,7 +1168,8 @@ type
     /// incoming parameters array encoded as JSON array without braces
     // - order follows the method const and var parameters
     // ! Stub.Add(10,20) -> Params = '10,20';
-    property Params: RawUTF8 read fParams;
+    property Params: RawUTF8
+      read fParams;
   end;
 
   /// event called by the TInterfaceStub.Executes() fluent method for variant process
@@ -1473,7 +1491,7 @@ type
     // - optional aEventParams parameter will be transmitted to aEvent handler
     // - callback's Ctxt: TOnInterfaceStubExecuteParamsVariant's Method field
     // will identify the executed method
-    function Executes(aEvent: TOnInterfaceStubExecuteVariant;
+    function Executes(const aEvent: TOnInterfaceStubExecuteVariant;
       const aEventParams: RawUTF8 = ''): TInterfaceStub; overload;
     /// will add execution rules for all methods to log the input parameters
     // - aKind will define how the input parameters are serialized in JSON
@@ -1640,27 +1658,33 @@ type
     procedure ClearLog;
 
     /// the stubbed method execution trace items
-    property Log: TInterfaceStubLogDynArray read fLogs;
+    property Log: TInterfaceStubLogDynArray
+      read fLogs;
     /// the stubbed method execution trace converted as text
     // - typical output is a list of calls separated by commas:
     // $ Add(10,20)=[30],Divide(20,0) error "divide by zero"
     function LogAsText(SepChar: AnsiChar = ','): RawUTF8;
     /// returns the last created TInterfacedObject instance
     // - e.g. corresponding to the out aStubbedInterface parameter of Create()
-    property LastInterfacedObjectFake: TInterfacedObject read fLastInterfacedObjectFake;
+    property LastInterfacedObjectFake: TInterfacedObject
+      read fLastInterfacedObjectFake;
     /// check if can resolve the supplied interface RTTI
     function Implements(aInterface: PRttiInfo): boolean; override;
   published
     /// access to the registered Interface RTTI information
-    property InterfaceFactory: TInterfaceFactory read fInterface;
+    property InterfaceFactory: TInterfaceFactory
+      read fInterface;
     /// optional stubing/mocking options
     // - you can use the SetOptions() method in a fluent-style interface
-    property Options: TInterfaceStubOptions read fOptions write IntSetOptions;
+    property Options: TInterfaceStubOptions
+      read fOptions write IntSetOptions;
     /// the stubbed method execution trace number of items
-    property LogCount: integer read fLogCount;
+    property LogCount: integer
+      read fLogCount;
     /// the stubbed method execution trace converted as one numerical hash
     // - returns Hash32(LogAsText)
-    property LogHash: cardinal read GetLogHash;
+    property LogHash: cardinal
+      read GetLogHash;
   end;
 
   /// used to mock an interface implementation via expect-run-verify pattern
@@ -1717,7 +1741,8 @@ type
     constructor Create(const aGUID: TGUID; aTestCase: TSynTestCase);
       reintroduce; overload;
     /// the associated test case
-    property TestCase: TSynTestCase read fTestCase;
+    property TestCase: TSynTestCase
+      read fTestCase;
   end;
 
   /// how TInterfaceMockSpy.Verify() shall generate the calls trace
@@ -1932,13 +1957,16 @@ type
     // - expect params value to be with [ ], just like ExecuteJson
     function ExecuteJsonFake(Instance: pointer; params: PUTF8Char): boolean;
     /// low-level direct access to the associated method information
-    property Method: PInterfaceMethod read fMethod;
+    property Method: PInterfaceMethod
+      read fMethod;
     /// low-level direct access to the current input/output parameter values
     // - you should not need to access this, but rather set
     // optInterceptInputOutput in Options, and read Input/Output content
-    property Values: TPPointerDynArray read fValues;
+    property Values: TPPointerDynArray
+      read fValues;
     /// associated settings, as copied from TServiceFactoryServer.Options
-    property Options: TInterfaceMethodOptions read fOptions write fOptions;
+    property Options: TInterfaceMethodOptions
+      read fOptions write fOptions;
     /// the current state of the execution
     property CurrentStep: TInterfaceMethodExecuteEventStep
       read fCurrentStep write fCurrentStep;
@@ -1951,15 +1979,19 @@ type
     /// set if optInterceptInputOutput is defined in TServiceFactoryServer.Options
     // - contains a dvObject with input parameters as "argname":value pairs
     // - this is a read-only property: you cannot change the input content
-    property Input: TDocVariantData read fInput;
+    property Input: TDocVariantData
+      read fInput;
     /// set if optInterceptInputOutput is defined in TServiceFactoryServer.Options
     // - contains a dvObject with output parameters as "argname":value pairs
     // - this is a read-only property: you cannot change the output content
-    property Output: TDocVariantData read fOutput;
+    property Output: TDocVariantData
+      read fOutput;
     /// only set during AddInterceptor() callback execution, if Step is smsError
-    property LastException: Exception read fLastException;
+    property LastException: Exception
+      read fLastException;
     /// reference to the actual execution method callbacks
-    property OnExecute: TInterfaceMethodExecuteEventDynArray read fOnExecute;
+    property OnExecute: TInterfaceMethodExecuteEventDynArray
+      read fOnExecute;
     /// reference to the background execution thread, if any
     property BackgroundExecutionThread: TSynBackgroundThreadMethod
       read fBackgroundExecutionThread write fBackgroundExecutionThread;
@@ -1973,7 +2005,8 @@ type
     // - if more than one Instances[] is supplied, any raised Exception will
     // be serialized using ObjectToJSONDebug(), or this property will be left
     // to its default nil content if no exception occurred
-    property ExecutedInstancesFailed: TRawUTF8DynArray read fExecutedInstancesFailed;
+    property ExecutedInstancesFailed: TRawUTF8DynArray
+      read fExecutedInstancesFailed;
     /// allow to use an instance-specific temporary TJSONSerializer
     function TempTextWriter: TTextWriter;
   end;
@@ -2019,7 +2052,7 @@ type
     fOptions: TInterfacedObjectFromFactoryOptions;
     fInvoke: TOnFakeInstanceInvoke;
     fNotifyDestroy: TOnFakeInstanceDestroy;
-    fClientDrivenID: Cardinal;
+    fClientDrivenID: cardinal;
   public
     /// create an instance, using the specified interface
     constructor Create(aFactory: TInterfaceFactory;
@@ -2030,9 +2063,11 @@ type
     destructor Destroy; override;
   published
     /// the associated interface factory class
-    property Factory: TInterfaceFactory read fFactory;
+    property Factory: TInterfaceFactory
+      read fFactory;
     /// the ID used in sicClientDriven mode
-    property ClientDrivenID: Cardinal read fClientDrivenID;
+    property ClientDrivenID: cardinal
+      read fClientDrivenID;
   end;
   {$M-}
 
@@ -2886,7 +2921,7 @@ const
 
   {$ifdef CPU32}
   // parameters are always aligned to 8 bytes boundaries on 64-bit ABI
-  ARGS_IN_STACK_SIZE: array[TInterfaceMethodValueType] of Cardinal = (
+  ARGS_IN_STACK_SIZE: array[TInterfaceMethodValueType] of cardinal = (
     0, POINTERBYTES, POINTERBYTES, POINTERBYTES, POINTERBYTES, POINTERBYTES,
     POINTERBYTES, 8, 8, 8, 8, POINTERBYTES, POINTERBYTES, POINTERBYTES,
     POINTERBYTES, 0, POINTERBYTES, POINTERBYTES, POINTERBYTES, POINTERBYTES,
@@ -3518,7 +3553,7 @@ begin
       imvObject:
         if ArgRtti.ValueClass = TList then
           ErrorMsg := ' - use TObjectList instead'
-        else if (ArgRtti.ValueKnownClass = TCollection) and
+        else if (ArgRtti.ValueRTLClass = TCollection) and
                 (ArgRtti.CollectionItem = nil) then
           ErrorMsg :=
             ' - inherit from TInterfacedCollection or call Rtti.RegisterCollection() first'
@@ -3892,8 +3927,8 @@ begin
     raise EInterfaceFactory.Create('TInterfaceFactory(nil).CheckMethodIndex');
   result := FindMethodIndex(aMethodName);
   if result < 0 then
-    raise EInterfaceFactory.CreateUTF8('%.CheckMethodIndex: %.% not found', [self,
-      fInterfaceName, aMethodName]);
+    raise EInterfaceFactory.CreateUTF8('%.CheckMethodIndex: %.% not found',
+      [self, fInterfaceName, aMethodName]);
 end;
 
 function TInterfaceFactory.CheckMethodIndex(aMethodName: PUTF8Char): integer;
@@ -3979,15 +4014,17 @@ asm
     str  r2,sr2
     str  r3,sr3
     // TFakeCallStack address as 2nd parameter
-    // there is no lea equivalent instruction for ARM (AFAIK), so this is calculated by hand (by looking at assembler)
+    // there is no lea equivalent instruction for ARM (AFAIK), so this is
+    // calculated by hand (looking at assembler)
     sub  r1, fp, #128
     // branch to the FakeCall function
     bl   FakeCall
-    // FakeCall should set Int64 result in method result, and float in aCall.FPRegs["sd0"]
+    // FakeCall should set Int64 result in method result,
+    // and float in aCall.FPRegs["sd0"]
     vstr d0,sd0
 end;
 {$else}
-procedure TInterfacedObjectFake.ArmFakeStub;nostackframe;assembler;
+procedure TInterfacedObjectFake.ArmFakeStub; nostackframe;assembler;
 asm
       // get method index
       str   r12,[r13, #-52]
@@ -4052,7 +4089,8 @@ asm
     add x1, sp, #0
     // branch to the FakeCall function
     bl  FakeCall
-    // FakeCall should set Int64 result in method result, and float in aCall.FPRegs["sd0"]
+    // FakeCall should set Int64 result in method result,
+    // and float in aCall.FPRegs["sd0"]
     str d0,sd0
 end;
 {$endif CPUAARCH64}
@@ -4118,7 +4156,7 @@ asm // caller = mov ax,{MethodIndex}; jmp x64FakeStub
         {$endif LINUX}
         call    TInterfacedObjectFake.FakeCall
         // FakeCall should set Int64 result in method result,
-        //and float in aCall.FPRegs["XMM0"]
+        // and float in aCall.FPRegs["XMM0"]
         movsd   xmm0, qword ptr sxmm0 // movsd for zero extension
 end;
 
@@ -5542,7 +5580,8 @@ begin
 end;
 
 function TInterfaceStub.Executes(const aMethodName: RawUTF8;
-  const aEvent: TOnInterfaceStubExecuteVariant; const aEventParams: RawUTF8): TInterfaceStub;
+  const aEvent: TOnInterfaceStubExecuteVariant;
+  const aEventParams: RawUTF8): TInterfaceStub;
 begin
   result := Executes(aMethodName, '', aEvent, aEventParams);
 end;
@@ -5555,13 +5594,14 @@ begin
     aEvent, aEventParams);
 end;
 
-function TInterfaceStub.Executes(aEvent: TOnInterfaceStubExecuteVariant;
+function TInterfaceStub.Executes(const aEvent: TOnInterfaceStubExecuteVariant;
   const aEventParams: RawUTF8): TInterfaceStub;
 var
   i: PtrInt;
 begin
   for i := 0 to fInterface.MethodsCount - 1 do
-    fRules[i].AddRule(self, isExecutesVariant, '', aEventParams, TNotifyEvent(aEvent));
+    fRules[i].AddRule(
+      self, isExecutesVariant, '', aEventParams, TNotifyEvent(aEvent));
   result := self;
 end;
 

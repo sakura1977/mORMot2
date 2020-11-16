@@ -271,7 +271,7 @@ type
 
   PHTTP_UNKNOWN_HEADER = ^HTTP_UNKNOWN_HEADER;
 
-  HTTP_UNKNOWN_HEADERs = array of HTTP_UNKNOWN_HEADER;
+  HTTP_UNKNOWN_HEADERS = array of HTTP_UNKNOWN_HEADER;
 
   HTTP_KNOWN_HEADER = record
     RawValueLength: word;     // in bytes not including the #0
@@ -532,12 +532,12 @@ type
     /// will set all header values from lines
     // - Content-Type/Content-Encoding/Location will be set in KnownHeaders[]
     // - all other headers will be set in temp UnknownHeaders[]
-    procedure SetHeaders(P: PUTF8Char; var UnknownHeaders: HTTP_UNKNOWN_HEADERs);
+    procedure SetHeaders(P: PUTF8Char; var UnknownHeaders: HTTP_UNKNOWN_HEADERS);
     /// add one header value to the internal headers
     // - SetHeaders() method should have been called before to initialize the
     // internal UnknownHeaders[] array
     function AddCustomHeader(P: PUTF8Char; var UnknownHeaders:
-      HTTP_UNKNOWN_HEADERs; ForceCustomHeader: boolean): PUTF8Char;
+      HTTP_UNKNOWN_HEADERS; ForceCustomHeader: boolean): PUTF8Char;
   end;
 
   PHTTP_RESPONSE = ^HTTP_RESPONSE;
@@ -1017,7 +1017,7 @@ type
     /// sends entity-body data associated with an HTTP response.
     SendResponseEntityBody: function(ReqQueueHandle: THandle; RequestId:
       HTTP_REQUEST_ID; Flags: integer; EntityChunkCount: word;
-      pEntityChunks: pointer; var pBytesSent: Cardinal; pReserved1: Pointer = nil;
+      pEntityChunks: pointer; var pBytesSent: cardinal; pReserved1: Pointer = nil;
       pReserved2: Pointer = nil; pOverlapped: POverlapped = nil;
       pLogData: PHTTP_LOG_DATA = nil): HRESULT; stdcall;
     /// set specified data, such as IP addresses or SSL Certificates, from the
@@ -1153,9 +1153,11 @@ type
     constructor Create(api: THttpAPIs; Error: integer); reintroduce;
   published
     /// the error code of this exception
-    property LastError: integer read fLastError;
+    property LastError: integer
+      read fLastError;
     /// the execution context of this exception
-    property LastApi: THttpAPIs read fLastApi;
+    property LastApi: THttpAPIs
+      read fLastApi;
   end;
 
 
@@ -1470,7 +1472,7 @@ type
     WEB_SOCKET_KEEPALIVE_INTERVAL_PROPERTY_TYPE,
     WEB_SOCKET_SUPPORTED_VERSIONS_PROPERTY_TYPE);
 
-  WEB_SOCKET_ACTION_QUEUE = Cardinal;
+  WEB_SOCKET_ACTION_QUEUE = cardinal;
 
   WEB_SOCKET_ACTION = (
     WEB_SOCKET_NO_ACTION, //0
@@ -1591,9 +1593,11 @@ type
     constructor Create(api: TWebSocketAPIs; Error: integer); reintroduce; overload;
   published
     /// the error code of this exception
-    property LastError: integer read fLastError;
+    property LastError: integer
+      read fLastError;
     /// the execution context of this exception
-    property LastApi: TWebSocketAPIs read fLastApi;
+    property LastApi: TWebSocketAPIs
+      read fLastApi;
   end;
 
 const
@@ -1696,8 +1700,8 @@ const
 begin
   if aPort = '' then
     aPort := DEFAULT_PORT[Https];
-  aRoot := trim(aRoot);
-  aDomainName := trim(aDomainName);
+  aRoot := TrimU(aRoot);
+  aDomainName := TrimU(aDomainName);
   if aDomainName = '' then
   begin
     result := '';
@@ -1767,7 +1771,7 @@ begin
       inc(P);
     end;
   // set headers content
-  FastSetString(result, nil, L);
+  FastSetString(result{%H-}, nil, L);
   D := pointer(result);
   for H := low(HTTP_KNOWNHEADERS) to high(HTTP_KNOWNHEADERS) do
     if Request.Headers.KnownHeaders[H].RawValueLength <> 0 then
@@ -1903,8 +1907,8 @@ const
   XPV: PUTF8Char = XPOWEREDVALUE;
 {$endif NOXPOWEREDNAME}
 
-procedure HTTP_RESPONSE.SetHeaders(P: PUTF8Char; var UnknownHeaders:
-  HTTP_UNKNOWN_HEADERs);
+procedure HTTP_RESPONSE.SetHeaders(P: PUTF8Char;
+  var UnknownHeaders: HTTP_UNKNOWN_HEADERS);
 begin
   Headers.pUnknownHeaders := pointer(UnknownHeaders);
   {$ifdef NOXPOWEREDNAME}
@@ -1929,8 +1933,9 @@ begin
     until false;
 end;
 
-function HTTP_RESPONSE.AddCustomHeader(P: PUTF8Char; var UnknownHeaders:
-  HTTP_UNKNOWN_HEADERs; ForceCustomHeader: boolean): PUTF8Char;
+function HTTP_RESPONSE.AddCustomHeader(P: PUTF8Char;
+  var UnknownHeaders: HTTP_UNKNOWN_HEADERS;
+  ForceCustomHeader: boolean): PUTF8Char;
 const
   KNOWNHEADERS: array[reqCacheControl..respWwwAuthenticate] of PAnsiChar = (
     'CACHE-CONTROL:', 'CONNECTION:', 'DATE:', 'KEEP-ALIVE:', 'PRAGMA:',
@@ -2021,7 +2026,7 @@ var
   Buffer: array[0..511] of byte;
   BufferSize, UserSize, DomainSize: DWORD;
   UserInfo: PSIDAndAttributes;
-  NameUse: {$ifdef FPC}SID_NAME_USE{$else}Cardinal{$endif};
+  NameUse: {$ifdef FPC}SID_NAME_USE{$else}cardinal{$endif};
   tmp: SynUnicode;
   P: PWideChar;
 begin
@@ -2138,10 +2143,12 @@ function HttpSys2ToWebSocketHeaders(
   const aHttpHeaders: HTTP_REQUEST_HEADERS): WEB_SOCKET_HTTP_HEADER_ARR;
 var
   headerCnt: integer;
-  i, idx: PtrInt;
+  i: PtrInt;
   h: THttpHeader;
   p: PHTTP_UNKNOWN_HEADER;
+  r: PWEB_SOCKET_HTTP_HEADER;
 begin
+  result := nil;
   headerCnt := 0;
   for h := Low(HTTP_KNOWNHEADERS) to High(HTTP_KNOWNHEADERS) do
     if aHttpHeaders.KnownHeaders[h].RawValueLength <> 0 then
@@ -2150,25 +2157,25 @@ begin
   if p <> nil then
     inc(headerCnt, aHttpHeaders.UnknownHeaderCount);
   SetLength(result, headerCnt);
-  idx := 0;
+  r := pointer(result);
   for h := Low(HTTP_KNOWNHEADERS) to High(HTTP_KNOWNHEADERS) do
     if aHttpHeaders.KnownHeaders[h].RawValueLength <> 0 then
     begin
-      result[idx].pcName := @HTTP_KNOWNHEADERS[h][1];
-      result[idx].ulNameLength := ord(HTTP_KNOWNHEADERS[h][0]);
-      result[idx].pcValue := aHttpHeaders.KnownHeaders[h].pRawValue;
-      result[idx].ulValueLength := aHttpHeaders.KnownHeaders[h].RawValueLength;
-      inc(idx);
+      r^.pcName := @HTTP_KNOWNHEADERS[h][1];
+      r^.ulNameLength := ord(HTTP_KNOWNHEADERS[h][0]);
+      r^.pcValue := aHttpHeaders.KnownHeaders[h].pRawValue;
+      r^.ulValueLength := aHttpHeaders.KnownHeaders[h].RawValueLength;
+      inc(r);
     end;
   p := aHttpHeaders.pUnknownHeaders;
   if p <> nil then
     for i := 1 to aHttpHeaders.UnknownHeaderCount do
     begin
-      result[idx].pcName := pointer(p^.pName);
-      result[idx].ulNameLength := p^.NameLength;
-      result[idx].pcValue := pointer(p^.pRawValue);
-      result[idx].ulValueLength := p^.RawValueLength;
-      inc(idx);
+      r^.pcName := pointer(p^.pName);
+      r^.ulNameLength := p^.NameLength;
+      r^.pcValue := pointer(p^.pRawValue);
+      r^.ulValueLength := p^.RawValueLength;
+      inc(r);
       inc(p);
     end;
 end;
@@ -2189,7 +2196,7 @@ begin
       inc(len, h^.ulNameLength + h^.ulValueLength + 4);
     inc(h);
   end;
-  FastSetString(result, nil, len);
+  FastSetString(result{%H-}, nil, len);
   d := Pointer(result);
   h := aHeaders;
   for i := 1 to aHeadersCount do

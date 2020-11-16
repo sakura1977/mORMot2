@@ -29,6 +29,7 @@ uses
   classes,
   mormot.core.base,
   mormot.core.os,
+  mormot.core.rtti,
   mormot.core.data,
   mormot.core.text,
   mormot.core.unicode,
@@ -492,7 +493,7 @@ begin
         req[r].get.Free;
       for r := (rmax shr 1) + 1 to rmax do
         req[r].post.Free;
-      sleep(10);
+      Sleep(10); // warning: waits typically 10-15 ms on Windows
       for r := 1 to rmax do
         req[r].stream.Free;
       streamer.Free;

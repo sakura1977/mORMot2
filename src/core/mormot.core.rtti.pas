@@ -349,6 +349,17 @@ type
     // - return the first one if Value is invalid (>MaxValue)
     // - Value will be converted to the matching ordinal value (byte or word)
     function GetCaption(const Value): string;
+    /// get all caption names, ready to be display, as lines separated by #13#10
+    // - return "string" type, i.e. UnicodeString for Delphi 2009+
+    // - if UsedValuesBits is not nil, only the corresponding bits set are added
+    function GetCaptionStrings(UsedValuesBits: pointer = nil): string;
+    /// add caption names, ready to be display, to a TStrings class
+    // - add pointer(ord(element)) as Objects[] value
+    // - if UsedValuesBits is not nil, only the corresponding bits set are added
+    // - can be used e.g. to populate a combo box as such:
+    // ! PTypeInfo(TypeInfo(TMyEnum))^.EnumBaseType^.AddCaptionStrings(ComboBox.Items);
+    procedure AddCaptionStrings(Strings: TStrings;
+      UsedValuesBits: pointer = nil);
     /// retrieve all element names as a dynamic array of RawUTF8
     // - names could be optionally trimmed left from their initial lower chars
     procedure GetEnumNameAll(var result: TRawUTF8DynArray;
@@ -1257,6 +1268,12 @@ function GetEnumType(aTypeInfo: PRttiInfo; out List: PShortString): integer;
 // $ aTypeInfo^.EnumBaseType.GetEnumNameOrd(aIndex)
 function GetEnumName(aTypeInfo: PRttiInfo; aIndex: integer): PShortString;
 
+/// get the corresponding enumeration name, without the first lowercase chars
+// (otDone -> 'Done')
+// - this will return the code-based English text; use GetEnumCaption() to
+// retrieve the enumeration display text
+function GetEnumNameTrimed(aTypeInfo: PRttiInfo; aIndex: integer): RawUTF8;
+
 /// helper to retrieve all texts of an enumerate
 // - may be used as cache for overloaded ToText() content
 procedure GetEnumNames(aTypeInfo: PRttiInfo; aDest: PPShortString);
@@ -1325,6 +1342,8 @@ function GetDisplayNameFromClass(C: TClass): RawUTF8;
 // - return generic VCL string type, i.e. UnicodeString for Delphi 2009+
 function GetCaptionFromClass(C: TClass): string;
 
+/// defined here to avoid circular dependency in mormot.core.os.pas
+function ToText(cmd: TParseCommands): shortstring; overload;
 
 
 { ***************** IInvokable Interface RTTI }
@@ -1659,9 +1678,9 @@ function TypeInfoToStandardParserType(Info: PRttiInfo;
 
 /// recognize a simple value type from a dynamic array RTTI
 // - if ExactType=false, will approximate the first field
-function DynArrayTypeInfoToStandardParserType(DynArrayInfo, ElemInfo: PRttiInfo;
-  ElemSize: integer; ExactType: boolean; out FieldSize: integer;
-  Complex: PRTTIParserComplexType = nil): TRttiParserType;
+function DynArrayTypeInfoToStandardParserType(
+  DynArrayInfo, ElemInfo: PRttiInfo; ElemSize: integer; ExactType: boolean;
+  out FieldSize: integer; Complex: PRTTIParserComplexType = nil): TRttiParserType;
 
 /// trim ending 'DynArray' or 's' chars from a dynamic array type name
 // - used internally to guess the associated item type name
@@ -1732,6 +1751,7 @@ type
     // - equals -1 if Prop has a setter
     OffsetSet: PtrInt;
     /// map to Prop^.Name or a customized field/property name
+    // - e.g. 'SubProp'
     Name: PShortString;
     /// store standard RTTI of this published property
     // - equals nil for rkRecord/rkObject nested field
@@ -1799,7 +1819,8 @@ type
     // - do nothing on FPC or Delphi 2009 and older
     procedure SetFromRecordExtendedRtti(RecordInfo: PRttiInfo);
     /// called once List[] and Size have been defined
-    procedure SetManagedFromList;
+    // - compute the fManaged[] internal list
+    procedure AdjustAfterAdded;
     /// retrieve all List[] items as text
     procedure AsText(out Result: RawUTF8; IncludePropType: boolean;
       const Prefix, Suffix: RawUTF8);
@@ -1864,7 +1885,7 @@ type
     // used by NoRttiSetAndRegister()
     fNoRttiInfo: TByteDynArray;
     // customize class process
-    fValueClass, fValueKnownClass: TClass;
+    fValueClass, fValueRTLClass: TClass;
     fObjArrayClass: TClass;
     fCollectionItem: TCollectionItemClass;
     fCollectionItemRtti: TRttiCustom;
@@ -1913,57 +1934,77 @@ type
     // so that mormot.core.rtti has no dependency to TSynPersistent and such
     function ClassNewInstance: pointer; virtual;
     /// low-level RTTI kind, taken from Rtti property
-    property Kind: TRttiKind read fCache.Kind;
+    property Kind: TRttiKind
+      read fCache.Kind;
     /// direct access to the low-level RTTI TypeInfo() pointer, from Rtti property
-    property Info: PRttiInfo read fCache.Info;
+    property Info: PRttiInfo
+      read fCache.Info;
     /// the known type name
     // - may be an hexadecimal value of self, if rcfWithoutRtti is in Flags
-    property Name: RawUTF8 read fName;
+    property Name: RawUTF8
+      read fName;
     /// direct access to the low-level size in bytes used to store a value
     // of this type, as taken from Rtti property
     // - warning: for rkArray/rkDynArray, equals SizeOf(pointer), not the item size
-    property Size: integer read fCache.Size;
+    property Size: integer
+      read fCache.Size;
     /// direct access to the ready-to-use RTTI
-    property Cache: TRttiCache read fCache;
+    property Cache: TRttiCache
+      read fCache;
     /// define specific behavior for this type
-    property Flags: TRttiCustomFlags read fFlags write fFlags;
+    property Flags: TRttiCustomFlags
+      read fFlags write fFlags;
     /// high-level Parser kind
-    property Parser: TRttiParserType read fParser;
+    property Parser: TRttiParserType
+      read fParser;
     /// high-level Parser Complex kind
-    property ParserComplex: TRttiParserComplexType read fParserComplex;
+    property ParserComplex: TRttiParserComplexType
+      read fParserComplex;
     /// store information about the properties/fields of this type
     // - only set for rkClass and rkRecord/rkObject
-    property Props: TRttiCustomProps read fProps;
+    property Props: TRttiCustomProps
+      read fProps;
     /// shortcut to the TRttiCustom of the item of a (dynamic) array
     // - only set for rkArray and rkDynArray
     // - may be set also for unmanaged types - use Cache.ItemInfo if you want the
     // PRttiInfo TypeInfo() pointer for rkManagedTypes only
-    property ArrayRtti: TRttiCustom read fArrayRtti;
+    property ArrayRtti: TRttiCustom
+      read fArrayRtti;
     /// best guess of first field type for a rkDynArray
     // - equals ArrayRtti.Parser if ArrayRtti.Kind is not rkRecordTypes
-    property ArrayFirstField: TRttiParserType read fArrayFirstField;
+    property ArrayFirstField: TRttiParserType
+      read fArrayFirstField;
     /// store the number of bytes for hexadecimal serialization for rcfBinary
     // - used when rcfBinary is defined in Flags; equals 0 if disabled (default)
-    property BinarySize: integer read fBinarySize;
+    property BinarySize: integer
+      read fBinarySize;
     /// store the class of this type, i.e. contains Cache.Info.RttiClass.RttiClass
-    property ValueClass: TClass read fValueClass;
-    /// identify e.g. TCollection or TStrings inherited classes for special handling
-    property ValueKnownClass: TClass read fValueKnownClass;
+    property ValueClass: TClass
+      read fValueClass;
+    /// identify most common RTL inherited classes for special handling
+    // - recognize TCollection TStrings TObjectList TList parents
+    property ValueRTLClass: TClass
+      read fValueRTLClass;
     /// store the class of a T*ObjArray dynamic array
     // - shortcut to ArrayRtti.Info.RttiClass.RttiClass
     // - used when rcfObjArray is defined in Flags
-    property ObjArrayClass: TClass read fObjArrayClass;
+    property ObjArrayClass: TClass
+      read fObjArrayClass;
     /// store the Item class for a given TCollection
     // - as previously registered by Rtti.RegisterCollection()
-    property CollectionItem: TCollectionItemClass read fCollectionItem;
+    property CollectionItem: TCollectionItemClass
+      read fCollectionItem;
     /// opaque private instance used by mormot.orm.base.pas or mormot.core.log.pas
     // - stores e.g. the TOrmProperties ORM information of a TOrm,
     // or the TSynLogFamily of a TSynLog instance
-    property Private: TObject read fPrivate write fPrivate;
+    property Private: TObject
+      read fPrivate write fPrivate;
     /// opaque TRttiJsonLoad callback used by mormot.core.json.pas
-    property JsonLoad: pointer read fJsonLoad write fJsonLoad;
+    property JsonLoad: pointer
+      read fJsonLoad write fJsonLoad;
     /// opaque TRttiJsonSave callback used by mormot.core.json.pas
-    property JsonSave: pointer read fJsonSave write fJsonSave;
+    property JsonSave: pointer
+      read fJsonSave write fJsonSave;
   end;
 
   PRttiCustom = ^TRttiCustom;
@@ -2141,7 +2182,8 @@ type
     /// default property to access a given RTTI TypeInfo() customization
     // - you can access or register one type by using this default property:
     // ! Rtti[TypeInfo(TMyClass)].Props.NameChange('old', 'new')
-    property ByTypeInfo[P: PRttiInfo]: TRttiCustom read RegisterType; default;
+    property ByTypeInfo[P: PRttiInfo]: TRttiCustom
+      read RegisterType; default;
   end;
 
 
@@ -2355,6 +2397,63 @@ end;
 function TRttiEnumType.GetCaption(const Value): string;
 begin
   GetCaptionFromTrimmed(GetEnumNameOrd(FromRttiOrd(RttiOrd, @Value)), result);
+end;
+
+procedure TRttiEnumType.AddCaptionStrings(Strings: TStrings;
+  UsedValuesBits: Pointer);
+var
+  i, L: PtrInt;
+  Line: array[byte] of AnsiChar;
+  P: PAnsiChar;
+  V: PShortString;
+  s: string;
+begin
+  if @self = nil then
+    exit;
+  Strings.BeginUpdate;
+  try
+    V := NameList;
+    for i := MinValue to MaxValue do
+    begin
+      if (UsedValuesBits = nil) or
+         GetBitPtr(UsedValuesBits, i) then
+      begin
+        L := ord(V^[0]);
+        P := @V^[1];
+        while (L > 0) and
+              (P^ in ['a'..'z']) do
+        begin // ignore left lowercase chars
+          inc(P);
+          dec(L);
+        end;
+        if L = 0 then
+        begin
+          L := ord(V^[0]);
+          P := @V^[1];
+        end;
+        Line[L] := #0; // GetCaptionFromPCharLen() expect it as ASCIIZ
+        MoveFast(P^, Line, L);
+        GetCaptionFromPCharLen(Line, s);
+        Strings.AddObject(s, pointer(i));
+      end;
+      inc(PByte(V), length(V^)+1);
+    end;
+  finally
+    Strings.EndUpdate;
+  end;
+end;
+
+function TRttiEnumType.GetCaptionStrings(UsedValuesBits: pointer): string;
+var
+  List: TStringList;
+begin
+  List := TStringList.Create;
+  try
+    AddCaptionStrings(List, UsedValuesBits);
+    result := List.Text;
+  finally
+    List.Free;
+  end;
 end;
 
 procedure TRttiEnumType.GetEnumNameAll(var result: TRawUTF8DynArray;
@@ -4163,6 +4262,11 @@ begin
   end;
 end;
 
+function GetEnumNameTrimed(aTypeInfo: PRttiInfo; aIndex: integer): RawUTF8;
+begin
+  result := TrimLeftLowerCaseShort(GetEnumName(aTypeInfo, aIndex));
+end;
+
 procedure GetEnumNames(aTypeInfo: PRttiInfo; aDest: PPShortString);
 var
   info: PRttiEnumType;
@@ -4378,6 +4482,14 @@ begin
        inc(P);
     GetCaptionFromPCharLen(P, result);
   end;
+end;
+
+function ToText(cmd: TParseCommands): shortstring;
+begin
+  if cmd = [] then
+    result[0] := #0
+  else
+    GetSetNameShort(TypeInfo(TParseCommands), cmd, result, {trim=}true);
 end;
 
 
@@ -4654,7 +4766,8 @@ var
   p: PRttiInfo;
   n: PtrInt;
   fin: PRttiFinalizers;
-begin // caller ensured Info is indeed a record/object
+begin
+  // caller ensured Info is indeed a record/object
   Info.RecordManagedFields(fields);
   n := fields.Count;
   if n > 0 then
@@ -4728,9 +4841,11 @@ begin
       MoveFast(Source^, Dest^, ItemSize * SourceCount)
     else
     if ItemInfo^.Kind in rkRecordTypes then
+      // retrieve record/object RTTI once for all items
       _RecordCopySeveral(pointer(Dest), pointer(Source), SourceCount, ItemInfo)
     else
     begin
+      // loop the TRttiCopier function over all items
       cop := RTTI_COPY[ItemInfo^.Kind];
       if Assigned(cop) then
         repeat
@@ -4932,33 +5047,42 @@ begin
   vt := Source^.VType;
   PCardinal(Dest)^ := vt;
   if vt > varNull then
+    // varEmpty,varNull need no copy
     if vt <= varWord64 then
+      // most used types
       if (vt < varOleStr) or
          (vt > varError) then
-raw:    Dest^.VInt64 := Source^.VInt64 // will copy any simple value
+raw:    // copy any simple value (e.g. ordinal, varByRef)
+        Dest^.VInt64 := Source^.VInt64
       else if vt = varOleStr then
       begin
+        // copy WideString with reference counting
         Dest^.VAny := nil;
         WideString(Dest^.VAny) := WideString(Source^.VAny)
       end
       else
-        goto rtl // varError, varDispatch
+        // varError, varDispatch
+        goto rtl
     else if vt = varString then
     begin
+      // copy AnsiString with reference counting
       Dest^.VAny := nil;
       RawByteString(Dest^.VAny) := RawByteString(Source^.VAny)
     end
     else if vt >= varByRef then
-      goto raw // varByRef has no refcount
+      // varByRef has no refcount
+      goto raw
     {$ifdef HASVARUSTRING}
     else if vt = varUString then
     begin
+      // copy UnicodeString with reference counting
       Dest^.VAny := nil;
       UnicodeString(Dest^.VAny) := UnicodeString(Source^.VAny)
     end
     {$endif HASVARUSTRING}
     else
-rtl:  VarCopyProc(Dest^, Source^); // will handle any complex type
+rtl:  // copy any complex type via the RTL function of the variants unit
+      VarCopyProc(Dest^, Source^);
   result := SizeOf(Source^);
 end;
 
@@ -5138,7 +5262,8 @@ begin
       else
         exit;
   end;
-  case Info^.Kind of // FPC and Delphi will use a fast jmp table
+  case Info^.Kind of
+    // FPC and Delphi will use a fast jmp table
     {$ifdef FPC} rkLStringOld, {$endif} rkLString:
     begin
       cp := Info^.AnsiStringCodePage;
@@ -5351,7 +5476,8 @@ begin
           if (ElemInfo = nil) or
              (ElemInfo^.Kind in rkRecordTypes) then
             continue; // nested records
-          result := TypeInfoToStandardParserType(ElemInfo, {fromname=}true, Complex);
+          result := TypeInfoToStandardParserType(
+            ElemInfo, {fromname=}true, Complex);
           if result = ptNone then
           begin
             ElemInfo := nil;
@@ -5626,7 +5752,7 @@ begin
   List[result].Name := pointer(s); // PShortString
 end;
 
-procedure TRttiCustomProps.SetManagedFromList;
+procedure TRttiCustomProps.AdjustAfterAdded;
 var
   i, n: PtrInt;
   p: PRttiCustomProp;
@@ -5954,13 +6080,13 @@ begin
       begin
         fValueClass := aInfo.RttiClass.RttiClass;
         if fValueClass.InheritsFrom(TCollection) then
-          fValueKnownClass := TCollection
+          fValueRTLClass := TCollection
         else if fValueClass.InheritsFrom(TStrings) then
-          fValueKnownClass := TStrings
+          fValueRTLClass := TStrings
         else if fValueClass.InheritsFrom(TObjectList) then
-          fValueKnownClass := TObjectList
+          fValueRTLClass := TObjectList
         else if fValueClass.InheritsFrom(TList) then
-          fValueKnownClass := TList;
+          fValueRTLClass := TList;
         fProps.AddFromClass(aInfo, {includeparents=}true);
         if fProps.Count = 0 then
           if fValueClass.InheritsFrom(Exception) then
@@ -6064,7 +6190,7 @@ begin
   if fProps.Count > 0 then
   begin
     include(fFlags, rcfHasNestedProperties);
-    fProps.SetManagedFromList;
+    fProps.AdjustAfterAdded;
     if fProps.fManaged <> nil then
       include(fFlags, rcfHasNestedManagedProperties);
   end;
@@ -6383,7 +6509,7 @@ begin
   end;
   // set whole size and managed fields/properties
   fProps.Size := fCache.Size;
-  Props.SetManagedFromList;
+  Props.AdjustAfterAdded;
   if Props.fManaged <> nil then
     include(fFlags, rcfHasNestedManagedProperties);
 end;
@@ -6795,11 +6921,11 @@ begin
      (aTo <> nil) then
   begin
     cFrom := Rtti.RegisterClass(PClass(aFrom)^);
-    if (cFrom.ValueKnownClass = TCollection) and
+    if (cFrom.ValueRTLClass = TCollection) and
        (PClass(aFrom)^ = PClass(aTo)^)  then
       // specific process of TCollection items
       CopyCollection(TCollection(aFrom), TCollection(aTo))
-    else if (cFrom.ValueKnownClass = TStrings) and
+    else if (cFrom.ValueRTLClass = TStrings) and
             PClass(aTo)^.InheritsFrom(TStrings) then
       // specific process of TStrings items using VCL-style copy
       TStrings(aTo).Assign(TStrings(aFrom))
@@ -6958,8 +7084,8 @@ begin
   end;
   RTTI_FINALIZE[rkClass] := @_ObjClear;
   PT_INFO[ptBoolean] := TypeInfo(boolean);
-  PT_INFO[ptByte] := TypeInfo(Byte);
-  PT_INFO[ptCardinal] := TypeInfo(Cardinal);
+  PT_INFO[ptByte] := TypeInfo(byte);
+  PT_INFO[ptCardinal] := TypeInfo(cardinal);
   PT_INFO[ptCurrency] := TypeInfo(Currency);
   PT_INFO[ptDouble] := TypeInfo(Double);
   PT_INFO[ptExtended] := TypeInfo(Extended);

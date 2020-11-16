@@ -324,7 +324,7 @@ type
     // - follow the StreamSynLZ() deprecated function format, if ForceHash32=true
     // so that Hash32() is used instead of the AlgoHash() of this instance
     function StreamCompress(Source: TCustomMemoryStream; Dest: TStream;
-      Magic: Cardinal; ForceHash32: boolean = false): integer; overload;
+      Magic: cardinal; ForceHash32: boolean = false): integer; overload;
     /// compress a Stream content using this compression algorithm into a file
     // - source Stream is split into 128 MB blocks for fast in-memory compression of
     // any Stream size, then SynLZ compressed and including a Hash32 checksum
@@ -334,20 +334,20 @@ type
     // - follow the StreamSynLZ() deprecated function format, if ForceHash32=true
     // so that Hash32() is used instead of the AlgoHash() of this instance
     function StreamCompress(Source: TCustomMemoryStream; const DestFile: TFileName;
-      Magic: Cardinal; ForceHash32: boolean = false): integer; overload;
+      Magic: cardinal; ForceHash32: boolean = false): integer; overload;
     /// uncompress a Stream previoulsy compressed via StreamCompress()
     // - you should specify a Magic number to be used to identify the compressed
     // Stream format
     // - follow the StreamUnSynLZ() deprecated function format, if ForceHash32=true
     // so that Hash32() is used instead of the AlgoHash() of this instance
-    function StreamUnCompress(Source: TStream; Magic: Cardinal;
+    function StreamUnCompress(Source: TStream; Magic: cardinal;
       ForceHash32: boolean = false): TMemoryStream; overload;
     /// uncompress a File previoulsy compressed via StreamCompress() into a Stream
     // - you should specify a Magic number to be used to identify the compressed
     // Stream format
     // - follow the StreamUnSynLZ() deprecated function format, if ForceHash32=true
     // so that Hash32() is used instead of the AlgoHash() of this instance
-    function StreamUnCompress(const Source: TFileName; Magic: Cardinal;
+    function StreamUnCompress(const Source: TFileName; Magic: cardinal;
       ForceHash32: boolean = false): TMemoryStream; overload;
     /// compute the real length of a given StreamCompress() buffer
     // - allows to replace an existing appended content, for instance
@@ -364,14 +364,14 @@ type
     // file format
     // - follow the FileSynLZ() deprecated function format, if ForceHash32=true
     // so that Hash32() is used instead of the AlgoHash() of this instance
-    function FileCompress(const Source, Dest: TFileName; Magic: Cardinal;
+    function FileCompress(const Source, Dest: TFileName; Magic: cardinal;
       ForceHash32: boolean = false): boolean;
     /// uncompress a file previoulsy compressed via FileCompress()
     // - you should specify a Magic number to be used to identify the compressed
     // file format
     // - follow the FileUnSynLZ() deprecated function format, if ForceHash32=true
     // so that Hash32() is used instead of the AlgoHash() of this instance
-    function FileUnCompress(const Source, Dest: TFileName; Magic: Cardinal;
+    function FileUnCompress(const Source, Dest: TFileName; Magic: cardinal;
       ForceHash32: boolean = false): boolean;
     /// get the TAlgoCompress instance corresponding to the AlgoID stored
     // in the supplied compressed buffer
@@ -513,13 +513,13 @@ function StreamSynLZ(Source: TCustomMemoryStream; const DestFile: TFileName;
 
 /// deprecated function - use AlgoSynLZ.FileCompress
 function FileSynLZ(const Source, Dest: TFileName;
-  Magic: Cardinal): boolean; deprecated;
+  Magic: cardinal): boolean; deprecated;
 
 /// deprecated function - use AlgoSynLZ.FileUnCompress
-function FileUnSynLZ(const Source, Dest: TFileName; Magic: Cardinal): boolean; deprecated;
+function FileUnSynLZ(const Source, Dest: TFileName; Magic: cardinal): boolean; deprecated;
 
 /// deprecated function - use AlgoSynLZ.FileIsCompressed
-function FileIsSynLZ(const Name: TFileName; Magic: Cardinal): boolean; deprecated;
+function FileIsSynLZ(const Name: TFileName; Magic: cardinal): boolean; deprecated;
 
 /// deprecated function - use AlgoSynLZ.StreamUnCompress
 function StreamUnSynLZ(const Source: TFileName;
@@ -621,6 +621,7 @@ type
     procedure Init(Buffer: pointer; Len: PtrInt); overload;
     /// initialize the reader from a RawByteString content
     procedure Init(const Buffer: RawByteString); overload;
+      {$ifdef HASINLINE}inline;{$endif}
     /// raise a EFastReader with "Reached End of Input" error message
     procedure ErrorOverflow;
     /// raise a EFastReader with "Incorrect Data: ...." error message
@@ -806,7 +807,7 @@ type
     // in internal buffer
     destructor Destroy; override;
     /// append 1 byte of data at the current position
-    procedure Write1(Data: Byte);
+    procedure Write1(Data: byte);
       {$ifdef HASINLINE}inline;{$endif}
     /// append 2 bytes of data at the current position
     procedure Write2(Data: cardinal);
@@ -824,7 +825,7 @@ type
     procedure WriteI64(Data: Int64);
       {$ifdef HASINLINE}inline;{$endif}
     /// append the same byte a given number of occurences at the current position
-    procedure WriteN(Data: Byte; Count: integer);
+    procedure WriteN(Data: byte; Count: integer);
     /// append some content (may be text or binary) prefixed by its encoded length
     // - will write DataLen as VarUInt32, then the Data content, as expected
     // by FromVarString/FromVarBlob functions
@@ -919,13 +920,17 @@ type
     // move back its writing position to its initial place
     procedure CancelAll; virtual;
     /// the associated writing stream
-    property Stream: TStream read fStream;
+    property Stream: TStream
+      read fStream;
     /// the current position in the internal buffer
-    property BufferPosition: PtrInt read fPos;
+    property BufferPosition: PtrInt
+      read fPos;
     /// get the byte count written since last Flush
-    property TotalWritten: Int64 read GetTotalWritten;
+    property TotalWritten: Int64
+      read GetTotalWritten;
     /// simple property used to store some integer content
-    property Tag: PtrInt read fTag write fTag;
+    property Tag: PtrInt
+      read fTag write fTag;
   end;
 
 {$ifndef PUREMORMOT2}
@@ -1299,7 +1304,7 @@ function UrlDecodeInteger(U: PUTF8Char; const Upper: RawUTF8; var Value: integer
 // will return Next^='where=...' and O=20
 // - if Upper is not found, Value is not modified, and result is FALSE
 // - if Upper is found, Value is modified with the supplied content, and result is TRUE
-function UrlDecodeCardinal(U: PUTF8Char; const Upper: RawUTF8; var Value: Cardinal;
+function UrlDecodeCardinal(U: PUTF8Char; const Upper: RawUTF8; var Value: cardinal;
   Next: PPUTF8Char = nil): boolean;
 
 /// decode a specified parameter compatible with URI encoding into its original
@@ -1480,23 +1485,29 @@ type
     /// retrieve a line content as UTF-8
     // - a temporary UTF-8 string is created
     // - will return '' if aIndex is out of range
-    property Lines[aIndex: integer]: RawUTF8 read GetLine;
+    property Lines[aIndex: integer]: RawUTF8
+      read GetLine;
     /// retrieve a line content as generic VCL string type
     // - a temporary VCL string is created (after conversion for UNICODE Delphi)
     // - will return '' if aIndex is out of range
-    property Strings[aIndex: integer]: string read GetString;
+    property Strings[aIndex: integer]: string
+      read GetString;
     /// direct access to each text line
     // - use LineSize() method to retrieve line length, since end of line will
     // NOT end with #0, but with #13 or #10
     // - warning: no range check is performed about supplied index
-    property LinePointers: PPointerArray read fLines;
+    property LinePointers: PPointerArray
+      read fLines;
     /// the memory map used to access the raw file content
-    property Map: TMemoryMap read fMap;
+    property Map: TMemoryMap
+      read fMap;
   published
     /// the file name which was opened by this instance
-    property FileName: TFileName read fFileName write fFileName;
+    property FileName: TFileName
+      read fFileName write fFileName;
     /// the number of text lines
-    property Count: integer read fCount;
+    property Count: integer
+      read fCount;
   end;
   {$M-}
 
@@ -3430,7 +3441,7 @@ begin
     FlushAndWrite(Data, DataLen); // will also handle DataLen<0
 end;
 
-procedure TBufferWriter.WriteN(Data: Byte; Count: integer);
+procedure TBufferWriter.WriteN(Data: byte; Count: integer);
 var
   len: integer;
 begin
@@ -3448,7 +3459,7 @@ begin
   end;
 end;
 
-procedure TBufferWriter.Write1(Data: Byte);
+procedure TBufferWriter.Write1(Data: byte);
 begin
   if fPos > fBufLen16 then
     InternalFlush;
@@ -4451,7 +4462,7 @@ type
   PAlgoCompressTrailer = ^TAlgoCompressTrailer;
 
 function TAlgoCompress.StreamCompress(Source: TCustomMemoryStream;
-  Dest: TStream; Magic: Cardinal; ForceHash32: boolean): integer;
+  Dest: TStream; Magic: cardinal; ForceHash32: boolean): integer;
 var
   DataLen: integer;
   S, D: pointer;
@@ -4507,7 +4518,7 @@ begin
 end;
 
 function TAlgoCompress.StreamCompress(Source: TCustomMemoryStream;
-  const DestFile: TFileName; Magic: Cardinal; ForceHash32: boolean): integer;
+  const DestFile: TFileName; Magic: cardinal; ForceHash32: boolean): integer;
 var
   F: TFileStream;
 begin
@@ -4519,7 +4530,7 @@ begin
   end;
 end;
 
-function TAlgoCompress.StreamUnCompress(Source: TStream; Magic: Cardinal;
+function TAlgoCompress.StreamUnCompress(Source: TStream; Magic: cardinal;
   ForceHash32: boolean): TMemoryStream;
 var
   S, D: PAnsiChar;
@@ -4611,7 +4622,7 @@ begin
 end;
 
 function TAlgoCompress.StreamUnCompress(const Source: TFileName;
-  Magic: Cardinal; ForceHash32: boolean): TMemoryStream;
+  Magic: cardinal; ForceHash32: boolean): TMemoryStream;
 var
   S: TStream;
 begin
@@ -4673,7 +4684,7 @@ begin
 end;
 
 function TAlgoCompress.FileCompress(const Source, Dest: TFileName;
-  Magic: Cardinal; ForceHash32: boolean): boolean;
+  Magic: cardinal; ForceHash32: boolean): boolean;
 var
   src, dst: RawByteString; // tmp buffers
   S, D: THandleStream;
@@ -4729,7 +4740,7 @@ begin
 end;
 
 function TAlgoCompress.FileUnCompress(const Source, Dest: TFileName;
-  Magic: Cardinal; ForceHash32: boolean): boolean;
+  Magic: cardinal; ForceHash32: boolean): boolean;
 var
   src, dst: RawByteString;
   S, D: THandleStream;
@@ -4985,17 +4996,17 @@ begin
   result := AlgoSynLZ.StreamCompress(Source, DestFile, Magic, {hash32=}true);
 end;
 
-function FileSynLZ(const Source, Dest: TFileName; Magic: Cardinal): boolean;
+function FileSynLZ(const Source, Dest: TFileName; Magic: cardinal): boolean;
 begin
   result := AlgoSynLZ.FileCompress(Source, Dest, Magic, {hash32=}true);
 end;
 
-function FileUnSynLZ(const Source, Dest: TFileName; Magic: Cardinal): boolean;
+function FileUnSynLZ(const Source, Dest: TFileName; Magic: cardinal): boolean;
 begin
   result := AlgoSynLZ.FileUnCompress(Source, Dest, Magic, {hash32=}true);
 end;
 
-function FileIsSynLZ(const Name: TFileName; Magic: Cardinal): boolean;
+function FileIsSynLZ(const Name: TFileName; Magic: cardinal): boolean;
 begin
   result := AlgoSynLZ.FileIsCompressed(Name, Magic);
 end;
@@ -6596,7 +6607,7 @@ begin
 end;
 
 function UrlDecodeCardinal(U: PUTF8Char; const Upper: RawUTF8;
-  var Value: Cardinal; Next: PPUTF8Char): boolean;
+  var Value: cardinal; Next: PPUTF8Char): boolean;
 var
   V: PtrInt;
 begin

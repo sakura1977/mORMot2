@@ -152,7 +152,8 @@ type
     // - points to the current WebSockets process instance, after a successful
     // WebSocketsUpgrade() call, so that you could use e.g. WebSockets.Protocol
     // to retrieve the protocol currently used
-    property WebSockets: TWebSocketProcessClient read fProcess;
+    property WebSockets: TWebSocketProcessClient
+      read fProcess;
   end;
 
 
@@ -311,7 +312,7 @@ begin
   inherited;
 end;
 
-function THttpClientWebSockets.request(const url, method: RawUTF8;
+function THttpClientWebSockets.Request(const url, method: RawUTF8;
   KeepAlive: cardinal; const header: RawUTF8; const Data: RawByteString;
   const DataType: RawUTF8; retry: boolean): integer;
 var

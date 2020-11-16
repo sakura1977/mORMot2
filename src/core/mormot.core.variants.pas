@@ -960,7 +960,7 @@ type
     // or if the value is not a string corresponding to the supplied enumerate
     // - return true if the name has been found, and aValue stores the value
     // - will call Delete() on the found entry, if aDeleteFoundEntry is true
-    function GetValueEnumerate(const aName: RawUTF8; aTypeInfo: pointer;
+    function GetValueEnumerate(const aName: RawUTF8; aTypeInfo: PRttiInfo;
       out aValue; aDeleteFoundEntry: boolean = false): boolean;
     /// returns a TDocVariant object containing all properties matching the
     // first characters of the supplied property name
@@ -1094,7 +1094,7 @@ type
     // - {aPropName:aPropValue} will be searched within the stored array,
     // and the corresponding item will be copied into Dest, on match
     // - returns FALSE if no match is found, TRUE if found and copied by reference
-    function GetDocVariantByProp(const aPropName,aPropValue: RawUTF8;
+    function GetDocVariantByProp(const aPropName, aPropValue: RawUTF8;
       aPropValueCaseSensitive: boolean; out Dest: PDocVariantData): boolean;
     /// find an item in this document, and returns its value
     // - raise an EDocVariant if not found and dvoReturnNullForUnknownProperty
@@ -1149,8 +1149,8 @@ type
     // converted to a variant number, if possible (as varInt/varInt64/varCurrency
     // and/or as varDouble is AllowVarDouble is set)
     // - if Update=TRUE, will set the property, even if it is existing
-    function AddValueFromText(const aName,aValue: RawUTF8; Update: boolean = false;
-      AllowVarDouble: boolean = false): integer;
+    function AddValueFromText(const aName, aValue: RawUTF8;
+      Update: boolean = false; AllowVarDouble: boolean = false): integer;
     /// add some properties to a TDocVariantData dvObject
     // - data is supplied two by two, as Name,Value pairs
     // - caller should ensure that Kind=dvObject, otherwise it won't do anything
@@ -1218,7 +1218,7 @@ type
     // object, and the corresponding item will be deleted, on match
     // - returns FALSE if no match is found, TRUE if found and deleted
     // - will call VariantEquals() for value comparison
-    function DeleteByProp(const aPropName,aPropValue: RawUTF8;
+    function DeleteByProp(const aPropName, aPropValue: RawUTF8;
       aPropValueCaseSensitive: boolean): boolean;
     /// delete one or several value/item in this document, from its value
     // - returns the number of deleted items
@@ -1238,7 +1238,7 @@ type
     // object, and the corresponding item index will be returned, on match
     // - returns -1 if no match is found
     // - will call VariantEquals() for value comparison
-    function SearchItemByProp(const aPropName,aPropValue: RawUTF8;
+    function SearchItemByProp(const aPropName, aPropValue: RawUTF8;
       aPropValueCaseSensitive: boolean): integer; overload;
     /// search a property match in this document, handled as array or object
     // - {aPropName:aPropValue} will be searched within the stored array or
@@ -1292,27 +1292,27 @@ type
     // - you can optionally apply an additional filter to each reduced item
     procedure ReduceAsArray(const aPropName: RawUTF8;
       out result: TDocVariantData;
-      OnReduce: TOnReducePerItem = nil); overload;
+      const OnReduce: TOnReducePerItem = nil); overload;
     /// create a TDocVariant array, from the values of a single properties of
     // this document, specified by name
     // - always returns a TDocVariantData, even if no property name did match
     // (in this case, it is dvUndefined)
     // - you can optionally apply an additional filter to each reduced item
     function ReduceAsArray(const aPropName: RawUTF8;
-      OnReduce: TOnReducePerItem = nil): variant; overload;
+      const OnReduce: TOnReducePerItem = nil): variant; overload;
     /// create a TDocVariant array, from the values of a single properties of
     // this document, specified by name
     // - this overloaded method accepts an additional filter to each reduced item
     procedure ReduceAsArray(const aPropName: RawUTF8;
       out result: TDocVariantData;
-      OnReduce: TOnReducePerValue); overload;
+      const OnReduce: TOnReducePerValue); overload;
     /// create a TDocVariant array, from the values of a single properties of
     // this document, specified by name
     // - always returns a TDocVariantData, even if no property name did match
     // (in this case, it is dvUndefined)
     // - this overloaded method accepts an additional filter to each reduced item
     function ReduceAsArray(const aPropName: RawUTF8;
-      OnReduce: TOnReducePerValue): variant; overload;
+      const OnReduce: TOnReducePerValue): variant; overload;
     /// rename some properties of a TDocVariant object
     // - returns the number of property names modified
     function Rename(const aFromPropName, aToPropName: TRawUTF8DynArray): integer;
@@ -1329,7 +1329,8 @@ type
     // - those options are set when creating the instance
     // - dvoArray and dvoObject are not options, but define the document Kind,
     // so those items are ignored when assigned to this property
-    property Options: TDocVariantOptions read VOptions write SetOptions;
+    property Options: TDocVariantOptions
+      read VOptions write SetOptions;
     /// returns the document internal layout
     // - just after initialization, it will return dvUndefined
     // - most of the time, you will add named values with AddValue() or by
@@ -1577,6 +1578,15 @@ function _Safe(const DocVariant: variant;
 function _Obj(const NameValuePairs: array of const;
   Options: TDocVariantOptions = []): variant;
 
+/// add a property value to a document-based object content
+// - if Obj is a TDocVariant object, will add the Name/Value pair
+// - if Obj is not a TDocVariant, will create a new fast document,
+// initialized with supplied the Name/Value pairs
+// - this function will also ensure that ensure Obj is not stored by reference,
+// but as a true TDocVariantData
+procedure _ObjAddProp(const Name: RawUTF8; const Value: variant;
+  var Obj: variant);
+
 /// add some property values to a document-based object content
 // - if Obj is a TDocVariant object, will add the Name/Value pairs
 // - if Obj is not a TDocVariant, will create a new fast document,
@@ -1820,6 +1830,15 @@ procedure ObjectToVariant(Value: TObject; var result: variant;
 /// will convert any TObject into a TDocVariant document instance
 // - convenient overloaded function to include woEnumSetsAsText option
 function ObjectToVariant(Value: TObject; EnumSetsAsText: boolean): variant; overload;
+
+/// will serialize any TObject into a TDocVariant debugging document
+// - just a wrapper around _JsonFast(ObjectToJSONDebug()) with an optional
+// "Context":"..." text message
+// - if the supplied context format matches '{....}' then it will be added
+// as a corresponding TDocVariant JSON object
+function ObjectToVariantDebug(Value: TObject;
+  const ContextFormat: RawUTF8; const ContextArgs: array of const;
+  const ContextName: RawUTF8 = 'context'): variant; overload;
 
 /// get the enumeration names corresponding to a set value, as a JSON array
 function SetNameToVariant(Value: cardinal; Info: TRttiCustom;
@@ -3453,6 +3472,20 @@ begin
   ObjectToVariant(Value, result, OPTIONS[EnumSetsAsText]);
 end;
 
+function ObjectToVariantDebug(Value: TObject;
+  const ContextFormat: RawUTF8; const ContextArgs: array of const;
+  const ContextName: RawUTF8): variant;
+begin
+  _Json(ObjectToJSON(Value), result, JSON_OPTIONS_FAST);
+  if ContextFormat <> '' then
+    if ContextFormat[1] = '{' then
+      _ObjAddProps([ContextName,
+        _JsonFastFmt(ContextFormat, [], ContextArgs)], result)
+    else
+      _ObjAddProps([ContextName,
+        FormatUTF8(ContextFormat, ContextArgs)], result);
+end;
+
 procedure ObjectToVariant(Value: TObject; var result: variant;
   Options: TTextWriterWriteObjectOptions);
 var
@@ -4028,7 +4061,7 @@ begin
     else
       GetNextItem(CSV, ItemSep, v);
     if DoTrim then
-      v := trim(v);
+      v := TrimU(v);
     if n = '' then
       break;
     RawUTF8ToVariant(v, val);
@@ -4706,14 +4739,14 @@ begin
 end;
 
 function TDocVariantData.ReduceAsArray(const aPropName: RawUTF8;
-  OnReduce: TOnReducePerItem): variant;
+  const OnReduce: TOnReducePerItem): variant;
 begin
   VarClear(result{%H-});
   ReduceAsArray(aPropName, PDocVariantData(@result)^, OnReduce);
 end;
 
 procedure TDocVariantData.ReduceAsArray(const aPropName: RawUTF8;
-  out result: TDocVariantData; OnReduce: TOnReducePerItem);
+  out result: TDocVariantData; const OnReduce: TOnReducePerItem);
 var
   ndx, j: PtrInt;
   item: PDocVariantData;
@@ -4734,14 +4767,14 @@ begin
 end;
 
 function TDocVariantData.ReduceAsArray(const aPropName: RawUTF8;
-  OnReduce: TOnReducePerValue): variant;
+  const OnReduce: TOnReducePerValue): variant;
 begin
   VarClear(result{%H-});
   ReduceAsArray(aPropName, PDocVariantData(@result)^, OnReduce);
 end;
 
 procedure TDocVariantData.ReduceAsArray(const aPropName: RawUTF8;
-  out result: TDocVariantData; OnReduce: TOnReducePerValue);
+  out result: TDocVariantData; const OnReduce: TOnReducePerValue);
 var
   ndx, j: PtrInt;
   item: PDocVariantData;
@@ -5076,7 +5109,7 @@ begin
 end;
 
 function TDocVariantData.GetValueEnumerate(const aName: RawUTF8;
-  aTypeInfo: pointer; out aValue; aDeleteFoundEntry: boolean): boolean;
+  aTypeInfo: PRttiInfo; out aValue; aDeleteFoundEntry: boolean): boolean;
 var
   text: RawUTF8;
   ndx, ord: integer;
@@ -5899,6 +5932,28 @@ begin
   TDocVariantData(result).InitArray(Items, Options);
 end;
 
+procedure _ObjAddProp(const Name: RawUTF8; const Value: variant;
+  var Obj: variant);
+var
+  o: PDocVariantData;
+begin
+  o := _Safe(Obj);
+  if not (dvoIsObject in o^.VOptions) then
+  begin
+    // create new object
+    VarClear(Obj);
+    TDocVariantData(Obj).InitObject([Name, Value], JSON_OPTIONS_FAST);
+  end
+  else
+  begin
+    // append new names/values to existing object
+    if o <> @Obj then
+      // ensure not stored by reference
+      TVarData(Obj) := PVarData(o)^;
+    o^.AddOrUpdateValue(Name, Value);
+  end;
+end;
+
 procedure _ObjAddProps(const NameValuePairs: array of const;
   var Obj: variant);
 var
@@ -5906,20 +5961,23 @@ var
 begin
   o := _Safe(Obj);
   if not (dvoIsObject in o^.VOptions) then
-  begin // create new object
+  begin
+    // create new object
     VarClear(Obj);
     TDocVariantData(Obj).InitObject(NameValuePairs, JSON_OPTIONS_FAST);
   end
   else
   begin // append new names/values to existing object
-    TVarData(Obj) := PVarData(o)^; // ensure not stored by reference
+    if o <> @Obj then
+      // ensure not stored by reference
+      TVarData(Obj) := PVarData(o)^;
     o^.AddNameValuesToObject(NameValuePairs);
   end;
 end;
 
 procedure _ObjAddProps(const Document: variant; var Obj: variant);
 var
-  ndx: integer;
+  ndx: PtrInt;
   d, o: PDocVariantData;
 begin
   d := _Safe(Document);

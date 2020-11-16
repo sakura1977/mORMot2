@@ -98,9 +98,11 @@ type
 
 
 const
-  // log up to 2 KB of JSON response, to save space
+  /// size in bytes, to log up to 2 KB of JSON response, to save space
   MAX_SIZE_RESPONSE_LOG = 2 shl 10;
 
+  /// you can use this cookie value to delete a cookie on the browser side
+  COOKIE_EXPIRED = '; Expires=Sat, 01 Jan 2010 00:00:01 GMT';
 
 
 { ************ TRestBackgroundTimer for Multi-Thread Process }
@@ -296,8 +298,9 @@ type
     // - will properly call BeginCurrentThread/EndCurrentThread methods
     // - you should supply some runtime information to name the thread, for
     // proper debugging
-    function NewBackgroundThreadProcess(aOnProcess: TOnSynBackgroundThreadProcess;
-      aOnProcessMS: cardinal; const Format: RawUTF8; const Args: array of const;
+    function NewBackgroundThreadProcess(
+      const aOnProcess: TOnSynBackgroundThreadProcess; aOnProcessMS: cardinal;
+      const Format: RawUTF8; const Args: array of const;
       aStats: TSynMonitorClass=nil): TSynBackgroundThreadProcess;
     /// allows to safely execute a process in parallel
     // - returns a TSynParallelProcess instance, ready to execute any task
@@ -315,12 +318,12 @@ type
     // - you can run BackgroundTimer.EnQueue or ExecuteNow methods to implement
     // a FIFO queue, or force immediate execution of the process
     // - will call BeginCurrentThread/EndCurrentThread as expected e.g. by logs
-    function TimerEnable(aOnProcess: TOnSynBackgroundTimerProcess;
+    function TimerEnable(const aOnProcess: TOnSynBackgroundTimerProcess;
       aOnProcessSecs: cardinal): TRestBackgroundTimer;
     /// undefine a task running on a periodic number of seconds
     // - should have been registered by a previous call to TimerEnable() method
     // - returns true on success, false if the supplied task was not registered
-    function TimerDisable(aOnProcess: TOnSynBackgroundTimerProcess): boolean;
+    function TimerDisable(const aOnProcess: TOnSynBackgroundTimerProcess): boolean;
     /// will gather CPU and RAM information in a background thread
     // - you can specify the update frequency, in seconds
     // - access to the information via the returned instance, which maps
@@ -536,9 +539,11 @@ type
     function GetServerTimestamp: TTimeLog; virtual;
 
     /// main access to the IRestOrm methods of this instance
-    property ORM: IRestOrm read fOrm;
+    property ORM: IRestOrm
+      read fOrm;
     /// low-level access to the associated Data Model
-    property Model: TOrmModel read fModel;
+    property Model: TOrmModel
+      read fModel;
     /// access to the interface-based services list
     // - may be nil if no service interface has been registered yet: so be
     // aware that the following line may trigger an access violation if
@@ -549,7 +554,8 @@ type
     // trigger any access violation if Services=nil, could be:
     // ! if fServer.Services.Resolve(ICalculator, Calc) then
     // !   ...
-    property Services: TServiceContainer read fServices;
+    property Services: TServiceContainer
+      read fServices;
     /// access or initialize the internal IoC resolver, used for interface-based
     // remote services, and more generaly any Services.Resolve() call
     // - create and initialize the internal TServiceContainer if no service
@@ -564,7 +570,8 @@ type
     /// internal procedure called to implement TServiceContainer.Release
     procedure ServicesRelease(Caller: TServiceContainer);
     /// access to the Multi-Threading process of this instance
-    property Run: TRestRunThreads read fRun;
+    property Run: TRestRunThreads
+      read fRun;
 
     /// how this class execute its internal commands
     // - by default, TRestServer.URI() will lock for Write ORM according to
@@ -821,14 +828,14 @@ type
     // TRestRunThreads compatibility methods
     function NewBackgroundThreadMethod(const Format: RawUTF8;
       const Args: array of const): TSynBackgroundThreadMethod;
-    function NewBackgroundThreadProcess(aOnProcess: TOnSynBackgroundThreadProcess;
+    function NewBackgroundThreadProcess(const aOnProcess: TOnSynBackgroundThreadProcess;
       aOnProcessMS: cardinal; const Format: RawUTF8; const Args: array of const;
       aStats: TSynMonitorClass=nil): TSynBackgroundThreadProcess;
     function NewParallelProcess(ThreadCount: integer; const Format: RawUTF8;
       const Args: array of const): TSynParallelProcess;
-    function TimerEnable(aOnProcess: TOnSynBackgroundTimerProcess;
+    function TimerEnable(const aOnProcess: TOnSynBackgroundTimerProcess;
       aOnProcessSecs: cardinal): TRestBackgroundTimer;
-    function TimerDisable(aOnProcess: TOnSynBackgroundTimerProcess): boolean;
+    function TimerDisable(const aOnProcess: TOnSynBackgroundTimerProcess): boolean;
     function SystemUseTrack(periodSec: integer = 10): TSystemUse;
     function EnsureBackgroundTimerExists: TRestBackgroundTimer;
     procedure BeginCurrentThread(Sender: TThread); virtual;
@@ -1244,20 +1251,26 @@ type
     // - returns FALSE if successfully waited up to MS milliseconds
     function SleepOrTerminated(MS: integer): boolean;
     /// read-only access to the associated REST instance
-    property Rest: TRest read FRest;
+    property Rest: TRest
+      read FRest;
     /// TRUE if the associated REST instance will be owned by this thread
-    property OwnRest: boolean read fOwnRest;
+    property OwnRest: boolean
+      read fOwnRest;
     /// a critical section is associated to this thread
     // - could be used to protect shared resources within the internal process
-    property Safe: TSynLocker read fSafe;
+    property Safe: TSynLocker
+      read fSafe;
     /// read-only access to the TSynLog instance of the associated REST instance
-    property Log: TSynLog read fLog;
+    property Log: TSynLog
+      read fLog;
     /// a event associated to this thread
-    property Event: TEvent read fEvent;
+    property Event: TEvent
+      read fEvent;
     /// publishes the thread running state
     property Terminated;
     /// publishes the thread executing state (set when Execute leaves)
-    property Executing: boolean read fExecuting;
+    property Executing: boolean
+      read fExecuting;
   end;
   {$M-}
 
@@ -2573,7 +2586,7 @@ begin
 end;
 
 function TRest.NewBackgroundThreadProcess(
-  aOnProcess: TOnSynBackgroundThreadProcess; aOnProcessMS: cardinal;
+  const aOnProcess: TOnSynBackgroundThreadProcess; aOnProcessMS: cardinal;
   const Format: RawUTF8; const Args: array of const;
   aStats: TSynMonitorClass): TSynBackgroundThreadProcess;
 begin
@@ -2584,7 +2597,7 @@ begin
       aOnProcess, aOnProcessMS, Format, Args);
 end;
 
-function TRest.TimerEnable(aOnProcess: TOnSynBackgroundTimerProcess;
+function TRest.TimerEnable(const aOnProcess: TOnSynBackgroundTimerProcess;
   aOnProcessSecs: cardinal): TRestBackgroundTimer;
 begin
   if self = nil then
@@ -2593,7 +2606,7 @@ begin
     result := fRun.TimerEnable(aOnProcess, aOnProcessSecs);
 end;
 
-function TRest.TimerDisable(aOnProcess: TOnSynBackgroundTimerProcess): boolean;
+function TRest.TimerDisable(const aOnProcess: TOnSynBackgroundTimerProcess): boolean;
 begin
   if self = nil then
     result := false
@@ -2659,7 +2672,8 @@ end;
 
 function TRest.BackgroundTimer: TRestBackgroundTimer;
 begin
-  if (self = nil) or (fRun = nil) then
+  if (self = nil) or
+     (fRun = nil) then
     result := nil
   else
     result := fRun.fBackgroundTimer;
@@ -3439,7 +3453,7 @@ begin
     exit;
   endtix := mormot.core.os.GetTickCount64 + MS;
   repeat
-    fEvent.WaitFor(MS);
+    fEvent.WaitFor(MS); // warning: can wait up to 15 ms more on Windows
     if Terminated then
       exit;
   until (MS < 32) or
@@ -3544,7 +3558,7 @@ begin
 end;
 
 function TRestRunThreads.NewBackgroundThreadProcess(
-  aOnProcess: TOnSynBackgroundThreadProcess; aOnProcessMS: cardinal;
+  const aOnProcess: TOnSynBackgroundThreadProcess; aOnProcessMS: cardinal;
   const Format: RawUTF8; const Args: array of const;
   aStats: TSynMonitorClass): TSynBackgroundThreadProcess;
 var
@@ -3559,7 +3573,8 @@ begin
       BeginCurrentThread, EndCurrentThread, aStats);
 end;
 
-function TRestRunThreads.TimerEnable(aOnProcess: TOnSynBackgroundTimerProcess;
+function TRestRunThreads.TimerEnable(
+  const aOnProcess: TOnSynBackgroundTimerProcess;
   aOnProcessSecs: cardinal): TRestBackgroundTimer;
 begin
   result := nil;
@@ -3574,7 +3589,8 @@ begin
   result.Enable(aOnProcess, aOnProcessSecs);
 end;
 
-function TRestRunThreads.TimerDisable(aOnProcess: TOnSynBackgroundTimerProcess): boolean;
+function TRestRunThreads.TimerDisable(
+  const aOnProcess: TOnSynBackgroundTimerProcess): boolean;
 begin
   if (self = nil) or
      (fBackgroundTimer = nil) then

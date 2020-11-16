@@ -76,12 +76,14 @@ type
     /// access to the associated interface factory
     // - this property will be injected by TServiceFactoryServer.CreateInstance,
     // so may be nil if the instance was created outside the SOA context
-    property Factory: TServiceFactoryServer read fFactory;
+    property Factory: TServiceFactoryServer
+      read fFactory;
     /// access ot the associated REST Server, e.g. to its ORM methods
     // - slightly faster than Factory.RestServer
     // - this value will be injected by TServiceFactoryServer.CreateInstance,
     // so may be nil if the instance was created outside the SOA context
-    property Server: TRestServer read fServer;
+    property Server: TRestServer
+      read fServer;
   end;
 
   /// class-reference type (metaclass) of a TInjectableObjectRest type
@@ -161,12 +163,6 @@ type
       ickFromInjectedResolver, ickFake);
     fImplementationClassInterfaceEntry: PInterfaceEntry;
     fSharedInterface: IInterface;
-    fResultAsJSONObject: boolean;
-    fResultAsJSONObjectWithoutResult: boolean;
-    fResultAsXMLObject: boolean;
-    fResultAsJSONObjectIfAccept: boolean;
-    fResultAsXMLObjectNameSpace: RawUTF8;
-    fExcludeServiceLogCustomAnswer: boolean;
     fBackgroundThread: TSynBackgroundThreadMethod;
     fOnMethodExecute: TOnServiceCanExecute;
     fOnExecute: array of TOnInterfaceMethodExecute;
@@ -207,7 +203,8 @@ type
 
     /// you can define here an event to allow/deny execution of any method
     // of this service, at runtime
-    property OnMethodExecute: TOnServiceCanExecute read fOnMethodExecute write fOnMethodExecute;
+    property OnMethodExecute: TOnServiceCanExecute
+      read fOnMethodExecute write fOnMethodExecute;
     /// allow to hook the methods execution
     // - several events could be registered, and will be called directly
     // before and after method execution
@@ -273,15 +270,18 @@ type
       aLogClass: TOrmServiceLogClass = nil): TServiceFactoryServerAbstract; override;
 
     /// the associated TRestServer instance
-    property RestServer: TRestServer read fRestServer;
+    property RestServer: TRestServer
+      read fRestServer;
     /// direct access to per-method detailed process statistics
     // - this Stats[] array follows Interface.Methods[] order
     // - see Stat[] property to retrieve information about a method by name
-    property Stats: TSynMonitorInputOutputObjArray read fStats;
+    property Stats: TSynMonitorInputOutputObjArray
+      read fStats;
     /// retrieve detailed statistics about a method use
     // - will return a reference to the actual item in Stats[]: caller should
     // not free the returned instance
-    property Stat[const aMethod: RawUTF8]: TSynMonitorInputOutput read GetStat;
+    property Stat[const aMethod: RawUTF8]: TSynMonitorInputOutput
+      read GetStat;
   published
     /// the class type used to implement this interface
     property ImplementationClass: TInterfacedClass
@@ -292,58 +292,6 @@ type
     // - you can also use the SetTimeOutSec() fluent function instead
     property TimeoutSec: cardinal
       read GetTimeoutSec write SetTimeoutSecInt;
-    /// set to TRUE to return the interface's methods result as JSON object
-    // - by default (FALSE), any method execution will return a JSON array with
-    // all VAR/OUT parameters, in order
-    // - TRUE will generate a JSON object instead, with the VAR/OUT parameter
-    // names as field names (and "Result" for any function result) - may be
-    // useful e.g. when working with JavaScript clients
-    // - Delphi clients (i.e. TServiceFactoryClient/TInterfacedObjectFake) will
-    // transparently handle both formats
-    // - this value can be overridden by setting ForceServiceResultAsJSONObject
-    // for a given TRestServerURIContext (e.g. for server-side JavaScript work)
-    property ResultAsJSONObject: boolean
-      read fResultAsJSONObject write fResultAsJSONObject;
-    /// set to TRUE to return the interface's methods result as JSON object
-    // with no '{"result":{...}}' nesting
-    // - could be used e.g. for plain non mORMot REST Client with in sicSingle
-    // or sicShared mode kind of services
-    // - on client side, consider using TRestClientURI.ServiceDefineSharedAPI
-    property ResultAsJSONObjectWithoutResult: boolean
-      read fResultAsJSONObjectWithoutResult write fResultAsJSONObjectWithoutResult;
-    /// set to TRUE to return the interface's methods result as XML object
-    // - by default (FALSE), method execution will return a JSON array with
-    // all VAR/OUT parameters, or a JSON object if ResultAsJSONObject is TRUE
-    // - TRUE will generate a XML object instead, with the VAR/OUT parameter
-    // names as field names (and "Result" for any function result) - may be
-    // useful e.g. when working with some XML-only clients
-    // - Delphi clients (i.e. TServiceFactoryClient/TInterfacedObjectFake) does
-    // NOT handle this XML format yet
-    // - this value can be overridden by setting ForceServiceResultAsXMLObject
-    // for a given TRestServerURIContext instance
-    property ResultAsXMLObject: boolean
-      read fResultAsXMLObject write fResultAsXMLObject;
-    /// set to TRUE to return XML objects for the interface's methods result
-    // if the Accept: HTTP header is exactly 'application/xml' or 'text/xml'
-    // - the header should be exactly 'Accept: application/xml' or
-    // 'Accept: text/xml' (and no other value)
-    // - in this case, ForceServiceResultAsXMLObject will be set for this
-    // particular TRestServerURIContext instance, and result returned as XML
-    // - using this method allows to mix standard JSON requests (from JSON
-    // or AJAX clients) and XML requests (from XML-only clients)
-    property ResultAsXMLObjectIfAcceptOnlyXML: boolean
-      read fResultAsJSONObjectIfAccept write fResultAsJSONObjectIfAccept;
-    /// specify a custom name space content when returning a XML object
-    // - by default, no name space will be appended - but such rough XML will
-    // have potential validation problems
-    // - you may use e.g. XMLUTF8_NAMESPACE, which will append <content ...> ...
-    // </content> around the generated XML data
-    property ResultAsXMLObjectNameSpace: RawUTF8
-      read fResultAsXMLObjectNameSpace write fResultAsXMLObjectNameSpace;
-    /// disable base64-encoded TOrmServiceLog.Output for methods
-    // returning TServiceCustomAnswer record (to reduce storage size)
-    property ExcludeServiceLogCustomAnswer: boolean read fExcludeServiceLogCustomAnswer
-      write fExcludeServiceLogCustomAnswer;
   end;
 
 
@@ -553,7 +501,7 @@ type
     // - the optional low-level aOnNotify callback will be triggerred for each
     // incoming notification, to track the object changes in real-time
     constructor Create(aSlave: TRestServer; aMaster: TRestClientURI;
-      aTable: TOrmClass; aOnNotify: TOnBatchWrite); reintroduce;
+      aTable: TOrmClass; const aOnNotify: TOnBatchWrite); reintroduce;
     /// finalize this callback instance
     destructor Destroy; override;
     /// this event will be raised on any Add on a versioned record
@@ -628,7 +576,7 @@ begin
   end
   else
   begin
-    if aRestServer.Services.implements(fInterface.InterfaceTypeInfo) then
+    if aRestServer.Services.Implements(fInterface.InterfaceTypeInfo) then
       fImplementationClassKind := ickFromInjectedResolver
     else if fImplementationClass.InheritsFrom(TInjectableObjectRest) then
       fImplementationClassKind := ickInjectableRest
@@ -640,10 +588,7 @@ begin
       GetInterfaceEntry(fInterface.InterfaceIID);
     if fImplementationClassInterfaceEntry = nil then
       raise EServiceException.CreateUTF8('%.Create: % does not implement I%',
-        [self, fImplementationClass, fInterfaceURI])
-    else
-
-
+        [self, fImplementationClass, fInterfaceURI]);
   end;
   if (fInterface.MethodIndexCallbackReleased >= 0) and
      (InstanceCreation <> sicShared) then
@@ -1437,8 +1382,9 @@ begin
     aLogRest.AsynchBatchStart(aLogClass, 1, 500, 1000); // do nothing if already set
 end;
 
-function TServiceFactoryServer.SetServiceLog(const aMethod: array of RawUTF8;
-  const aLogRest: IRestOrm; aLogClass: TOrmServiceLogClass): TServiceFactoryServerAbstract;
+function TServiceFactoryServer.SetServiceLog(
+  const aMethod: array of RawUTF8; const aLogRest: IRestOrm;
+  aLogClass: TOrmServiceLogClass): TServiceFactoryServerAbstract;
 var
   bits: TInterfaceFactoryMethodBits;
 begin
@@ -1473,7 +1419,8 @@ type
     fRaiseExceptionOnInvokeError: boolean;
     function CallbackInvoke(const aMethod: TInterfaceMethod;
       const aParams: RawUTF8; aResult, aErrorMsg: PRawUTF8;
-      aClientDrivenID: PCardinal; aServiceCustomAnswer: PServiceCustomAnswer): boolean; virtual;
+      aClientDrivenID: PCardinal;
+      aServiceCustomAnswer: PServiceCustomAnswer): boolean; virtual;
   public
     constructor Create(aRequest: TRestServerURIContext;
       aFactory: TInterfaceFactory; aFakeID: integer);
@@ -2018,7 +1965,7 @@ end;
 { TServiceRecordVersionCallback }
 
 constructor TServiceRecordVersionCallback.Create(aSlave: TRestServer;
-  aMaster: TRestClientURI; aTable: TOrmClass; aOnNotify: TOnBatchWrite);
+  aMaster: TRestClientURI; aTable: TOrmClass; const aOnNotify: TOnBatchWrite);
 begin
   if aSlave = nil then
     raise EServiceException.CreateUTF8('%.Create(%): Slave=nil',

@@ -103,7 +103,8 @@ type
     {$endif FPC}
   public
     /// the associated reference count
-    property RefCount: integer read fRefCount write fRefCount;
+    property RefCount: integer
+      read fRefCount write fRefCount;
   end;
 
   /// any TCollection used between client and server shall inherit from this class
@@ -321,7 +322,8 @@ type
     function Safe: PSynLocker;
     /// direct access to the locking methods of this instance
     // - faster than IAutoLocker.Safe function
-    property Locker: TSynLocker read fSafe;
+    property Locker: TSynLocker
+      read fSafe;
   end;
 
 
@@ -435,13 +437,16 @@ type
     /// fast delete one item in the list
     function Remove(item: pointer): integer; virtual;
     /// how many items are stored in this TList instance
-    property Count: integer read fCount;
+    property Count: integer
+      read fCount;
     /// low-level access to the items stored in this TList instance
-    property List: TPointerDynArray read fList;
+    property List: TPointerDynArray
+      read fList;
     /// low-level array-like access to the items stored in this TList instance
     // - warning: if index is out of range, will return nil and won't raise
     // any exception
-    property Items[index: integer]: pointer read Get; default;
+    property Items[index: integer]: pointer
+      read Get; default;
   end;
   PSynList = ^TSynList;
 
@@ -469,7 +474,8 @@ type
     destructor Destroy; override;
     /// optional class of the stored items
     // - could be used when unserializing from JSON
-    property ItemClass: TClass read fItemClass write fItemClass;
+    property ItemClass: TClass
+      read fItemClass write fItemClass;
   end;
   PSynObjectList = ^TSynObjectList;
 
@@ -498,7 +504,8 @@ type
     destructor Destroy; override;
     /// access to the associated instance critical section
     // - call Safe.Lock/UnLock to protect multi-thread access on this storage
-    property Safe: PSynLocker read fSafe;
+    property Safe: PSynLocker
+      read fSafe;
     /// could be used as a short-cut to Safe.Lock
     procedure Lock;
       {$ifdef HASINLINE}inline;{$endif}
@@ -525,7 +532,8 @@ type
     destructor Destroy; override;
     /// access to the locking methods of this instance
     // - use Safe.Lock/TryLock with a try ... finally Safe.Unlock block
-    property Safe: PSynLocker read fSafe;
+    property Safe: PSynLocker
+      read fSafe;
   end;
 
   /// add locking methods to a TSynObjectList
@@ -561,7 +569,8 @@ type
     // - could be used to protect shared resources within the internal process,
     // for index-oriented methods like Delete/Items/Count...
     // - use Safe.Lock/TryLock with a try ... finally Safe.Unlock block
-    property Safe: TSynLocker read fSafe;
+    property Safe: TSynLocker
+      read fSafe;
   end;
 
   /// abstract persistent class with a 64-bit TID field
@@ -578,7 +587,8 @@ type
   public
     /// this property gives direct access to the class instance ID
     // - not defined as "published" since RttiCustomSet did register it
-    property IDValue: TID read fID write fID;
+    property IDValue: TID
+      read fID write fID;
   end;
 
 
@@ -651,11 +661,14 @@ type
       BufLen: integer = 65536; ForcedAlgo: TAlgoCompress = nil): PtrUInt;
     /// one optional text associated with this storage
     // - you can define this field as published to serialize its value in log/JSON
-    property Name: RawUTF8 read fName;
+    property Name: RawUTF8
+      read fName;
     /// after a LoadFrom(), contains the uncompressed data size read
-    property LoadFromLastUncompressed: integer read fLoadFromLastUncompressed;
+    property LoadFromLastUncompressed: integer
+      read fLoadFromLastUncompressed;
     /// after a SaveTo(), contains the uncompressed data size written
-    property SaveToLastUncompressed: integer read fSaveToLastUncompressed;
+    property SaveToLastUncompressed: integer
+      read fSaveToLastUncompressed;
   end;
 
 
@@ -796,14 +809,14 @@ procedure DynArraySave(Data: PAnsiChar; ExternalCount: PInteger;
 // DynArrayLoad() / TDynArray.Load()
 // - Value shall be set to the source dynamic arry field
 // - is a wrapper around BinarySave(rkDynArray)
-function DynArraySave(var Value; TypeInfo: pointer): RawByteString; overload;
+function DynArraySave(var Value; TypeInfo: PRttiInfo): RawByteString; overload;
   {$ifdef HASINLINE}inline;{$endif}
 
 /// fill a dynamic array content from a binary serialization as saved by
 // DynArraySave() / TDynArray.Save()
 // - Value shall be set to the target dynamic array field
 // - is a wrapper around BinaryLoad(rkDynArray)
-function DynArrayLoad(var Value; Source: PAnsiChar; TypeInfo: pointer;
+function DynArrayLoad(var Value; Source: PAnsiChar; TypeInfo: PRttiInfo;
   TryCustomVariants: PDocVariantOptions = nil): PAnsiChar;
   {$ifdef HASINLINE}inline;{$endif}
 
@@ -814,7 +827,7 @@ function DynArrayCompare(A, B: PAnsiChar; ExternalCountA, ExternalCountB: PInteg
   Info: PRttiInfo; CaseInSensitive: boolean): integer;
 
 /// compare two dynamic arrays by calling TDynArray.Equals
-function DynArrayEquals(TypeInfo: pointer; var Array1, Array2;
+function DynArrayEquals(TypeInfo: PRttiInfo; var Array1, Array2;
   Array1Count: PInteger = nil; Array2Count: PInteger = nil): boolean;
   {$ifdef HASINLINE}inline;{$endif}
 
@@ -895,7 +908,7 @@ function BinaryLoadBase64(Source: PAnsiChar; Len: PtrInt; Data: pointer;
 // - will use binary-level comparison: it could fail to match two floating-point
 // values because of rounding issues (Currency won't have this problem)
 // - is a wrapper around BinaryEquals(rkRecordTypes)
-function RecordEquals(const RecA, RecB; TypeInfo: pointer;
+function RecordEquals(const RecA, RecB; TypeInfo: PRttiInfo;
   PRecSize: PInteger = nil; CaseInSensitive: boolean = false): boolean;
   {$ifdef HASINLINE}inline;{$endif}
 
@@ -912,13 +925,13 @@ function RecordEquals(const RecA, RecB; TypeInfo: pointer;
 // versions of Delphi, you should use some explicit types like RawUTF8,
 // WinAnsiString, SynUnicode or even RawUnicode/WideString
 // - is a wrapper around BinarySave(rkRecordTypes)
-function RecordSave(const Rec; TypeInfo: pointer): RawByteString; overload;
+function RecordSave(const Rec; TypeInfo: PRttiInfo): RawByteString; overload;
   {$ifdef HASINLINE}inline;{$endif}
 
 /// save a record content into a TBytes dynamic array
 // - could be used as an alternative to RawByteString's RecordSave()
 // - is a wrapper around BinarySaveBytes(rkRecordTypes)
-function RecordSaveBytes(const Rec; TypeInfo: pointer): TBytes;
+function RecordSaveBytes(const Rec; TypeInfo: PRttiInfo): TBytes;
   {$ifdef HASINLINE}inline;{$endif}
 
 {$ifndef PUREMORMOT2}
@@ -926,21 +939,21 @@ function RecordSaveBytes(const Rec; TypeInfo: pointer): TBytes;
 /// compute the number of bytes needed to save a record content
 // using the RecordSave() function
 // - deprecated function - use overloaded BinarySave() functions instead
-function RecordSaveLength(const Rec; TypeInfo: pointer;
+function RecordSaveLength(const Rec; TypeInfo: PRttiInfo;
   Len: PInteger = nil): integer; deprecated;
   {$ifdef HASINLINE}inline;{$endif}
 
 /// save a record content into a destination memory buffer
 // - Dest must be at least RecordSaveLength() bytes long
 // - deprecated function - use overloaded BinarySave() functions instead
-function RecordSave(const Rec; Dest: PAnsiChar; TypeInfo: pointer;
+function RecordSave(const Rec; Dest: PAnsiChar; TypeInfo: PRttiInfo;
   out Len: integer): PAnsiChar; overload; deprecated;
   {$ifdef HASINLINE}inline;{$endif}
 
 /// save a record content into a destination memory buffer
 // - Dest must be at least RecordSaveLength() bytes long
 // - deprecated function - use overloaded BinarySave() functions instead
-function RecordSave(const Rec; Dest: PAnsiChar; TypeInfo: pointer): PAnsiChar;
+function RecordSave(const Rec; Dest: PAnsiChar; TypeInfo: PRttiInfo): PAnsiChar;
   overload; deprecated; {$ifdef HASINLINE}inline;{$endif}
 
 {$endif PUREMORMOT2}
@@ -948,13 +961,13 @@ function RecordSave(const Rec; Dest: PAnsiChar; TypeInfo: pointer): PAnsiChar;
 /// save a record content into a destination memory buffer
 // - caller should make Dest.Done once finished with Dest.buf/Dest.len buffer
 // - is a wrapper around BinarySave(rkRecordTypes)
-procedure RecordSave(const Rec; var Dest: TSynTempBuffer; TypeInfo: pointer); overload;
+procedure RecordSave(const Rec; var Dest: TSynTempBuffer; TypeInfo: PRttiInfo); overload;
   {$ifdef HASINLINE}inline;{$endif}
 
 /// save a record content into a Base-64 encoded UTF-8 text content
 // - will use RecordSave() format, with a left-sided binary CRC
 // - is a wrapper around BinarySaveBase64(rkRecordTypes)
-function RecordSaveBase64(const Rec; TypeInfo: pointer;
+function RecordSaveBase64(const Rec; TypeInfo: PRttiInfo;
   UriCompatible: boolean = false): RawUTF8;
   {$ifdef HASINLINE}inline;{$endif}
 
@@ -971,7 +984,7 @@ function RecordSaveBase64(const Rec; TypeInfo: pointer;
 // would be mandatory when decoding the content from any external process
 // (e.g. a maybe-forged client) - only with slightly performance penalty
 // - is a wrapper around BinaryLoad(rkRecordTypes)
-function RecordLoad(var Rec; Source: PAnsiChar; TypeInfo: pointer;
+function RecordLoad(var Rec; Source: PAnsiChar; TypeInfo: PRttiInfo;
   Len: PInteger = nil; SourceMax: PAnsiChar = nil;
   TryCustomVariants: PDocVariantOptions = nil): PAnsiChar; overload;
   {$ifdef HASINLINE}inline;{$endif}
@@ -981,13 +994,13 @@ function RecordLoad(var Rec; Source: PAnsiChar; TypeInfo: pointer;
 // - returns false if the Source buffer was incorrect, true on success
 // - is a wrapper around BinaryLoad(rkRecordTypes)
 function RecordLoad(var Rec; const Source: RawByteString;
-  TypeInfo: pointer; TryCustomVariants: PDocVariantOptions = nil): boolean; overload;
+  TypeInfo: PRttiInfo; TryCustomVariants: PDocVariantOptions = nil): boolean; overload;
   {$ifdef HASINLINE}inline;{$endif}
 
 /// read a record content from a Base-64 encoded content
 // - expects RecordSaveBase64() format, with a left-sided binary CRC32C
 // - is a wrapper around BinaryLoadBase64(rkRecordTypes)
-function RecordLoadBase64(Source: PAnsiChar; Len: PtrInt; var Rec; TypeInfo: pointer;
+function RecordLoadBase64(Source: PAnsiChar; Len: PtrInt; var Rec; TypeInfo: PRttiInfo;
   UriCompatible: boolean = false; TryCustomVariants: PDocVariantOptions = nil): boolean;
   {$ifdef HASINLINE}inline;{$endif}
 
@@ -1510,7 +1523,7 @@ type
       CustomVariantOptions: PDocVariantOptions = nil;
       Tolerant: boolean = false): PUTF8Char;
     ///  select a sub-section (slice) of a dynamic array content
-    procedure Slice(var Dest; aCount: Cardinal; aFirstIndex: cardinal = 0);
+    procedure Slice(var Dest; aCount: cardinal; aFirstIndex: cardinal = 0);
     /// add items from a given dynamic array variable
     // - the supplied source DynArray MUST be of the same exact type as the
     // current used for this TDynArray - warning: pass here a reference to
@@ -1631,7 +1644,8 @@ type
     // - same as length(DynArray) or SetLength(DynArray)
     // - this property will recognize T*ObjArray types, so will free any stored
     // instance if the array is sized down
-    property Count: PtrInt read GetCount write SetCount;
+    property Count: PtrInt
+      read GetCount write SetCount;
     /// the internal buffer capacity
     // - if no external Count pointer was set with Init, is the same as Count
     // - if an external Count pointer is set, you can set a value to this
@@ -1640,7 +1654,8 @@ type
     // will affect the Count value, i.e. Add() will append after this count
     // - this property will recognize T*ObjArray types, so will free any stored
     // instance if the array is sized down
-    property Capacity: PtrInt read GetCapacity write SetCapacity;
+    property Capacity: PtrInt
+      read GetCapacity write SetCapacity;
     /// the compare function to be used for Sort and Find methods
     // - by default, no comparison function is set
     // - common functions exist for base types: e.g. SortDynArrayByte, SortDynArrayboolean,
@@ -1648,7 +1663,8 @@ type
     // SortDynArrayInt64, SortDynArrayDouble, SortDynArrayAnsiString,
     // SortDynArrayAnsiStringI, SortDynArrayString, SortDynArrayStringI,
     // SortDynArrayUnicodeString, SortDynArrayUnicodeStringI
-    property Compare: TDynArraySortCompare read fCompare write SetCompare;
+    property Compare: TDynArraySortCompare
+      read fCompare write SetCompare;
     /// must be TRUE if the array is currently in sorted order according to
     // the compare function
     // - Add/Delete/Insert/Load* methods will reset this property to false
@@ -1656,18 +1672,23 @@ type
     // - you MUST set this property to false if you modify the dynamic array
     // content in your code, so that Find() won't try to wrongly use binary
     // search in an unsorted array, and miss its purpose
-    property Sorted: boolean read fSorted write fSorted;
+    property Sorted: boolean
+      read fSorted write fSorted;
 
     /// low-level direct access to the storage variable
-    property Value: PPointer read fValue;
+    property Value: PPointer
+      read fValue;
     /// low-level extended RTTI access
     // - use e.g. Info.ArrayRtti to access the item RTTI, or Info.Cache.ItemInfo
     // to get the managed item TypeInfo()
-    property Info: TRttiCustom read fInfo;
+    property Info: TRttiCustom
+      read fInfo;
     /// just a convenient copy of Info.Cache.ItemSize
-    property ElemSize: cardinal read fElemSize;
+    property ElemSize: cardinal
+      read fElemSize;
     /// low-level direct access to the external count (if defined at Init)
-    property CountExternal: PInteger read fCountP;
+    property CountExternal: PInteger
+      read fCountP;
   end;
 
   /// function prototype to be used for hashing of a dynamic array element
@@ -1818,7 +1839,7 @@ type
     fHash: TDynArrayHasher;
     procedure SetEventHash(const event: TOnDynArrayHashOne);
       {$ifdef HASINLINE}inline;{$endif}
-    function GetHashFromIndex(aIndex: PtrInt): Cardinal;
+    function GetHashFromIndex(aIndex: PtrInt): cardinal;
       {$ifdef HASINLINE}inline;{$endif}
   public
     /// initialize the wrapper with a one-dimension dynamic array
@@ -1832,7 +1853,7 @@ type
     // SSE4.2 instruction if available
     // - if CaseInsensitive is set to TRUE, it will ignore difference in 7 bit
     // alphabetic characters (e.g. compare 'a' and 'A' as equal)
-    procedure Init(aTypeInfo: pointer; var aValue; aHashItem: TDynArrayHashOne = nil;
+    procedure Init(aTypeInfo: PRttiInfo; var aValue; aHashItem: TDynArrayHashOne = nil;
       aCompare: TDynArraySortCompare = nil; aHasher: THasher = nil;
       aCountPointer: PInteger = nil; aCaseInsensitive: boolean = false);
     /// initialize the wrapper with a one-dimension dynamic array
@@ -1842,7 +1863,7 @@ type
     // - no RTTI check is made over the corresponding array layout: you shall
     // ensure that aKind matches the dynamic array element definition
     // - aCaseInsensitive will be used for djRawUTF8..djHash512 text comparison
-    procedure InitSpecific(aTypeInfo: pointer; var aValue; aKind: TRttiParserType;
+    procedure InitSpecific(aTypeInfo: PRttiInfo; var aValue; aKind: TRttiParserType;
       aCountPointer: PInteger = nil; aCaseInsensitive: boolean = false;
       aHasher: THasher = nil);
     /// will compute all hash from the current items of the dynamic array
@@ -1956,13 +1977,15 @@ type
     // even if the number of items is lower than HashCountTrigger
     function Scan(const Item): integer;
     /// retrieve the hash value of a given item, from its index
-    property Hash[aIndex: PtrInt]: Cardinal read GetHashFromIndex;
+    property Hash[aIndex: PtrInt]: cardinal
+      read GetHashFromIndex;
     /// alternative event-oriented Compare function to be used for Sort and Find
     // - will be used instead of Compare, to allow object-oriented callbacks
     property EventCompare: TOnDynArraySortCompare
       read fHash.EventCompare write fHash.EventCompare;
     /// custom hash function to be used for hashing of a dynamic array element
-    property HashItem: TDynArrayHashOne read fHash.HashItem;
+    property HashItem: TDynArrayHashOne
+      read fHash.HashItem;
     /// alternative event-oriented Hash function for ReHash
     // - this object-oriented callback will be used instead of HashItem()
     // on each dynamic array entries - HashItem will still be used on
@@ -1980,7 +2003,8 @@ type
       read fHash.CountTrigger write fHash.CountTrigger;
     /// access to the internal hash table
     // - you can call e.g. Hasher.Clear to invalidate the whole hash table
-    property Hasher: TDynArrayHasher read fHash;
+    property Hasher: TDynArrayHasher
+      read fHash;
   end;
 
 
@@ -2004,7 +2028,7 @@ type
 // !  end;
 // ! (...)
 // ! DynArray(TypeInfo(TIntegerDynArray),IntArrayA).SaveTo
-function DynArray(aTypeInfo: pointer; var aValue;
+function DynArray(aTypeInfo: PRttiInfo; var aValue;
   aCountPointer: PInteger = nil): TDynArray;
   {$ifdef HASINLINE}inline;{$endif}
 
@@ -5016,13 +5040,13 @@ begin
   result := SizeOf(pointer);
 end;
 
-function DynArrayLoad(var Value; Source: PAnsiChar; TypeInfo: pointer;
+function DynArrayLoad(var Value; Source: PAnsiChar; TypeInfo: PRttiInfo;
   TryCustomVariants: PDocVariantOptions): PAnsiChar;
 begin
   result := BinaryLoad(@Value, source, TypeInfo, nil, nil, [rkDynArray], TryCustomVariants);
 end;
 
-function DynArraySave(var Value; TypeInfo: pointer): RawByteString;
+function DynArraySave(var Value; TypeInfo: PRttiInfo): RawByteString;
 begin
   result := BinarySave(@Value, TypeInfo, [rkDynArray]);
 end;
@@ -5107,7 +5131,7 @@ begin
   result := n1 - n2;
 end;
 
-function DynArrayEquals(TypeInfo: pointer; var Array1, Array2;
+function DynArrayEquals(TypeInfo: PRttiInfo; var Array1, Array2;
   Array1Count, Array2Count: PInteger): boolean;
 begin
   result := DynArrayCompare(@Array1, @Array2, Array1Count, Array2Count,
@@ -5659,9 +5683,11 @@ begin
     try
       save(Data, W, Info);
       if W.Stream.Position = 0 then
-        Dest.Init(W.TotalWritten)  // only Dest.tmp buffer was used
+        // only Dest.tmp buffer was used -> just set the proper size
+        Dest.Init(W.TotalWritten)
       else
-        Dest.Init(W.FlushTo);      // more than 4KB -> temporary allocation
+        // more than 4KB -> temporary allocation through the temp RawByteString
+        Dest.Init(W.FlushTo);
     finally
       W.Free;
     end;
@@ -5687,14 +5713,17 @@ begin
     W := TBufferWriter.Create(temp{%H-});
     try
       if not NoCrc32Trailer then
-        W.Write4(0); // placeholder for the trailing crc32c
+        // placeholder for the trailing crc32c
+        W.Write4(0);
       save(Data, W, Info);
       len := W.TotalWritten;
       if W.Stream.Position = 0 then
-        P := pointer(@temp) // only temp buffer was used
+        // only temp buffer was used
+        P := pointer(@temp)
       else
       begin
-        tmp := W.FlushTo; // more than 8KB -> temporary allocation
+        // more than 8KB -> temporary allocation
+        tmp := W.FlushTo;
         P := pointer(tmp);
       end;
       if not NoCrc32Trailer then
@@ -5781,7 +5810,7 @@ begin
 end;
 
 
-function RecordEquals(const RecA, RecB; TypeInfo: pointer; PRecSize: PInteger;
+function RecordEquals(const RecA, RecB; TypeInfo: PRttiInfo; PRecSize: PInteger;
   CaseInSensitive: boolean): boolean;
 begin
   result := BinaryEquals(@RecA, @RecB, TypeInfo, PRecSize,
@@ -5790,18 +5819,18 @@ end;
 
 {$ifndef PUREMORMOT2}
 
-function RecordSaveLength(const Rec; TypeInfo: pointer; Len: PInteger): integer;
+function RecordSaveLength(const Rec; TypeInfo: PRttiInfo; Len: PInteger): integer;
 begin
  result := {%H-}BinarySaveLength(@Rec, TypeInfo, Len, rkRecordTypes);
 end;
 
-function RecordSave(const Rec; Dest: PAnsiChar; TypeInfo: pointer;
+function RecordSave(const Rec; Dest: PAnsiChar; TypeInfo: PRttiInfo;
   out Len: integer): PAnsiChar;
 begin
   result := {%H-}BinarySave(@Rec, Dest, TypeInfo, Len, rkRecordTypes);
 end;
 
-function RecordSave(const Rec; Dest: PAnsiChar; TypeInfo: pointer): PAnsiChar;
+function RecordSave(const Rec; Dest: PAnsiChar; TypeInfo: PRttiInfo): PAnsiChar;
 var
   dummylen: integer;
 begin
@@ -5810,41 +5839,41 @@ end;
 
 {$endif PUREMORMOT2}
 
-function RecordSave(const Rec; TypeInfo: pointer): RawByteString;
+function RecordSave(const Rec; TypeInfo: PRttiInfo): RawByteString;
 begin
   result := BinarySave(@Rec, TypeInfo, rkRecordTypes);
 end;
 
-function RecordSaveBytes(const Rec; TypeInfo: pointer): TBytes;
+function RecordSaveBytes(const Rec; TypeInfo: PRttiInfo): TBytes;
 begin
  result := BinarySaveBytes(@Rec, TypeInfo, rkRecordTypes);
 end;
 
-procedure RecordSave(const Rec; var Dest: TSynTempBuffer; TypeInfo: pointer);
+procedure RecordSave(const Rec; var Dest: TSynTempBuffer; TypeInfo: PRttiInfo);
 begin
   BinarySave(@Rec, Dest, TypeInfo, rkRecordTypes);
 end;
 
-function RecordSaveBase64(const Rec; TypeInfo: pointer; UriCompatible: boolean): RawUTF8;
+function RecordSaveBase64(const Rec; TypeInfo: PRttiInfo; UriCompatible: boolean): RawUTF8;
 begin
   result := BinarySaveBase64(@Rec, TypeInfo, UriCompatible, rkRecordTYpes);
 end;
 
-function RecordLoad(var Rec; Source: PAnsiChar; TypeInfo: pointer;
+function RecordLoad(var Rec; Source: PAnsiChar; TypeInfo: PRttiInfo;
   Len: PInteger; SourceMax: PAnsiChar; TryCustomVariants: PDocVariantOptions): PAnsiChar;
 begin
   result := BinaryLoad(@Rec, Source, TypeInfo, Len, SourceMax,
     rkRecordTypes, TryCustomVariants);
 end;
 
-function RecordLoad(var Rec; const Source: RawByteString; TypeInfo: pointer;
+function RecordLoad(var Rec; const Source: RawByteString; TypeInfo: PRttiInfo;
   TryCustomVariants: PDocVariantOptions): boolean;
 begin
   result := BinaryLoad(@Rec, Source, TypeInfo, rkRecordTypes, TryCustomVariants);
 end;
 
 function RecordLoadBase64(Source: PAnsiChar; Len: PtrInt; var Rec;
-  TypeInfo: pointer; UriCompatible: boolean; TryCustomVariants: PDocVariantOptions): boolean;
+  TypeInfo: PRttiInfo; UriCompatible: boolean; TryCustomVariants: PDocVariantOptions): boolean;
 begin
   result := BinaryLoadBase64(Source, Len, @Rec, TypeInfo, UriCompatible,
     rkRecordTypes, {notrailer=}false, TryCustomVariants);
@@ -5966,7 +5995,7 @@ bin:// binary equality test
   end;
 end;
 
-function TDynArray.ItemCompare(A, B: pointer; CaseInSensitive: boolean = false): integer;
+function TDynArray.ItemCompare(A, B: pointer; CaseInSensitive: boolean): integer;
 var
   comp: TRttiCompare;
   rtti: PRttiInfo;
@@ -7378,7 +7407,7 @@ end;
 
 procedure TDynArray.Slice(var Dest; aCount, aFirstIndex: cardinal);
 var
-  n: Cardinal;
+  n: cardinal;
   dst: TDynArray;
 begin
   if fValue = nil then
@@ -8296,7 +8325,7 @@ end;
 
 {$endif UNDIRECTDYNARRAY}
 
-procedure TDynArrayHashed.Init(aTypeInfo: pointer; var aValue;
+procedure TDynArrayHashed.Init(aTypeInfo: PRttiInfo; var aValue;
   aHashItem: TDynArrayHashOne; aCompare: TDynArraySortCompare;
   aHasher: THasher; aCountPointer: PInteger; aCaseInsensitive: boolean);
 begin
@@ -8306,7 +8335,7 @@ begin
   {$ifdef UNDIRECTDYNARRAY}InternalDynArray.{$endif}SetCompare(fHash.Compare);
 end;
 
-procedure TDynArrayHashed.InitSpecific(aTypeInfo: pointer; var aValue;
+procedure TDynArrayHashed.InitSpecific(aTypeInfo: PRttiInfo; var aValue;
   aKind: TRttiParserType; aCountPointer: PInteger; aCaseInsensitive: boolean;
   aHasher: THasher);
 begin
@@ -8464,7 +8493,7 @@ begin
   end;
 end;
 
-function TDynArrayHashed.GetHashFromIndex(aIndex: PtrInt): Cardinal;
+function TDynArrayHashed.GetHashFromIndex(aIndex: PtrInt): cardinal;
 begin
   result := fHash.GetHashFromIndex(aIndex);
 end;
@@ -8476,7 +8505,7 @@ end;
 
 
 
-function DynArray(aTypeInfo: pointer; var aValue;
+function DynArray(aTypeInfo: PRttiInfo; var aValue;
   aCountPointer: PInteger): TDynArray;
 begin
   result.Init(aTypeInfo, aValue, aCountPointer);

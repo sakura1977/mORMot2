@@ -286,7 +286,7 @@ type
     function FrameToOutput(var answer: TWebSocketFrame;
       Ctxt: THttpServerRequestAbstract): cardinal; virtual;
     /// convert the output information of REST request to a WebSocket frame
-    procedure OutputToFrame(Ctxt: THttpServerRequestAbstract; Status: Cardinal;
+    procedure OutputToFrame(Ctxt: THttpServerRequestAbstract; Status: cardinal;
       var outhead: RawUTF8; out answer: TWebSocketFrame); virtual;
   end;
 
@@ -699,7 +699,8 @@ type
     /// the associated communication socket
     // - on the server side, is a THttpServerSocket
     // - access to this instance is protected by Safe.Lock/Unlock
-    property Socket: TCrtSocket read fSocket;
+    property Socket: TCrtSocket
+      read fSocket;
   end;
 
 /// returns the text corresponding to a specified WebSockets sending mode
@@ -1123,7 +1124,7 @@ begin
 end;
 
 procedure TWebSocketProtocolRest.OutputToFrame(Ctxt: THttpServerRequestAbstract;
-  Status: Cardinal; var outhead: RawUTF8; out answer: TWebSocketFrame);
+  Status: cardinal; var outhead: RawUTF8; out answer: TWebSocketFrame);
 var
   OutContentType: RawByteString;
 begin

@@ -41,7 +41,7 @@ type
     fInitialized: boolean;
     fDestStream: TStream;
     Z: TZLib;
-    fCRC: Cardinal;
+    fCRC: cardinal;
     fFormat: TSynZipCompressorFormat;
     {$ifdef FPC}
     function GetPosition: Int64; override;
@@ -70,7 +70,8 @@ type
     function SizeOut: PtrUInt;
       {$ifdef HASINLINE}inline;{$endif}
     /// the current CRC of the written data, i.e. the uncompressed data CRC
-    property CRC: cardinal read fCRC;
+    property CRC: cardinal
+      read fCRC;
   end;
 
 

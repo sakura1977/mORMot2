@@ -154,16 +154,21 @@ type
     procedure Rollback; override;
 
     /// the remote DBMS type, as retrieved at ODBC connection opening
-    property DBMS: TSQLDBDefinition read fDBMS;
+    property DBMS: TSQLDBDefinition
+      read fDBMS;
     /// the full connection string (expanded from ServerName)
-    property SQLDriverFullString: RawUTF8 read fSQLDriverFullString;
+    property SQLDriverFullString: RawUTF8
+      read fSQLDriverFullString;
   published
     /// the remote DBMS name, as retrieved at ODBC connection opening
-    property DBMSName: RawUTF8 read fDBMSName;
+    property DBMSName: RawUTF8
+      read fDBMSName;
     /// the remote DBMS version, as retrieved at ODBC connection opening
-    property DBMSVersion: RawUTF8 read fDBMSVersion;
+    property DBMSVersion: RawUTF8
+      read fDBMSVersion;
     /// the local driver name, as retrieved at ODBC connection opening
-    property DriverName: RawUTF8 read fDriverName;
+    property DriverName: RawUTF8
+      read fDriverName;
   end;
 
   /// implements a statement using a ODBC connection
@@ -1295,9 +1300,9 @@ begin
       FillcharFast(F, SizeOf(F), 0);
       if fCurrentRow > 0 then // Step done above
         repeat
-          F.ColumnName := Trim(ColumnUTF8(3)); // Column*() should be done in order
+          F.ColumnName := TrimU(ColumnUTF8(3)); // Column*() should be done in order
           DataType := ColumnInt(4);
-          F.ColumnTypeNative := Trim(ColumnUTF8(5));
+          F.ColumnTypeNative := TrimU(ColumnUTF8(5));
           F.ColumnLength := ColumnInt(6);
           F.ColumnScale := ColumnInt(8);
           F.ColumnPrecision := ColumnInt(9);
@@ -1324,7 +1329,7 @@ begin
         BindColumns;
         while Step do
         begin
-          F.ColumnName := Trim(ColumnUTF8(8));
+          F.ColumnName := TrimU(ColumnUTF8(8));
           i := FA.Find(F);
           if i >= 0 then
             Fields[i].ColumnIndexed := true;
@@ -1357,8 +1362,8 @@ begin
       n := 0;
       while Step do
       begin
-        schema := Trim(ColumnUTF8(1));
-        tablename := Trim(ColumnUTF8(2));
+        schema := TrimU(ColumnUTF8(1));
+        tablename := TrimU(ColumnUTF8(2));
         if schema <> '' then
           tablename := schema + '.' + tablename;
         AddSortedRawUTF8(Tables, n, tablename);
@@ -1392,8 +1397,8 @@ begin
       n := 0;
       while Step do
       begin
-        schema := Trim(ColumnUTF8(1));
-        tablename := Trim(ColumnUTF8(2));
+        schema := TrimU(ColumnUTF8(1));
+        tablename := TrimU(ColumnUTF8(2));
         if schema <> '' then
           tablename := schema + '.' + tablename;
         AddSortedRawUTF8(Views, n, tablename);
@@ -1419,9 +1424,12 @@ begin
         SQL_HANDLE_STMT, fStatement);
       BindColumns;
       while Step do
-        fForeignKeys.Add(Trim(ColumnUTF8(5)) + '.' + Trim(ColumnUTF8(6)) + '.' +
-          Trim(ColumnUTF8(7)), Trim(ColumnUTF8(1)) + '.' + Trim(ColumnUTF8(2)) +
-          '.' + Trim(ColumnUTF8(3)));
+        fForeignKeys.Add(TrimU(ColumnUTF8(5)) + '.' +
+                         TrimU(ColumnUTF8(6)) + '.' +
+                         TrimU(ColumnUTF8(7)),
+                         TrimU(ColumnUTF8(1)) + '.' +
+                         TrimU(ColumnUTF8(2)) + '.' +
+                         TrimU(ColumnUTF8(3)));
     finally
       Free; // TSQLDBODBCStatement release
     end;
@@ -1455,7 +1463,8 @@ begin
       Stmt.BindColumns;
       n := 0;
       while Stmt.Step do
-        AddSortedRawUTF8(Procedures, n, Trim(Stmt.ColumnUTF8(2))); // PROCEDURE_NAME column
+        AddSortedRawUTF8(Procedures, n,
+          TrimU(Stmt.ColumnUTF8(2))); // PROCEDURE_NAME column
       SetLength(Procedures, n);
     finally
       Stmt.Free; // TSQLDBODBCStatement release
@@ -1490,8 +1499,8 @@ begin
     Stmt := TSQLDBODBCStatement.Create(MainConnection);
     try
       Stmt.AllocStatement;
-      status := ODBC.SQLProcedureColumnsA(Stmt.fStatement, nil, 0, pointer(schem),
-        SQL_NTS, pointer(proc), SQL_NTS, nil, 0);
+      status := ODBC.SQLProcedureColumnsA(Stmt.fStatement, nil, 0,
+        pointer(schem), SQL_NTS, pointer(proc), SQL_NTS, nil, 0);
       if status = SQL_SUCCESS then
       begin
         Stmt.BindColumns;
@@ -1512,7 +1521,7 @@ begin
       FillcharFast(P, SizeOf(P), 0);
       if Stmt.fCurrentRow > 0 then // Step done above
         repeat
-          P.ColumnName := Trim(Stmt.ColumnUTF8(3)); // Column*() should be in order
+          P.ColumnName := TrimU(Stmt.ColumnUTF8(3)); // Column*() should be in order
           case Stmt.ColumnInt(4) of
             SQL_PARAM_INPUT:
               P.ColumnParamType := paramIn;
@@ -1522,11 +1531,12 @@ begin
             P.ColumnParamType := paramOut;
           end;
           DataType := Stmt.ColumnInt(5);
-          P.ColumnTypeNative := Trim(Stmt.ColumnUTF8(6));
+          P.ColumnTypeNative := TrimU(Stmt.ColumnUTF8(6));
           P.ColumnLength := Stmt.ColumnInt(7);
           P.ColumnScale := Stmt.ColumnInt(8);
           P.ColumnPrecision := Stmt.ColumnInt(9);
-          P.ColumnType := ODBCColumnToFieldType(DataType, P.ColumnPrecision, P.ColumnScale);
+          P.ColumnType := ODBCColumnToFieldType(
+            DataType, P.ColumnPrecision, P.ColumnScale);
           PA.Add(P);
         until not Stmt.Step;
       SetLength(Parameters, n);

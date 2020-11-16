@@ -112,7 +112,7 @@ type
   public
     // overridden methods calling the MongoDB external server
     function EngineRetrieve(TableModelIndex: integer; ID: TID): RawUTF8; override;
-    function EngineList(const SQL: RawUTF8; ForceAJAX: Boolean = false;
+    function EngineList(const SQL: RawUTF8; ForceAJAX: boolean = false;
       ReturnedRowCount: PPtrInt = nil): RawUTF8; override;
     function EngineAdd(TableModelIndex: integer;
       const SentData: RawUTF8): TID; override;
@@ -189,7 +189,8 @@ type
     procedure SetEngineAddComputeIdentifier(aIdentifier: word);
   published
     /// the associated MongoDB collection instance
-    property Collection: TMongoCollection read fCollection;
+    property Collection: TMongoCollection
+      read fCollection;
     /// how the next ID would be compute at each insertion
     // - default eacLastIDOnce may be the fastest, but other options are
     // available, and may be used in some special cases
@@ -987,7 +988,9 @@ var
   blobRaw: RawByteString;
 begin
   result := false;
-  if (fCollection = nil) or (POrmClass(Value)^ <> fStoredClass) or (Value = nil) then
+  if (fCollection = nil) or
+     (POrmClass(Value)^ <> fStoredClass) or
+     (Value = nil) then
     exit;
   aID := Value.ID;
   if aID <= 0 then
@@ -1155,7 +1158,7 @@ begin
   W.EndJSONObject(0, result);
 end;
 
-function TRestStorageMongoDB.EngineList(const SQL: RawUTF8; ForceAJAX: Boolean;
+function TRestStorageMongoDB.EngineList(const SQL: RawUTF8; ForceAJAX: boolean;
   ReturnedRowCount: PPtrInt): RawUTF8;
 var
   ResCount: PtrInt;
@@ -1614,7 +1617,9 @@ var
   Props: TOrmModelProperties;
 begin
   result := nil;
-  if (aServer = nil) or (aClass = nil) or (aMongoDatabase = nil) then
+  if (aServer = nil) or
+     (aClass = nil) or
+     (aMongoDatabase = nil) then
     exit; // avoid GPF
   if aMongoDatabase.Client.Log = nil then
     aMongoDatabase.Client.SetLog(aServer.LogClass);

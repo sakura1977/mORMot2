@@ -6,7 +6,7 @@ unit mormot.db.nosql.mongodb;
 {
   *****************************************************************************
 
-   Efficient BSON Support for MongoDB Clients
+   MongoDB Client for NoSQL Data Access
     - MongoDB Protocol Items
     - MongoDB Client Classes
 
@@ -183,17 +183,22 @@ type
     /// write the main parameters of the request as JSON
     function ToJSON(Mode: TMongoJSONMode): RawUTF8; overload;
     /// identify the message, after call to any reintroduced Create() constructor
-    property MongoRequestID: integer read fRequestID;
+    property MongoRequestID: integer
+      read fRequestID;
     /// the associated full collection name, e.g. 'db.test'
-    property FullCollectionName: RawUTF8 read fFullCollectionName;
+    property FullCollectionName: RawUTF8
+      read fFullCollectionName;
     /// the associated full collection name, e.g. 'db'
-    property DatabaseName: RawUTF8 read fDatabaseName;
+    property DatabaseName: RawUTF8
+      read fDatabaseName;
     /// the associated full collection name, e.g. 'test'
-    property CollectionName: RawUTF8 read fCollectionName;
+    property CollectionName: RawUTF8
+      read fCollectionName;
     /// the message operation code
     // - should be either opUpdate, opInsert, opQuery, opGetMore, opDelete
     // or opKillCursors, depending on the TMongoRequest* class instantiated
-    property MongoRequestOpCode: TMongoOperation read fRequestOpCode;
+    property MongoRequestOpCode: TMongoOperation
+      read fRequestOpCode;
   end;
 
   /// a MongoDB client abstract ancestor which is able to create a BULK
@@ -253,8 +258,9 @@ type
     // - there is no response to an opInsert message
     // - warning: JSONDocuments[] buffer will be modified in-place during
     // parsing, so a private copy may have to be made by the caller
-    constructor Create(const FullCollectionName: RawUTF8; const JSONDocuments:
-      array of PUTF8Char; Flags: TMongoInsertFlags = []); reintroduce; overload;
+    constructor Create(const FullCollectionName: RawUTF8;
+      const JSONDocuments: array of PUTF8Char;
+      Flags: TMongoInsertFlags = []); reintroduce; overload;
   end;
 
   /// a MongoDB client message to delete one or more documents in a collection
@@ -316,9 +322,11 @@ type
     /// write the main parameters of the request as JSON
     procedure ToJSON(W: TTextWriter; Mode: TMongoJSONMode); override;
     /// retrieve the NumberToReturn parameter as set to the constructor
-    property NumberToReturn: integer read fNumberToReturn;
+    property NumberToReturn: integer
+      read fNumberToReturn;
     /// retrieve the NumberToSkip parameter as set to the constructor
-    property NumberToSkip: integer read fNumberToSkip;
+    property NumberToSkip: integer
+      read fNumberToSkip;
   end;
 
   /// a MongoDB client message to continue the query of one or more documents
@@ -523,13 +531,13 @@ type
     // directly into JSON
     procedure FetchAllToJSON(W: TTextWriter;
       Mode: TMongoJSONMode = modMongoStrict; WithHeader: boolean = false;
-      MaxSize: Cardinal = 0);
+      MaxSize: cardinal = 0);
     /// return all documents content as a JSON array, or one JSON object
     // if there is only one document in this reply
     // - this method is very optimized and will convert the BSON binary content
     // directly into JSON
     function ToJSON(Mode: TMongoJSONMode = modMongoStrict;
-      WithHeader: boolean = false; MaxSize: Cardinal = 0): RawUTF8;
+      WithHeader: boolean = false; MaxSize: cardinal = 0): RawUTF8;
     /// append all documents content to a dynamic array of TDocVariant
     // - return the new size of the Dest[] array
     function AppendAllToDocVariantDynArray(var Dest: TVariantDynArray): integer;
@@ -544,27 +552,36 @@ type
     procedure AppendAllToBSON(Dest: TBSONWriter);
 
     /// retrieve the context execution of this message
-    property ResponseFlags: TMongoReplyCursorFlags read fResponseFlags;
+    property ResponseFlags: TMongoReplyCursorFlags
+      read fResponseFlags;
     /// identifier of this message
-    property RequestID: integer read fRequestID;
+    property RequestID: integer
+      read fRequestID;
     /// retrieve the RequestID from the original request
-    property ResponseTo: integer read fResponseTo;
+    property ResponseTo: integer
+      read fResponseTo;
     /// access to the low-level binary reply message
-    property Reply: TMongoReply read fReply;
+    property Reply: TMongoReply
+      read fReply;
     /// cursor identifier if the client may need to perform further
     // TMongoRequestGetMore messages
     // - in the event that the result set of the query fits into one OP_REPLY
     // message, CursorID will be 0
-    property CursorID: Int64 read fCursorID;
+    property CursorID: Int64
+      read fCursorID;
     /// where in the cursor this reply is starting
-    property StartingFrom: integer read fStartingFrom;
+    property StartingFrom: integer
+      read fStartingFrom;
     /// number of documents in the reply
-    property DocumentCount: integer read fNumberReturned;
+    property DocumentCount: integer
+      read fNumberReturned;
     /// points to the first document binary
     // - i.e. just after the Reply header
-    property FirstDocument: PAnsiChar read fFirstDocument;
+    property FirstDocument: PAnsiChar
+      read fFirstDocument;
     /// direct access to the low-level BSON binary content of each document
-    property DocumentBSON: TPointerDynArray read fDocuments;
+    property DocumentBSON: TPointerDynArray
+      read fDocuments;
     /// retrieve a given document as a TDocVariant instance
     // - could be used e.g. as:
     // ! var Reply: TMongoReply;
@@ -576,9 +593,11 @@ type
     // - note that there is an internal cache for the latest retrieved document
     // by this property, so that you can call Reply.Document[i] several times
     // without any noticeable speed penalty
-    property Document[index: integer]: variant read GetOneDocument;
+    property Document[index: integer]: variant
+      read GetOneDocument;
     /// the current position of the Next() call, starting at 0
-    property Position: integer read fCurrentPosition;
+    property Position: integer
+      read fCurrentPosition;
   end;
 
 
@@ -749,20 +768,26 @@ type
       flags: TMongoQueryFlags = []): boolean; overload;
 
     /// return TRUE if the Open method has successfully been called
-    property Opened: boolean read GetOpened;
+    property Opened: boolean
+      read GetOpened;
     /// access to the corresponding MongoDB server
-    property Client: TMongoClient read fClient;
+    property Client: TMongoClient
+      read fClient;
     /// direct access to the low-level TCP/IP communication socket
-    property Socket: TCrtSocket read fSocket;
+    property Socket: TCrtSocket
+      read fSocket;
     /// is TRUE when the connection is busy
-    property Locked: boolean read GetLocked;
+    property Locked: boolean
+      read GetLocked;
   published
     /// read-only access to the supplied server address
     // - the server address is either a host name, or an IP address
-    property ServerAddress: RawUTF8 read fServerAddress;
+    property ServerAddress: RawUTF8
+      read fServerAddress;
     /// read-only access to the supplied server port
     // - the server Port is MONGODB_DEFAULTPORT (27017) by default
-    property ServerPort: integer read fServerPort;
+    property ServerPort: integer
+      read fServerPort;
   end;
 
   /// array of TCP connection to a MongoDB Replica Set
@@ -845,7 +870,7 @@ type
     fConnections: TMongoConnectionDynArray;
     fReadPreference: TMongoClientReplicaSetReadPreference;
     fWriteConcern: TMongoClientWriteConcern;
-    fConnectionTimeOut: Cardinal;
+    fConnectionTimeOut: cardinal;
     fConnectionTLS: boolean;
     fGracefulReconnect: record
       Enabled, ForcedDBCR: boolean;
@@ -910,29 +935,35 @@ type
     // - this property is cached, so request is sent only once
     // - you may rather use ServerBuildInfoNumber to check for available
     // features at runtime, for easy comparison of the server version
-    property ServerBuildInfo: variant read fServerBuildInfo;
+    property ServerBuildInfo: variant
+      read fServerBuildInfo;
     /// access to a given MongoDB database
     // - try to open it via a non-authenticated connection it if not already:
     // will raise an exception on error, or will return an instance
     // - will return an existing instance if has already been opened
-    property Database[const DatabaseName: RawUTF8]: TMongoDatabase read Open; default;
+    property Database[const DatabaseName: RawUTF8]: TMongoDatabase
+      read Open; default;
     /// low-level access to the TCP/IP connections of this MongoDB replica set
     // - first item [0] is the Primary member
     // - other items [1..] are the Secondary members
-    property Connections: TMongoConnectionDynArray read fConnections;
+    property Connections: TMongoConnectionDynArray
+      read fConnections;
     /// define the logging instance to be used for LogRequestEvent/LogReplyEvent
     // - you may also call the SetLog() method to set all options at once
-    property Log: TSynLog read fLog write fLog;
+    property Log: TSynLog
+      read fLog write fLog;
   published
     /// the connection definition used to connect to this MongoDB server
-    property ConnectionString: RawUTF8 read fConnectionString;
+    property ConnectionString: RawUTF8
+      read fConnectionString;
     /// retrieve the server version and build information
     // - return the content as a TDocVariant document, e.g.
     // ! 2040900 for MongoDB 2.4.9, or 2060000 for MongoDB 2.6, or
     // ! 3000300 for MongoDB 3.0.3
     // - this property is cached, so can be used to check for available
     // features at runtime, without any performance penalty
-    property ServerBuildInfoNumber: cardinal read fServerBuildInfoNumber;
+    property ServerBuildInfoNumber: cardinal
+      read fServerBuildInfoNumber;
     /// define Read Preference mode to a MongoDB replica set
     // - see http://docs.mongodb.org/manual/core/read-preference
     // - default is rpPrimary, i.e. reading from the main primary instance
@@ -949,20 +980,24 @@ type
       read fWriteConcern write fWriteConcern;
     /// the connection time out, in milliseconds
     // - default value is 30000, i.e. 30 seconds
-    property ConnectionTimeOut: Cardinal
+    property ConnectionTimeOut: cardinal
       read fConnectionTimeOut write fConnectionTimeOut;
     /// if the socket connection is secured over TLS
-    property ConnectionTLS: boolean read fConnectionTLS;
+    property ConnectionTLS: boolean
+      read fConnectionTLS;
     /// allow automatic reconnection (with authentication, if applying), if the
     // socket is closed (e.g. was dropped from the server)
     property GracefulReconnect: boolean
       read fGracefulReconnect.Enabled write fGracefulReconnect.Enabled;
     /// how may bytes this client did received, among all its connections
-    property BytesReceived: Int64 read GetBytesReceived;
+    property BytesReceived: Int64
+      read GetBytesReceived;
     /// how may bytes this client did received, among all its connections
-    property BytesSent: Int64 read GetBytesSent;
+    property BytesSent: Int64
+      read GetBytesSent;
     /// how may bytes this client did transmit, adding both input and output
-    property BytesTransmitted: Int64 read GetBytesTransmitted;
+    property BytesTransmitted: Int64
+      read GetBytesTransmitted;
     /// if set to something else than default sllNone, will log each request
     // with the corresponding logging event kind
     // - will use the Log property for the destination log
@@ -1058,9 +1093,11 @@ type
       read GetCollectionOrCreate;
   published
     /// the database name
-    property Name: RawUTF8 read fName;
+    property Name: RawUTF8
+      read fName;
     /// the associated MongoDB client instance
-    property Client: TMongoClient read fClient;
+    property Client: TMongoClient
+      read fClient;
   end;
 
   /// remote access to a MongoDB collection
@@ -1113,7 +1150,7 @@ type
     // case, the returned instance won't be a dvArray kind of TDocVariant, but
     // either null or the single returned document)
     // - if the query does not have any matching record, it will return null
-    function FindDoc(Criteria: PUTF8Char; const Params: array of const;
+    function FindDoc(const Criteria: RawUTF8; const Params: array of const;
       NumberToReturn: integer = maxInt; NumberToSkip: integer = 0;
       Flags: TMongoQueryFlags = []): variant; overload;
     /// find an existing document in a collection, by its _id field
@@ -1147,7 +1184,7 @@ type
     // - Projection can be null (to retrieve all fields) or a CSV string to set
     // field names to retrieve, or a TDocVariant or TBSONVariant with
     // projection operators
-    procedure FindDocs(Criteria: PUTF8Char; const Params: array of const;
+    procedure FindDocs(const Criteria: RawUTF8; const Params: array of const;
       var result: TVariantDynArray; const Projection: variant;
       NumberToReturn: integer = maxInt; NumberToSkip: integer = 0;
       Flags: TMongoQueryFlags = []); overload;
@@ -1159,9 +1196,10 @@ type
     // - Projection can be null (to retrieve all fields) or a CSV string to set
     // field names to retrieve, or a TDocVariant or TBSONVariant with
     // projection operators
-    function FindDocs(Criteria: PUTF8Char; const Params: array of const;
-      const Projection: variant; NumberToReturn: integer = maxInt;
-      NumberToSkip: integer = 0; Flags: TMongoQueryFlags = []): TVariantDynArray; overload;
+    function FindDocs(const Criteria: RawUTF8;
+      const Params: array of const; const Projection: variant;
+      NumberToReturn: integer = maxInt; NumberToSkip: integer = 0;
+      Flags: TMongoQueryFlags = []): TVariantDynArray; overload;
 
     /// select documents in a collection and returns a JSON array of documents
     // containing the selected documents
@@ -1199,7 +1237,7 @@ type
     // matching documents as a '[..]' JSON array, or specify a limit (e.g. 1
     // for one document - in this case, the returned instance won't be a '[..]'
     // JSON array, but either 'null' or a single '{..}' JSON object)
-    function FindJSON(Criteria: PUTF8Char; const Params: array of const;
+    function FindJSON(const Criteria: RawUTF8; const Params: array of const;
       NumberToReturn: integer = maxInt; NumberToSkip: integer = 0;
       Flags: TMongoQueryFlags = [];
       Mode: TMongoJSONMode = modMongoStrict): RawUTF8; overload;
@@ -1207,7 +1245,7 @@ type
     // containing the selected documents
     // - Criteria and Projection can specify the query selector as (extended)
     // JSON and parameters
-    function FindJSON(Criteria: PUTF8Char; const CriteriaParams: array of const;
+    function FindJSON(const Criteria: RawUTF8; const Params: array of const;
       const Projection: variant; NumberToReturn: integer = maxInt;
       NumberToSkip: integer = 0; Flags: TMongoQueryFlags = [];
       Mode: TMongoJSONMode = modMongoStrict): RawUTF8; overload;
@@ -1327,7 +1365,8 @@ type
     // ! book.update('{item:?},['Divine Comedy'],'{$set:{price:?},$inc:{stock:?}},[18,5]);
     // ! // the updated document is now:
     // ! { "_id" : 11, "item" : "Divine Comedy", "price" : 18, "stock" : 7 }
-    procedure Update(Query: PUTF8Char; const QueryParams: array of const;
+    procedure Update(
+      const Query: RawUTF8; const QueryParams: array of const;
       const Update: RawUTF8; const UpdateParams: array of const;
       Flags: TMongoUpdateFlags = []); overload;
     /// modifies some fields of an existing document in a collection
@@ -1358,7 +1397,7 @@ type
     // selectors as used in the Find() method
     // - to limit the deletion to just one document, set Flags to [mdfSingleRemove]
     // - to delete all documents matching the deletion criteria, leave it to []
-    procedure RemoveFmt(Query: PUTF8Char; const QueryParams: array of const;
+    procedure RemoveFmt(const Query: RawUTF8; const Params: array of const;
       Flags: TMongoDeleteFlags = []);
 
     /// creates an index on the specified field(s) if the index does
@@ -1410,7 +1449,7 @@ type
     // you do not want an exact count, but only check for a specific limit)
     // - optional NumberToSkip can specify the number of matching documents
     // to skip before counting
-    function FindCount(Criteria: PUTF8Char; const Args, Params: array of const;
+    function FindCount(const Criteria: RawUTF8; const Args, Params: array of const;
       MaxNumberToReturn: integer = 0; NumberToSkip: integer = 0): Int64; overload;
     /// returns TRUE if the collection has no document, FALSE otherwise
     // - is much faster than Count, especially for huge collections
@@ -1428,7 +1467,7 @@ type
     // this single item as a TDocVariant
     // - if the server sent back several items as {result:[{..},{..}]}, will
     // return a dvArray kind of TDocVariant
-    function AggregateDoc(Operators: PUTF8Char;
+    function AggregateDoc(const Operators: RawUTF8;
       const Params: array of const): variant; overload;
     /// calculate JSON aggregate values using the MongoDB aggregation framework
     // - the Aggregation Framework was designed to be more efficient than the
@@ -1441,7 +1480,8 @@ type
     // descending order according by the age field and then in ascending order
     // according to the value in the posts field
     // ! AggregateJSON('{ $sort : { age : -1, posts: 1 } }',[])
-    function AggregateJSON(Operators: PUTF8Char; const Params: array of const;
+    function AggregateJSON(const Operators: RawUTF8;
+      const Params: array of const;
       Mode: TMongoJSONMode = modMongoStrict): RawUTF8; overload;
     /// calculate aggregate values using the MongoDB aggregation framework
     // and return the result as a TDocVariant instance
@@ -1468,11 +1508,14 @@ type
       Mode: TMongoJSONMode = modMongoStrict): RawUTF8; overload;
   published
     /// the collection name
-    property Name: RawUTF8 read fName;
+    property Name: RawUTF8
+      read fName;
     /// the full collection name, e.g. 'dbname.collectionname'
-    property FullCollectionName: RawUTF8 read fFullCollectionName;
+    property FullCollectionName: RawUTF8
+      read fFullCollectionName;
     /// the associated MongoDB database instance
-    property Database: TMongoDatabase read fDatabase;
+    property Database: TMongoDatabase
+      read fDatabase;
   end;
 
   /// exception type used for MongoDB process, once connected
@@ -1488,7 +1531,8 @@ type
       aConnection: TMongoConnection); reintroduce;
   published
     /// the associated connection
-    property Connection: TMongoConnection read fConnection;
+    property Connection: TMongoConnection
+      read fConnection;
   end;
 
   EMongoDatabaseException = class(EMongoConnectionException)
@@ -1509,7 +1553,8 @@ type
     {$endif NOEXCEPTIONINTERCEPT}
   published
     /// the associated Database
-    property Database: TMongoDatabase read fDatabase;
+    property Database: TMongoDatabase
+      read fDatabase;
   end;
 
   /// exception type used for MongoDB query process
@@ -1539,12 +1584,14 @@ type
       const Context: TSynLogExceptionContext): boolean; override;
     {$endif NOEXCEPTIONINTERCEPT}
     /// the associated error reply document
-    property ErrorReply: TMongoReplyCursor read fError;
+    property ErrorReply: TMongoReplyCursor
+      read fError;
   published
     /// the associated error reply document, as a TDocVariant instance
     // - will return the first document available in ErrorReply, or the supplied
     // aErrorDoc: TDocVariantData instance
-    property ErrorDoc: Variant read GetErrorDoc;
+    property ErrorDoc: Variant
+      read GetErrorDoc;
   end;
 
   /// exception type used for MongoDB query process after an Operating System
@@ -1561,7 +1608,8 @@ type
       aRequest: TMongoRequest = nil); reintroduce;
     /// contain the associated Operating System last error code
     // - will specify e.g. the kind of communication/socket error
-    property SystemLastError: cardinal read fSystemLastError;
+    property SystemLastError: cardinal
+      read fSystemLastError;
   end;
 
 {$M-}
@@ -2038,7 +2086,7 @@ begin
 end;
 
 procedure TMongoReplyCursor.FetchAllToJSON(W: TTextWriter; Mode: TMongoJSONMode;
-  WithHeader: boolean; MaxSize: Cardinal);
+  WithHeader: boolean; MaxSize: cardinal);
 var
   b: PByte;
 begin
@@ -2072,7 +2120,7 @@ begin
 end;
 
 function TMongoReplyCursor.ToJSON(Mode: TMongoJSONMode; WithHeader: boolean;
-  MaxSize: Cardinal): RawUTF8;
+  MaxSize: cardinal): RawUTF8;
 var
   W: TTextWriter;
   tmp: TTextWriterStackBuffer;
@@ -2114,7 +2162,7 @@ begin
   if aClient = nil then
     raise EMongoException.CreateUTF8('%.Create(nil)', [self]);
   fClient := aClient;
-  fServerAddress := trim(aServerAddress);
+  fServerAddress := TrimU(aServerAddress);
   if fServerAddress = '' then
     fServerAddress := '127.0.0.1';
   fServerPort := aServerPort;
@@ -3220,13 +3268,13 @@ begin
   result := not VarIsNull(res);
 end;
 
-function TMongoCollection.AggregateDoc(Operators: PUTF8Char;
+function TMongoCollection.AggregateDoc(const Operators: RawUTF8;
   const Params: array of const): variant;
 begin
   result := AggregateDocFromJson(FormatUTF8(Operators, Params));
 end;
 
-function TMongoCollection.AggregateJSON(Operators: PUTF8Char;
+function TMongoCollection.AggregateJSON(const Operators: RawUTF8;
   const Params: array of const; Mode: TMongoJSONMode): RawUTF8;
 begin
   result := AggregateJSONFromJson(FormatUTF8(Operators, Params), Mode);
@@ -3412,7 +3460,7 @@ begin
   result := _Safe(res)^.GetValueOrDefault('n', 0);
 end;
 
-function TMongoCollection.FindCount(Criteria: PUTF8Char;
+function TMongoCollection.FindCount(const Criteria: RawUTF8;
   const Args, Params: array of const;
   MaxNumberToReturn, NumberToSkip: integer): Int64;
 var
@@ -3455,7 +3503,7 @@ begin
       Criteria, Projection, NumberToReturn, NumberToSkip, Flags), result);
 end;
 
-function TMongoCollection.FindDoc(Criteria: PUTF8Char;
+function TMongoCollection.FindDoc(const Criteria: RawUTF8;
   const Params: array of const; NumberToReturn, NumberToSkip: integer;
   Flags: TMongoQueryFlags): variant;
 begin
@@ -3463,7 +3511,7 @@ begin
     BSONVariant(Criteria, [], Params), null, NumberToReturn, NumberToSkip, Flags);
 end;
 
-procedure TMongoCollection.FindDocs(Criteria: PUTF8Char;
+procedure TMongoCollection.FindDocs(const Criteria: RawUTF8;
   const Params: array of const; var result: TVariantDynArray;
   const Projection: variant; NumberToReturn, NumberToSkip: integer;
   Flags: TMongoQueryFlags);
@@ -3474,7 +3522,7 @@ begin
       NumberToReturn, NumberToSkip, Flags), result);
 end;
 
-function TMongoCollection.FindDocs(Criteria: PUTF8Char;
+function TMongoCollection.FindDocs(const Criteria: RawUTF8;
   const Params: array of const; const Projection: variant;
   NumberToReturn, NumberToSkip: integer;
   Flags: TMongoQueryFlags): TVariantDynArray;
@@ -3520,7 +3568,7 @@ begin
       Criteria, Projection, NumberToReturn, NumberToSkip, Flags), Mode);
 end;
 
-function TMongoCollection.FindJSON(Criteria: PUTF8Char;
+function TMongoCollection.FindJSON(const Criteria: RawUTF8;
   const Params: array of const; NumberToReturn, NumberToSkip: integer;
   Flags: TMongoQueryFlags; Mode: TMongoJSONMode): RawUTF8;
 begin
@@ -3529,13 +3577,13 @@ begin
     NumberToSkip, Flags, Mode);
 end;
 
-function TMongoCollection.FindJSON(Criteria: PUTF8Char;
-  const CriteriaParams: array of const; const Projection: variant;
-  NumberToReturn, NumberToSkip: integer; Flags: TMongoQueryFlags;
-  Mode: TMongoJSONMode): RawUTF8;
+function TMongoCollection.FindJSON(
+  const Criteria: RawUTF8; const Params: array of const;
+  const Projection: variant; NumberToReturn, NumberToSkip: integer;
+  Flags: TMongoQueryFlags; Mode: TMongoJSONMode): RawUTF8;
 begin
   result := FindJSON(
-    BSONVariant(Criteria, [], CriteriaParams), Projection, NumberToReturn,
+    BSONVariant(Criteria, [], Params), Projection, NumberToReturn,
     NumberToSkip, Flags, Mode);
 end;
 
@@ -3631,9 +3679,10 @@ begin
   Save(doc, DocumentObjectID);
 end;
 
-procedure TMongoCollection.Update(Query: PUTF8Char;
-  const QueryParams: array of const; const Update: RawUTF8;
-  const UpdateParams: array of const; Flags: TMongoUpdateFlags);
+procedure TMongoCollection.Update(
+  const Query: RawUTF8; const QueryParams: array of const;
+  const Update: RawUTF8; const UpdateParams: array of const;
+  Flags: TMongoUpdateFlags);
 var
   quer, upd: variant;
 begin
@@ -3672,10 +3721,10 @@ begin
   Remove(BSONVariant(['_id', _id]), [mdfSingleRemove]);
 end;
 
-procedure TMongoCollection.RemoveFmt(Query: PUTF8Char;
-  const QueryParams: array of const; Flags: TMongoDeleteFlags);
+procedure TMongoCollection.RemoveFmt(const Query: RawUTF8;
+  const Params: array of const; Flags: TMongoDeleteFlags);
 begin
-  Remove(BSONVariant(Query, [], QueryParams), Flags);
+  Remove(BSONVariant(Query, [], Params), Flags);
 end;
 
 function ToText(wc: TMongoClientWriteConcern): PShortString;

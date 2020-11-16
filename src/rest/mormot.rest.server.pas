@@ -520,7 +520,7 @@ type
     // internal array, or by calling FillInput if you do not know the input
     // parameters which may appear
     property InputPairs: TRawUTF8DynArray
-      read FInput;
+      read fInput;
     /// retrieve an incoming HTTP header
     // - the supplied header name is case-insensitive
     // - but rather call RemoteIP or UserAgent properties instead of
@@ -945,8 +945,8 @@ type
     fPrivateSalt: RawUTF8;
     fSentHeaders: RawUTF8;
     fRemoteIP: RawUTF8;
-    fPrivateSaltHash: Cardinal;
-    fLastTimestamp: Cardinal;
+    fPrivateSaltHash: cardinal;
+    fLastTimestamp: cardinal;
     fExpectedHttpAuthentication: RawUTF8;
     fAccessRights: TOrmAccessRights;
     fMethods: TSynMonitorInputOutputObjArray;
@@ -976,28 +976,35 @@ type
     // - never equals to 1 (CONST_AUTHENTICATION_NOT_USED, i.e. authentication
     // mode is not enabled), nor 0 (CONST_AUTHENTICATION_SESSION_NOT_STARTED,
     // i.e. session still in handshaking phase)
-    property IDCardinal: cardinal read fIDCardinal;
+    property IDCardinal: cardinal
+      read fIDCardinal;
     /// the associated User
     // - this is a true TAuthUser instance, and User.GroupRights will contain
     // also a true TAuthGroup instance
-    property User: TAuthUser read fUser;
+    property User: TAuthUser
+      read fUser;
     /// set by the Access() method to the current GetTickCount64 shr 10
     // timestamp + TimeoutSecs
-    property TimeOutTix: cardinal read fTimeOutTix;
+    property TimeOutTix: cardinal
+      read fTimeOutTix;
     /// copy of the associated user access rights
     // - extracted from User.TAuthGroup.SQLAccessRights
-    property AccessRights: TOrmAccessRights read fAccessRights;
+    property AccessRights: TOrmAccessRights
+      read fAccessRights;
     /// the hexadecimal private key as returned to the connected client
     // as 'SessionID+PrivateKey'
-    property PrivateKey: RawUTF8 read fPrivateKey;
+    property PrivateKey: RawUTF8
+      read fPrivateKey;
     /// the transmitted HTTP headers, if any
     // - can contain e.g. 'RemoteIp: 127.0.0.1' or 'User-Agent: Mozilla/4.0'
-    property SentHeaders: RawUTF8 read fSentHeaders;
+    property SentHeaders: RawUTF8
+      read fSentHeaders;
     /// per-session statistics about method-based services
     // - Methods[] follows TRestServer.fPublishedMethod[] array
     // - is initialized and maintained only if mlSessions is defined in
     // TRestServer.StatLevels property
-    property Methods: TSynMonitorInputOutputObjArray read fMethods;
+    property Methods: TSynMonitorInputOutputObjArray
+      read fMethods;
     /// per-session statistics about interface-based services
     // - Interfaces[] follows TRestServer.Services.fListInterfaceMethod[] array
     // - is initialized and maintained only if mlSessions is defined in
@@ -1006,20 +1013,26 @@ type
       read fInterfaces write fInterfaces;
   published
     /// the session ID number, as text
-    property ID: RawUTF8 read fID;
+    property ID: RawUTF8
+      read fID;
     /// the associated User Name, as in User.LogonName
-    property UserName: RawUTF8 read GetUserName;
+    property UserName: RawUTF8
+      read GetUserName;
     /// the associated User ID, as in User.ID
-    property UserID: TID read GetUserID;
+    property UserID: TID
+      read GetUserID;
     /// the associated Group ID, as in User.GroupRights.ID
-    property GroupID: TID read GetGroupID;
+    property GroupID: TID
+      read GetGroupID;
     /// the timestamp (in numbers of 1024 ms) until a session is kept alive
     // - extracted from User.TAuthGroup.SessionTimeout
     // - is used for fast comparison with GetTickCount64 shr 10
-    property TimeoutShr10: cardinal read fTimeOutShr10;
+    property TimeoutShr10: cardinal
+      read fTimeOutShr10;
     /// the remote IP, if any
     // - is extracted from SentHeaders properties
-    property RemoteIP: RawUTF8 read fRemoteIP;
+    property RemoteIP: RawUTF8
+      read fRemoteIP;
   end;
 
   /// class-reference type (metaclass) used to define overridden session instances
@@ -1390,30 +1403,40 @@ type
       const MicroSecondsElapsed: QWord);
   published
     /// when this monitoring instance (therefore the server) was created
-    property StartDate: RawUTF8 read fStartDate;
+    property StartDate: RawUTF8
+      read fStartDate;
     /// number of valid responses
     // - i.e. which returned status code 200/HTTP_SUCCESS or 201/HTTP_CREATED
     // - any invalid request will increase the TSynMonitor.Errors property
-    property Success: TSynMonitorCount64 read fSuccess;
+    property Success: TSynMonitorCount64
+      read fSuccess;
     /// count of the remote method-based service calls
-    property ServiceMethod: TSynMonitorCount64 read fServiceMethod;
+    property ServiceMethod: TSynMonitorCount64
+      read fServiceMethod;
     /// count of the remote interface-based service calls
-    property ServiceInterface: TSynMonitorCount64 read fServiceInterface;
+    property ServiceInterface: TSynMonitorCount64
+      read fServiceInterface;
     /// count of files transmitted directly (not part of Output size property)
     // - i.e. when the service uses STATICFILE_CONTENT_TYPE/HTTP_RESP_STATICFILE
     // as content type to let the HTTP server directly serve the file content
-    property OutcomingFiles: TSynMonitorCount64 read fOutcomingFiles;
+    property OutcomingFiles: TSynMonitorCount64
+      read fOutcomingFiles;
     /// number of current declared thread counts
     // - as registered by BeginCurrentThread/EndCurrentThread
-    property CurrentThreadCount: TSynMonitorOneCount read fCurrentThreadCount;
+    property CurrentThreadCount: TSynMonitorOneCount
+      read fCurrentThreadCount;
     /// how many Create / Add ORM operations did take place
-    property Created: TSynMonitorCount64 read fCreated;
+    property Created: TSynMonitorCount64
+      read fCreated;
     /// how many Read / Get ORM operations did take place
-    property Read: TSynMonitorCount64 read fRead;
+    property Read: TSynMonitorCount64
+      read fRead;
     /// how many Update ORM operations did take place
-    property Updated: TSynMonitorCount64 read fUpdated;
+    property Updated: TSynMonitorCount64
+      read fUpdated;
     /// how many Delete ORM operations did take place
-    property Deleted: TSynMonitorCount64 read fDeleted;
+    property Deleted: TSynMonitorCount64
+      read fDeleted;
   end;
 
   /// ORM table used to store TSynMonitorUsage information in TSynMonitorUsageRest
@@ -1433,15 +1456,19 @@ type
     function UsageID(aProcessIDShift: integer = 16): integer;
   published
     /// the granularity of the statistics of this entry
-    property Gran: TSynMonitorUsageGranularity read fGran write fGran;
+    property Gran: TSynMonitorUsageGranularity
+      read fGran write fGran;
     /// identify which application is monitored
     // - match the lower bits of each record ID
     // - by default, is expected to be a TSynUniqueIdentifierProcess 16-bit value
-    property Process: Int64 read fProcess write fProcess;
+    property Process: Int64
+      read fProcess write fProcess;
     /// the actual statistics information, stored as a TDocVariant JSON object
-    property Info: variant read fInfo write fInfo;
+    property Info: variant
+      read fInfo write fInfo;
     /// a custom text, which may be used e.g. by support or developpers
-    property Comment: RawUTF8 read fComment write fComment;
+    property Comment: RawUTF8
+      read fComment write fComment;
   end;
   /// class-reference type (metaclass) of a TOrmMonitorUsage table
   TOrmMonitorUsageClass = class of TOrmMonitorUsage;
@@ -1473,19 +1500,23 @@ type
     destructor Destroy; override;
     /// you can set an optional Batch instance to speed up DB writing
     // - when calling the Modified() method
-    property SaveBatch: TRestBatch read fSaveBatch write fSaveBatch;
+    property SaveBatch: TRestBatch
+      read fSaveBatch write fSaveBatch;
   published
     /// the actual ORM class used for persistence
-    property StoredClass: TOrmMonitorUsageClass read fStoredClass;
+    property StoredClass: TOrmMonitorUsageClass
+      read fStoredClass;
     /// how the information could be stored for several processes
     // - e.g. when several SOA nodes gather monitoring information in a
     // shared (MongoDB) database
     // - is by default a TSynUniqueIdentifierProcess value, but may be
     // any integer up to ProcessIDShift bits as set in Create()
-    property ProcessID: Int64 read fProcessID;
+    property ProcessID: Int64
+      read fProcessID;
     /// how process ID are stored within the mORMot TOrm.ID
     // - equals 16 bits by default, to match TSynUniqueIdentifierProcess resolution
-    property ProcessIDShift: integer read fProcessIDShift;
+    property ProcessIDShift: integer
+      read fProcessIDShift;
   end;
 
   /// the flags used for TRestServer.AddStats
@@ -1522,7 +1553,8 @@ type
     destructor Destroy; override;
     /// the associated TRestServer instance, which will be notified
     // when the callback is released
-    property Rest: TRest read fRest;
+    property Rest: TRest
+      read fRest;
     /// the interface type, implemented by this callback class
     property RestInterface: TGUID
       read fInterface write fInterface;
@@ -1564,12 +1596,14 @@ type
     // - if there is a WaitFor currently in progress, returns FALSE
     function Reset: boolean; virtual;
     /// the associated blocking process instance
-    property Process: TBlockingProcess read fProcess;
+    property Process: TBlockingProcess
+      read fProcess;
   published
     /// the current state of process
     // - just a wrapper around Process.Event
     // - use Reset method to re-use this instance after a WaitFor process
-    property Event: TBlockingEvent read GetEvent;
+    property Event: TBlockingEvent
+      read GetEvent;
   end;
 
 
@@ -1999,6 +2033,31 @@ type
       const aMethods: array of TRestServerAuthenticationClass); overload;
     /// call this method to remove all authentication methods to the server
     procedure AuthenticationUnregisterAll;
+    /// read-only access to the internal list of sessions
+    // - ensure you protect its access calling Sessions.Lock/Sessions.Unlock
+    property Sessions: TSynObjectListLocked
+      read fSessions;
+    /// read-only access to the list of registered server-side authentication
+    // methods, used for session creation
+    // - note that the exact number or registered services in this list is
+    // stored in the AuthenticationSchemesCount property
+    property AuthenticationSchemes: TRestServerAuthenticationDynArray
+      read fSessionAuthentication;
+    /// how many authentication methods are registered in AuthenticationSchemes
+    property AuthenticationSchemesCount: integer
+      read GetAuthenticationSchemesCount;
+    /// define if unsecure connections (i.e. not in-process or encrypted
+    // WebSockets) with no session can be authenticated via JWT
+    // - once set, this instance will be owned by the TSQLRestServer
+    // - by definition, such JWT authentication won't identify any mORMot user
+    // nor session (it just has to be valid), so only sicSingle, sicShared or
+    // sicPerThread interface-based services execution are possible
+    // - typical usage is for a public API, in conjunction with
+    // ServiceDefine(...).ResultAsJSONObjectWithoutResult := true on the server
+    // side and TSQLRestClientURI.ServiceDefineSharedAPI() method for the client
+    // - see also JWTForUnauthenticatedRequestWhiteIP() for additional security
+    property JWTForUnauthenticatedRequest: TJWTAbstract
+      read fJWTForUnauthenticatedRequest write fJWTForUnauthenticatedRequest;
     /// (un)register a banned IPv4 value
     // - any connection attempt from this IP Address will be rejected by
     function BanIP(const aIP: RawUTF8; aRemoveBan: boolean = false): boolean;
@@ -2019,7 +2078,7 @@ type
     // in order to be really thread-safe)
     // - the returned TAuthUser instance will have GroupRights=nil but will
     // have ID, LogonName, DisplayName, PasswordHashHexa and Data fields available
-    function SessionGetUser(aSessionID: Cardinal): TAuthUser;
+    function SessionGetUser(aSessionID: cardinal): TAuthUser;
     /// persist all in-memory sessions into a compressed binary file
     // - you should not call this method it directly, but rather use Shutdown()
     // with a StateFileName parameter - to be used e.g. for a short maintainance
@@ -2189,7 +2248,8 @@ type
     // - an optional OnNotify event may be defined, which will be triggered
     // for all incoming change, supllying the updated TOrm instance
     function RecordVersionSynchronizeSlaveStart(Table: TOrmClass;
-      MasterRemoteAccess: TRestClientURI; OnNotify: TOnBatchWrite = nil): boolean;
+      MasterRemoteAccess: TRestClientURI;
+      const OnNotify: TOnBatchWrite = nil): boolean;
     /// finalize asynchronous master/slave replication on a slave TRest
     // - stop synchronization of a TOrm table, using its TRecordVersion
     // field, for real-time master/slave replication on the slave side
@@ -2847,7 +2907,7 @@ end;
 
 procedure TRestServerURIContext.OutHeadFromCookie;
 begin
-  Call.OutHead := Trim(Call.OutHead + #13#10'Set-Cookie: ' + OutSetCookie);
+  Call.OutHead := TrimU(Call.OutHead + #13#10'Set-Cookie: ' + OutSetCookie);
   if rsoCookieIncludeRootPath in Server.fOptions then
     // case-sensitive Path=/ModelRoot
     Call.OutHead := Call.OutHead + '; Path=/';
@@ -3430,7 +3490,7 @@ begin
                   SQLSort := SQLSort + ' DESC';
                 SQLWhere := SQLWhere + ' ORDER BY ' + SQLSort;
               end;
-              SQLWhere := trim(SQLWhere);
+              SQLWhere := TrimU(SQLWhere);
               if (SQLResults <> 0) and
                  (StrPosI('LIMIT ', pointer(SQLWhere)) = nil) then
               begin
@@ -3458,7 +3518,7 @@ begin
               end;
             end;
             SQL := Server.fModel.TableProps[TableIndex].SQLFromSelectWhere(
-              SQLSelect, trim(SQLWhere));
+              SQLSelect, TrimU(SQLWhere));
             Call.OutBody := TRestOrmServer(Server.fOrmInstance).
               InternalListRawUTF8(TableIndex, SQL);
             if Call.OutBody <> '' then
@@ -3499,7 +3559,7 @@ begin
                   if SQLTotalRowsCount = 0 then // avoid sending fields array
                     Call.OutBody := '[]'
                   else
-                    Call.OutBody := trim(Call.OutBody);
+                    Call.OutBody := TrimU(Call.OutBody);
                   Call.OutBody := '{"values":' + Call.OutBody +
                     FormatUTF8(Server.URIPagingParameters.SendTotalRowsCountFmt,
                      [SQLTotalRowsCount]) + '}';
@@ -3695,7 +3755,7 @@ begin
         repeat
           if UrlDecodeValue(Parameters, 'WHERE=', SQLWhere, @Parameters) then
           begin
-            SQLWhere := trim(SQLWhere);
+            SQLWhere := TrimU(SQLWhere);
             if SQLWhere <> '' then
             begin
               if orm.Delete(Table, SQLWhere) then
@@ -4113,7 +4173,7 @@ procedure TRestServerURIContext.SetInCookie(CookieName, CookieValue: RawUTF8);
 var
   i, n: PtrInt;
 begin
-  CookieName := trim(CookieName);
+  CookieName := TrimU(CookieName);
   if (self = nil) or
      (CookieName = '') then
     exit;
@@ -4136,7 +4196,7 @@ var
   i: PtrInt;
 begin
   result := '';
-  CookieName := trim(CookieName);
+  CookieName := TrimU(CookieName);
   if (self = nil) or
      (CookieName = '') then
     exit;
@@ -4158,7 +4218,7 @@ const
 begin
   if self = nil then
     exit;
-  aOutSetCookie := Trim(aOutSetCookie);
+  aOutSetCookie := TrimU(aOutSetCookie);
   if not IsValidUTF8WithoutControlChars(aOutSetCookie) then
     raise EParsingException.CreateUTF8('Unsafe %.SetOutSetCookie', [self]);
   if PosExChar('=', aOutSetCookie) < 2 then
@@ -5480,7 +5540,7 @@ var
   i, ndx: PtrInt;
   username, indataenc: RawUTF8;
   ticks, connectionID: Int64;
-  browserauth: Boolean;
+  browserauth: boolean;
   outdata: RawByteString;
   user: TAuthUser;
   session: TAuthSession;
@@ -6244,7 +6304,7 @@ begin
 end;
 
 function TRestServer.RecordVersionSynchronizeSlaveStart(Table: TOrmClass;
-  MasterRemoteAccess: TRestClientURI; OnNotify: TOnBatchWrite): boolean;
+  MasterRemoteAccess: TRestClientURI; const OnNotify: TOnBatchWrite): boolean;
 var
   current, previous: TRecordVersion;
   tableIndex: integer;
@@ -6659,7 +6719,7 @@ begin // caller of RetrieveSession() made fSessions.Safe.Lock
   result := nil;
 end;
 
-function TRestServer.SessionGetUser(aSessionID: Cardinal): TAuthUser;
+function TRestServer.SessionGetUser(aSessionID: cardinal): TAuthUser;
 var
   i: PtrInt;
 begin
@@ -6771,7 +6831,7 @@ end;
 procedure TRestServer.ServiceMethodRegister(aMethodName: RawUTF8;
   const aEvent: TOnRestServerCallBack; aByPassAuthentication: boolean);
 begin
-  aMethodName := trim(aMethodName);
+  aMethodName := TrimU(aMethodName);
   if aMethodName = '' then
     raise EServiceException.CreateUTF8('%.ServiceMethodRegister('''')', [self]);
   if Model.GetTableIndex(aMethodName) >= 0 then

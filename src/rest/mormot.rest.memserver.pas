@@ -185,11 +185,13 @@ type
       aHandleUserAuthentication: boolean = false); reintroduce; overload; virtual;
   published
     /// the file name used for data persistence
-    property FileName: TFileName read GetFileName;
+    property FileName: TFileName
+      read GetFileName;
     /// set if the file content is to be compressed binary, or standard JSON
     // - it will use TRestStorageInMemory LoadFromJSON/LoadFromBinary
     // SaveToJSON/SaveToBinary methods for optimized storage
-    property BinaryFile: boolean read GetBinaryFile;
+    property BinaryFile: boolean
+      read GetBinaryFile;
   published
     /// this method-base service will be accessible from ModelRoot/Flush URI,
     // and will write any modification into file
@@ -346,9 +348,8 @@ begin
         else
           inc(P);
       if P^ = ']' then
-        break
-      else
-        inc(P);
+        break;
+      inc(P);
       TableName := GetJSONField(P, P, @wasString);
       if not wasString or
          (P = nil) then
@@ -641,8 +642,8 @@ begin
     end;
     // we have the SQLite3 engine at hand
     fake.ServerName := ':memory:';
-    result := TRestServerClass(c).RegisteredClassCreateFrom(aModel, fake,
-      aHandleUserAuthentication);
+    result := TRestServerClass(c).RegisteredClassCreateFrom(
+      aModel, fake, aHandleUserAuthentication);
   finally
     fake.Free;
   end;

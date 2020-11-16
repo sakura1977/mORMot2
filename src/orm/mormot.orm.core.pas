@@ -4293,8 +4293,8 @@ type
     /// the field size in bytes; -1 means not computed yet
     ContentSize: integer;
     /// the field low-level RTTI information
-    // - is the PRttiInfo for oftBlobDynArray/oftNullable, PRttiEnumType for
-    // oftEnumerate/oftSet, or nil
+    // - is a PRttiInfo for oftBlobDynArray/oftNullable,
+    // or is a PRttiEnumType for oftEnumerate/oftSet, or nil
     ContentTypeInfo: pointer;
     /// the corresponding index in fQueryTables[]
     TableIndex: integer;
@@ -4603,7 +4603,7 @@ type
     // - you can customize the ',' separator - use e.g. the global ListSeparator
     // variable (from SysUtils) to reflect the current system definition (some
     // country use ',' as decimal separator, for instance our "douce France")
-    // - AddBOM will add a UTF-8 Byte Order Mark at the beginning of the content
+    // - AddBOM will add a UTF-8 byte Order Mark at the beginning of the content
     procedure GetCSVValues(Dest: TStream; Tab: boolean; CommaSep: AnsiChar = ',';
       AddBOM: boolean = false; RowFirst: integer = 0; RowLast: integer = 0); overload;
     /// save the table as CSV format, into a string variable
@@ -4611,7 +4611,7 @@ type
     // - you can customize the ',' separator - use e.g. the global ListSeparator
     // variable (from SysUtils) to reflect the current system definition (some
     // country use ',' as decimal separator, for instance our "douce France")
-    // - AddBOM will add a UTF-8 Byte Order Mark at the beginning of the content
+    // - AddBOM will add a UTF-8 byte Order Mark at the beginning of the content
     function GetCSVValues(Tab: boolean; CommaSep: AnsiChar = ',';
       AddBOM: boolean = false; RowFirst: integer = 0; RowLast: integer = 0): RawUTF8; overload;
     /// save the table in 'schemas-microsoft-com:rowset' XML format
@@ -7442,6 +7442,7 @@ type
   TSQLInitializeTableOptions = TOrmInitializeTableOptions;
   TSQLAccessRights = TOrmAccessRights;
   PSQLAccessRights = POrmAccessRights;
+  TSQLFieldType = TOrmFieldType;
   TSQLFieldTables = TOrmFieldTables;
   TSQLModel = TOrmModel;
   TSQLModelProperties = TOrmModelProperties;
@@ -8511,7 +8512,7 @@ begin
 end;
 
 {$ifdef ISDELPHI20062007}
-  {$WARNINGS OFF} // circument Delphi 2007 false positive warning
+  {$WARNINGS OFF} // circumvent Delphi 2007 false positive warning
 {$endif}
 
 const
@@ -9486,7 +9487,7 @@ begin
   end;
   if result = nil then
   begin
-    aOrmFieldType := GetOrmFieldType(aType);
+    aOrmFieldType := GetOrmFieldType(aType); // guess from RTTI
     C := nil;
     if (OrmPropInfoRegistration = nil) or
        not OrmPropInfoRegistration.FindAndCopy(aType, C) then
@@ -10531,9 +10532,9 @@ begin
   // generic case: copy also class content (create instances)
   S := GetInstance(Source);
   D := TOrmPropInfoRTTIObject(DestInfo).GetInstance(Dest);
-  if fPropRtti.ValueKnownClass = TCollection then
+  if fPropRtti.ValueRTLClass = TCollection then
     CopyCollection(TCollection(S), TCollection(D))
-  else if fPropRtti.ValueKnownClass = TStrings then
+  else if fPropRtti.ValueRTLClass = TStrings then
     CopyStrings(TStrings(S), TStrings(D))
   else
   begin
@@ -13969,7 +13970,7 @@ begin
   W := TTextWriter.Create(Dest, @temp, SizeOf(temp));
   try
     if AddBOM then
-      W.AddShorter(#$ef#$bb#$bf); // add UTF-8 Byte Order Mark
+      W.AddShorter(#$ef#$bb#$bf); // add UTF-8 byte Order Mark
     if Tab then
       CommaSep := #9;
     FMax := FieldCount - 1;
@@ -22085,7 +22086,7 @@ end;
 
 function TOrmAccessRights.ToString: RawUTF8;
 begin
-  FormatUTF8('%,%,%,%,%', [Byte(AllowRemoteExecute),
+  FormatUTF8('%,%,%,%,%', [byte(AllowRemoteExecute),
     GetBitCSV(GET, MAX_TABLES), GetBitCSV(POST, MAX_TABLES),
     GetBitCSV(PUT, MAX_TABLES), GetBitCSV(DELETE, MAX_TABLES)], result);
 end;

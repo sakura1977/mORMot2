@@ -120,7 +120,8 @@ type
     // - could be nil if the connection is in standard HTTP/1.1 mode
     function WebSocketProtocol: TWebSocketProtocol;
     /// low-level WebSocket protocol processing instance
-    property WebSocketProcess: TWebSocketProcessServer read fProcess;
+    property WebSocketProcess: TWebSocketProcessServer
+      read fProcess;
   end;
 
   /// main HTTP/WebSockets server Thread using the standard Sockets API (e.g. WinSock)
@@ -352,7 +353,7 @@ begin
     version := ClientSock.HeaderGetValue('SEC-WEBSOCKET-VERSION');
     if GetInteger(pointer(version)) < 13 then
       exit; // we expect WebSockets protocol version 13 at least
-    uri := Trim(RawUTF8(ClientSock.URL));
+    uri := TrimU(ClientSock.URL);
     if (uri <> '') and
        (uri[1] = '/') then
       Delete(uri, 1, 1);
