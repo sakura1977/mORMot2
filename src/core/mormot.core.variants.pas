@@ -2462,34 +2462,25 @@ begin
           VDouble := V.VExtended^;
         end;
       vtVariant:
-        begin
-          VType := varVariant or varByRef;
-          VAny := V.VVariant;
-        end;
+        result := V.VVariant^;
+      // warning: use varByRef or varString makes GPF -> safe and fast refcount
       vtAnsiString:
         begin
-          VType := varString or varByRef;
-          VString := V.VAnsiString;
-        end;
-      vtWideString:
-        begin
-          VType := varOleStr or varByRef;
-          VString := V.VWideString;
+          VType := varString;
+          VAny := nil;
+          RawByteString(VAny) := RawByteString(V.VAnsiString);
         end;
       {$ifdef HASVARUSTRING}
-      vtUnicodeString:
-        begin
-          VType := varUString or varByRef;
-          VString := V.VUnicodeString;
-        end;
+      vtUnicodeString,
       {$endif HASVARUSTRING}
-      vtString, vtPChar, vtChar, vtWideChar, vtClass:
+      vtWideString, vtString, vtPChar, vtChar, vtWideChar, vtClass:
         begin
           VType := varString;
           VString := nil; // avoid GPF on next line
           VarRecToUTF8(V, RawUTF8(VString)); // return as new RawUTF8 instance
         end;
-      vtObject: // class instance will be serialized as a TDocVariant
+      vtObject:
+        // class instance will be serialized as a TDocVariant
         ObjectToVariant(V.VObject, result, [woDontStoreDefault]);
     else
       raise ESynVariant.CreateUTF8('Unhandled TVarRec.VType=%', [V.VType]);
@@ -2680,8 +2671,9 @@ var
 begin
   for i := 0 to length(SynVariantTypes) - 1 do
   begin
-    result := SynVariantTypes[i]; // returns already registered instance
+    result := SynVariantTypes[i];
     if PPointer(result)^ = pointer(aClass) then
+      // returns already registered instance
       exit;
   end;
   result := aClass.Create; // register variant type
@@ -6767,6 +6759,10 @@ end;
 
 
 initialization
+  // register the TDocVariant custom type
+  DocVariantType := TDocVariant(SynRegisterCustomVariantType(TDocVariant));
+  DocVariantVType := DocVariantType.VarType;
+  // redirect to the feature complete variant wrapper functions
   BinaryVariantLoadAsJSON := _BinaryVariantLoadAsJSON;
   VariantClearSeveral := _VariantClearSeveral;
   SortDynArrayVariantComp := _SortDynArrayVariantComp;

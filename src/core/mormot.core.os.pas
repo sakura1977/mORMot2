@@ -846,11 +846,11 @@ function GetQueuedCompletionStatus(CompletionPort: THandle;
 // - redefined in mormot.core.os to avoid dependency to Windows
 function PostQueuedCompletionStatus(CompletionPort: THandle;
   NumberOfBytesTransferred: DWORD; dwCompletionKey: pointer;
-  lpOverlapped: POverlapped): BOOL;
+  lpOverlapped: POverlapped): BOOL; stdcall;
 
 /// finalize a Windows resource (e.g. IOCP instance)
 // - redefined in mormot.core.os to avoid dependency to Windows
-function CloseHandle(hObject: THandle): BOOL;
+function CloseHandle(hObject: THandle): BOOL; stdcall;
 
 /// redefined here to avoid warning to include "Windows" in uses clause
 // - why did Delphi define this slow RTL function as inlined in SysUtils.pas?
@@ -896,6 +896,12 @@ const
   ENV_INVOCATION_ID: PAnsiChar = 'INVOCATION_ID';
 
 type
+  /// low-level systemd parameter to sd.journal_sendv() function
+  TIoVec = record
+    iov_base: pointer;
+    iov_len: PtrUInt;
+  end;
+
   /// implements late-binding of the systemd library
   // - about systemd: see https://www.freedesktop.org/wiki/Software/systemd
   // and http://0pointer.de/blog/projects/socket-activation.html - to get headers
@@ -915,6 +921,10 @@ type
     /// systemd: submit simple, plain text log entries to the system journal
     // - priority value can be obtained using longint(LOG_TO_SYSLOG[logLevel])
     journal_print: function(priority: longint; args: array of const): longint; cdecl;
+    /// systemd: submit array of iov structures instead of the format string to the system journal.
+    //  - each structure should reference one field of the entry to submit.
+    //  - the second argument specifies the number of structures in the array.
+    journal_sendv: function(var iov: TIoVec; n: longint): longint; cdecl;
     /// sends notification to systemd
     // - see https://www.freedesktop.org/software/systemd/man/notify.html
     // status notification sample: sd.notify(0, 'READY=1');
@@ -3600,8 +3610,9 @@ end;
 
 function NewSynLocker: PSynLocker;
 begin
-  GetMem(result, SizeOf(TSynLocker));
-  result^.Init;
+  result := AllocMem(SizeOf(TSynLocker));
+  InitializeCriticalSection(result^.fSection);
+  result^.fInitialized := true;
 end;
 
 
@@ -4161,5 +4172,6 @@ initialization
 
 finalization
   FinalizeUnit;
+  
 end.
 

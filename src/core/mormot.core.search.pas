@@ -8,10 +8,10 @@ unit mormot.core.search;
 
    Several Indexing and Search Engines, as used by other parts of the framework
     - Files Search in Folders
-    - GLOB and SOUNDEX Text Search
+    - ScanUTF8, GLOB and SOUNDEX Text Search
     - Versatile Expression Search Engine
     - Bloom Filter Probabilistic Index
-    - TDynArray Low-Level Binary Search
+    - TDynArray Low-Level Binary Search and Iteration
     - TSynFilter and TSynValidate Processing Classes
     - Cross-Platform TSynTimeZone Time Zones
 
@@ -87,7 +87,23 @@ function SynchFolders(const Reference, Dest: TFileName; SubFolder: boolean = fal
   ByContent: boolean = false; WriteFileNameToConsole: boolean = false): integer;
 
 
-{ ****************** GLOB and SOUNDEX Text Search }
+{ ****************** ScanUTF8, GLOB and SOUNDEX Text Search }
+
+/// read and store text into values[] according to fmt specifiers
+// - %d as PInteger, %D as PInt64, %u as PCardinal, %U as PQWord, %f as PDouble,
+// %F as PCurrency, %x as 8 hexa chars to PInteger, %X as 16 hexa chars to PInt64,
+// %s as PShortString (UTF-8 encoded), %S as PRawUTF8, %L as PRawUTF8 (getting
+// all text until the end of the line)
+// - optionally, specifiers and any whitespace separated identifiers may be
+// extracted and stored into the ident[] array, e.g. '%dFirstInt %s %DOneInt64'
+// will store ['dFirstInt','s','DOneInt64'] into ident[] dynamic array
+function ScanUTF8(const text, fmt: RawUTF8; const values: array of pointer;
+  ident: PRawUTF8DynArray = nil): integer; overload;
+
+/// read text from P/PLen and store it into values[] according to fmt specifiers
+function ScanUTF8(P: PUTF8Char; PLen: PtrInt; const fmt: RawUTF8;
+  const values: array of pointer; ident: PRawUTF8DynArray): integer; overload;
+
 
 type
   PMatch = ^TMatch;
@@ -748,7 +764,7 @@ function DeltaExtract(Delta, Old, New: PAnsiChar): TDeltaError; overload;
 function ToText(err: TDeltaError): PShortString; overload;
 
 
-{ ****************** TDynArray Low-Level Binary Search }
+{ ****************** TDynArray Low-Level Binary Search and Iteration }
 
 /// wrap a simple dynamic array BLOB content as stored by TDynArray.SaveTo
 // - a "simple" dynamic array contains data with no reference count, e.g. byte,
@@ -758,8 +774,9 @@ function ToText(err: TDeltaError): PShortString; overload;
 // - will return nil if no or invalid data, or a pointer to the data
 // array otherwise, with the items number stored in Count and the individual
 // element size in ElemSize (e.g. 2 for a TWordDynArray)
+// - note: mORMot 1.18 Hash32 is not stored any more
 function SimpleDynArrayLoadFrom(Source: PAnsiChar; aTypeInfo: PRttiInfo;
-  out Count, ElemSize: PtrInt; NoHash32Check: boolean = false): pointer;
+  out Count, ElemSize: PtrInt): pointer;
 
 /// wrap an integer dynamic array BLOB content as stored by TDynArray.SaveTo
 // - same as TDynArray.LoadFrom() with no memory allocation nor memory copy: so
@@ -767,8 +784,7 @@ function SimpleDynArrayLoadFrom(Source: PAnsiChar; aTypeInfo: PRttiInfo;
 // - will return nil if no or invalid data, or a pointer to the integer
 // array otherwise, with the items number stored in Count
 // - sligtly faster than SimpleDynArrayLoadFrom(Source,TypeInfo(TIntegerDynArray),Count)
-function IntegerDynArrayLoadFrom(Source: PAnsiChar; var Count: integer;
-  NoHash32Check: boolean = false): PIntegerArray;
+function IntegerDynArrayLoadFrom(Source: PAnsiChar; var Count: integer): PIntegerArray;
 
 /// search in a RawUTF8 dynamic array BLOB content as stored by TDynArray.SaveTo
 // - same as search within TDynArray.LoadFrom() with no memory allocation nor
@@ -776,6 +792,51 @@ function IntegerDynArrayLoadFrom(Source: PAnsiChar; var Count: integer;
 // - will return -1 if no match or invalid data, or the matched entry index
 function RawUTF8DynArrayLoadFromContains(Source: PAnsiChar;
   Value: PUTF8Char; ValueLen: PtrInt; CaseSensitive: boolean): PtrInt;
+
+type
+    /// allows to iterate over a TDynArray.SaveTo binary buffer
+  // - may be used as alternative to TDynArray.LoadFrom, if you don't want
+  // to allocate all items at once, but retrieve items one by one
+  TDynArrayLoadFrom = object
+  protected
+    ArrayRtti: TRttiCustom;
+    ArrayLoad: TRttiBinaryLoad;
+  public
+    /// how many items were saved in the TDynArray.SaveTo binary buffer
+    // - equals -1 if Init() failed to unserialize its header
+    Count: integer;
+    /// the zero-based index of the current item pointed by next Step() call
+    // - is in range 0..Count-1 until Step() returns false
+    Current: integer;
+    /// current read position in the TDynArray.SaveTo binary buffer
+    // - after Step() returned false, points just after the binary buffer,
+    // like a regular TDynArray.LoadFrom
+    Reader: TFastReader;
+    /// initialize iteration over a TDynArray.SaveTo binary buffer
+    // - returns true on success, with Count and Position being set
+    // - returns false if the supplied binary buffer is not correct
+    // - you should specify SourceMaxLen to avoid any buffer overflow
+    function Init(ArrayTypeInfo: PRttiInfo; Source: PAnsiChar;
+      SourceMaxLen: PtrInt): boolean; overload;
+    /// initialize iteration over a TDynArray.SaveTo binary buffer
+    // - returns true on success, with Count and Position being set
+    // - returns false if the supplied binary buffer is not correct
+    function Init(ArrayTypeInfo: PRttiInfo;
+      const Source: RawByteString): boolean; overload;
+    /// iterate over the current stored item
+    // - Elem should point to a variable of the exact item type stored in this
+    // dynamic array
+    // - returns true if Elem was filled with one value, or false if all
+    // items were read, and Position contains the end of the binary buffer
+    function Step(Elem: pointer): boolean;
+    /// extract the first field value of the current stored item
+    // - this function won't increase the internal Current pointer
+    // - returns true if Field was filled with one value, or false if all
+    // items were read, and Position contains the end of the binary buffer
+    // - could be called before Step(), to pre-allocate a new item instance,
+    // or update an existing instance
+    function FirstField(Field: pointer): boolean;
+  end;
 
 
 { ****************** TSynFilter and TSynValidate Processing Classes }
@@ -1483,7 +1544,145 @@ end;
 {$I+}
  
 
-{ ****************** GLOB and SOUNDEX Text Search }
+{ ****************** ScanUTF8, GLOB and SOUNDEX Text Search }
+
+function ScanUTF8(P: PUTF8Char; PLen: PtrInt; const fmt: RawUTF8;
+  const values:  array of pointer; ident: PRawUTF8DynArray): integer;
+var
+  v, w: PtrInt;
+  F, FEnd, PEnd: PUTF8Char;
+  tab: PTextCharSet;
+label
+  next;
+begin
+  result := 0;
+  if (fmt = '') or
+     (P = nil) or
+     (PLen <= 0) or
+     (high(values) < 0) then
+    exit;
+  if ident <> nil then
+    SetLength(ident^, length(values));
+  F := pointer(fmt);
+  FEnd := F + length(fmt);
+  PEnd := P + PLen;
+  for v := 0 to high(values) do
+    repeat
+      if (P^ <= ' ') and
+         (P^ <> #0) then
+        // ignore any whitespace char in text
+        repeat
+          inc(P);
+          if P = PEnd then
+            exit;
+        until (P^ > ' ') or
+              (P^ = #0);
+      while (F^ <= ' ') and
+            (F^ <> #0) do
+      begin
+        // ignore any whitespace char in fmt
+        inc(F);
+        if F = FEnd then
+          exit;
+      end;
+      if F^ = '%' then
+      begin
+        // handle format specifier
+        inc(F);
+        if F = FEnd then
+          exit;
+        case F^ of
+          'd':
+            PInteger(values[v])^ := GetNextItemInteger(P, #0);
+          'D':
+            PInt64(values[v])^ := GetNextItemInt64(P, #0);
+          'u':
+            PCardinal(values[v])^ := GetNextItemCardinal(P, #0);
+          'U':
+            PQword(values[v])^ := GetNextItemQword(P, #0);
+          'f':
+            unaligned(PDouble(values[v])^) := GetNextItemDouble(P, #0);
+          'F':
+            GetNextItemCurrency(P, PCurrency(values[v])^, #0);
+          'x':
+            if not GetNextItemHexDisplayToBin(P, values[v], 4, #0) then
+              exit;
+          'X':
+            if not GetNextItemHexDisplayToBin(P, values[v], 8, #0) then
+              exit;
+          's', 'S':
+            begin
+              w := 0;
+              while (P[w] > ' ') and
+                    (P + w <= PEnd) do
+                inc(w);
+              if F^ = 's' then
+                SetString(PShortString(values[v])^, PAnsiChar(P), w)
+              else
+                FastSetString(PRawUTF8(values[v])^, P, w);
+              inc(P, w);
+              while (P^ <= ' ') and
+                    (P^ <> #0) and
+                    (P <= PEnd) do
+                inc(P);
+            end;
+          'L':
+            begin
+              w := 0;
+              tab := @TEXT_CHARS;
+              while (tcNot01013 in tab[P[w]]) and
+                    (P + w <= PEnd) do
+                inc(w);
+              FastSetString(PRawUTF8(values[v])^, P, w);
+              inc(P, w);
+            end;
+          '%':
+            goto next;
+        else
+          raise ESynException.CreateUTF8(
+            'ScanUTF8: unknown ''%'' specifier [%]', [F^, fmt]);
+        end;
+        inc(result);
+        tab := @TEXT_CHARS;
+        if (tcIdentifier in tab[F[1]]) or
+           (ident <> nil) then
+        begin
+          w := 0;
+          repeat
+            inc(w)
+          until not (tcIdentifier in tab[F[w]]) or
+                (F + w = FEnd);
+          if ident <> nil then
+            FastSetString(ident^[v], F, w);
+          inc(F, w);
+        end
+        else
+          inc(F);
+        if (F >= FEnd) or
+           (P >= PEnd) then
+          exit;
+        break;
+      end
+      else
+      begin
+next:   while (P^ <> F^) and
+              (P <= PEnd) do
+          inc(P);
+        inc(F);
+        inc(P);
+        if (F >= FEnd) or
+           (P >= PEnd) then
+          exit;
+      end;
+    until false;
+end;
+
+function ScanUTF8(const text, fmt: RawUTF8; const values: array of pointer;
+  ident: PRawUTF8DynArray): integer;
+begin
+  result := ScanUTF8(pointer(text), length(text), fmt, values, ident);
+end;
+
 
 // inspired by ZMatchPattern.pas - http://www.zeoslib.sourceforge.net
 procedure TMatch.MatchMain;
@@ -3986,25 +4185,6 @@ begin
   result := sp;
 end;
 
-{$ifdef CPUINTEL} // crc32c SSE4.2 hardware accellerated dword hash
-function crc32csse42(buf: pointer): cardinal;
-{$ifdef CPUX86}
-asm
-        mov     edx, eax
-        xor     eax, eax
-        {$ifdef ISDELPHI2010}
-        crc32   eax, dword ptr[edx]
-        {$else}
-        db $F2, $0F, $38, $F1, $02
-        {$endif}
-end;
-{$else} {$ifdef FPC}nostackframe; assembler; asm {$else} asm .noframe {$endif FPC}
-        xor     eax, eax
-        crc32   eax, dword ptr[buf]
-end;
-{$endif CPUX86}
-{$endif CPUINTEL}
-
 function hash32prime(buf: pointer): cardinal;
 begin // xxhash32-inspired - and won't pollute L1 cache with lookup tables
   result := PCardinal(buf)^;
@@ -4509,7 +4689,7 @@ end;
 { ****************** TDynArray Low-Level Binary Search }
 
 function SimpleDynArrayLoadFrom(Source: PAnsiChar; aTypeInfo: PRttiInfo;
-  out Count, ElemSize: PtrInt; NoHash32Check: boolean): pointer;
+  out Count, ElemSize: PtrInt): pointer;
 var
   Hash: PCardinalArray absolute Source;
   iteminfo: PRttiInfo;
@@ -4526,14 +4706,12 @@ begin
     exit; // invalid type information or Source content
   inc(Source,2);
   Count := FromVarUInt32(PByte(Source)); // dynamic array count
-  if (Count <> 0) and
-     (NoHash32Check or
-      (Hash32(@Hash[1], Count * ElemSize) = Hash[0])) then
+  if Count <> 0 then
     result := @Hash[1]; // returns valid Source content
 end;
 
-function IntegerDynArrayLoadFrom(Source: PAnsiChar; var Count: integer;
-  NoHash32Check: boolean): PIntegerArray;
+function IntegerDynArrayLoadFrom(Source: PAnsiChar;
+  var Count: integer): PIntegerArray;
 var
   Hash: PCardinalArray absolute Source;
 begin
@@ -4544,9 +4722,7 @@ begin
     exit; // invalid Source content
   inc(Source, 2);
   Count := FromVarUInt32(PByte(Source)); // dynamic array count
-  if (Count <> 0) and
-     (NoHash32Check or
-      (Hash32(@Hash[1], Count * 4) = Hash[0])) then
+  if Count <> 0 then
     result := @Hash[1]; // returns valid Source content
 end;
 
@@ -4582,6 +4758,76 @@ begin
   end;
   result := -1;
 end;
+
+
+{ TDynArrayLoadFrom }
+
+function TDynArrayLoadFrom.Init(ArrayTypeInfo: PRttiInfo; Source: PAnsiChar;
+  SourceMaxLen: PtrInt): boolean;
+begin
+  result := false;
+  Count := 0;
+  Current := 0;
+  Reader.Init(Source, SourceMaxLen);
+  ArrayRtti := Rtti.RegisterType(ArrayTypeInfo);
+  if (ArrayRtti.Parser <> ptDynArray) or
+     Reader.EOF then
+    exit;
+  if ArrayRtti.Cache.ItemInfo = nil then
+    ArrayLoad := nil
+  else
+    ArrayLoad := RTTI_BINARYLOAD[ArrayRtti.Cache.ItemInfo^.Kind];
+  Count := DynArrayLoadHeader(Reader, ArrayRtti.Info, ArrayRtti.Cache.ItemInfo);
+  result := true;
+end;
+
+function TDynArrayLoadFrom.Init(ArrayTypeInfo: PRttiInfo;
+  const Source: RawByteString): boolean;
+begin
+  result := Init(ArrayTypeInfo, pointer(Source), length(Source));
+end;
+
+function TDynArrayLoadFrom.Step(Elem: pointer): boolean;
+begin
+  if (Current < Count) and
+     not Reader.EOF then
+  begin
+    if Assigned(ArrayLoad) then
+      ArrayLoad(Elem, Reader, ArrayRtti.Cache.ItemInfo)
+    else
+      Reader.Copy(Elem, ArrayRtti.Cache.ItemSize);
+    inc(Current);
+    result := true;
+  end
+  else
+    result := false;
+end;
+
+function TDynArrayLoadFrom.FirstField(Field: pointer): boolean;
+var
+  load: TRttiBinaryLoad;
+  info: PRttiInfo;
+  noiteration: TFastReader;
+begin
+  if (Current < Count) and
+     not Reader.EOF then
+  begin
+    info := PT_INFO[ArrayRtti.ArrayFirstField];
+    if info <> nil then
+    begin
+      load := RTTI_BINARYLOAD[info^.Kind];
+      if Assigned(load) then
+      begin
+        noiteration := Reader;
+        load(Field, noiteration, info);
+        result := true;
+        exit;
+      end;
+    end;
+  end;
+  result := false;
+end;
+
 
 
 { ****************** TSynFilter and TSynValidate Processing Classes }

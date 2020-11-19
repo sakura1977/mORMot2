@@ -45,7 +45,7 @@ Cross-platform functions shared by all framework units
 
 Aim of this unit is to centralize most used OS-specific API calls, like a `SysUtils` unit on steroids, to avoid `$ifdef/$endif` in "uses" clauses.
 
-In practice, no "Windows", nor "Linux/Unix" reference should be needed inregular units, once mormot.core.os is included. :)
+In practice, no "Windows", nor "Linux/Unix" reference should be needed in regular units, once `mormot.core.os` is included. :)
 
 ### mormot.core.unicode
 
@@ -95,7 +95,7 @@ At higher level, the new `TRttiCustom` class is the main cached entry of our cus
 ### mormot.core.buffers
 
 Low-Level Memory Buffers Processing Functions shared by all framework units
-- Variable Length integer Encoding / Decoding
+- *Variable Length Integer* Encoding / Decoding
 - `TAlgoCompress` Compression/Decompression Classes - with `AlgoSynLZ`
 - `TFastReader` / `TBufferWriter` Binary Streams
 - Base64, Base64URI and Baudot Encoding / Decoding
@@ -138,7 +138,7 @@ JSON functions shared by all framework units
 
 Several Indexing and Search Engines, as used by other parts of the framework
 - Files Search in Folders
-- GLOB and SOUNDEX Text Search
+- ScanUTF8, GLOB and SOUNDEX Text Search
 - Versatile Expression Search Engine
 - *Bloom Filter* Probabilistic Index
 - `TDynArray` Low-Level Binary Search
@@ -152,6 +152,7 @@ Logging functions shared by all framework units
 - Logging via `TSynLogFamily` `TSynLog` `ISynLog`
 - High-Level Logs and Exception Related Features
 - Efficient `.log` File Access via `TSynLogFile`
+- SysLog Messages Support as defined by RFC 5424
 
 ### mormot.core.perf
 
@@ -244,7 +245,7 @@ Testing functions shared by all framework units
 
 ### mormot.core.fpcx64mm
 
-A Multi-thread Friendly Memory Manager for FPC written in x86_64 assembly
+An (optional) Multi-thread Friendly Memory Manager for FPC written in x86_64 assembly
 - targetting Linux (and Windows) multi-threaded Services
 - only for FPC on the x86_64 target - use the RTL MM on Delphi or ARM
 - based on FastMM4 proven algorithms by Pierre le Riche

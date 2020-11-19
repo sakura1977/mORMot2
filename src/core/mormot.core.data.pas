@@ -820,11 +820,19 @@ function DynArrayLoad(var Value; Source: PAnsiChar; TypeInfo: PRttiInfo;
   TryCustomVariants: PDocVariantOptions = nil): PAnsiChar;
   {$ifdef HASINLINE}inline;{$endif}
 
+/// low-level binary unserialization as saved by DynArraySave/TDynArray.Save
+// - as used by DynArrayLoad() and TDynArrayLoadFrom
+// - returns the stored length() of the dynamic array, and Source points to
+// the stored binary data itself
+function DynArrayLoadHeader(var Source: TFastReader;
+  ArrayInfo, ItemInfo: PRttiInfo): integer;
+
 /// raw comparison of two dynamic arrays
 // - as called e.g. by TDynArray.Equals, using ExternalCountA/B optional parameter
 // - RTTI_COMPARE[true/false,rkDynArray] are wrappers to this, with ExternalCount=nil
-function DynArrayCompare(A, B: PAnsiChar; ExternalCountA, ExternalCountB: PInteger;
-  Info: PRttiInfo; CaseInSensitive: boolean): integer;
+function DynArrayCompare(A, B: PAnsiChar;
+  ExternalCountA, ExternalCountB: PInteger; Info: PRttiInfo;
+  CaseInSensitive: boolean): integer;
 
 /// compare two dynamic arrays by calling TDynArray.Equals
 function DynArrayEquals(TypeInfo: PRttiInfo; var Array1, Array2;
@@ -982,7 +990,7 @@ function RecordSaveBase64(const Rec; TypeInfo: PRttiInfo;
 // - you can optionally provide in SourceMax the first byte after the input
 // memory buffer, which will be used to avoid any unexpected buffer overflow -
 // would be mandatory when decoding the content from any external process
-// (e.g. a maybe-forged client) - only with slightly performance penalty
+// (e.g. a maybe-forged client) - with no performance penalty
 // - is a wrapper around BinaryLoad(rkRecordTypes)
 function RecordLoad(var Rec; Source: PAnsiChar; TypeInfo: PRttiInfo;
   Len: PInteger = nil; SourceMax: PAnsiChar = nil;
@@ -1020,8 +1028,9 @@ var
   // and be called by TDynArray.LoadFromJSON method
   // - this unit will just set a wrapper raising an ERttiException
   // - link mormot.core.json.pas to have a working implementation
-  GetDataFromJSON: procedure(Data: pointer; var JSON: PUTF8Char; EndOfObject: PUTF8Char;
-    TypeInfo: PRttiInfo; CustomVariantOptions: PDocVariantOptions; Tolerant: boolean);
+  GetDataFromJSON: procedure(Data: pointer; var JSON: PUTF8Char;
+    EndOfObject: PUTF8Char; TypeInfo: PRttiInfo;
+    CustomVariantOptions: PDocVariantOptions; Tolerant: boolean);
 
 type
   /// function prototype to be used for TDynArray Sort and Find method
@@ -1479,7 +1488,7 @@ type
     // checksum, or optional SourceMax overflow
     // - return a non nil pointer just after the Source content on success
     // - this method will raise an ESynException for T*ObjArray types
-    function LoadFrom(Source: PAnsiChar; SourceMax: PAnsiChar = nil): PAnsiChar;
+    function LoadFrom(Source: PAnsiChar; SourceMax: PAnsiChar = nil): PAnsiChar; 
     /// unserialize the dynamic array content from a TDynArray.SaveTo binary string
     // - same as LoadFrom, and will check for any buffer overflow since we
     // know the actual end of input buffer
@@ -1619,26 +1628,22 @@ type
     // and must be a reference to a variable (you can't write ItemSave(i+10) e.g.)
     function ItemSave(Item: pointer): RawByteString;
     /// load an array element as saved by the ItemSave method into Item variable
-    // - warning: Item must be of the same exact type than the dynamic array,
-    // and must be a reference to a variable (you can't write ItemLoad(P,i+10) e.g.)
-    procedure ItemLoad(Source: PAnsiChar; Item: pointer;
-      SourceMax: PAnsiChar = nil); overload;
+    // - warning: Item must be of the same exact type than the dynamic array
+    procedure ItemLoad(Source, SourceMax: PAnsiChar; Item: pointer);
     /// load an array element as saved by the ItemSave method
     // - this overloaded method will retrieve the element as a memory buffer,
-    // which should be cleared by ItemLoadClear() before release
-    function ItemLoad(Source: PAnsiChar;
-      SourceMax: PAnsiChar = nil): RawByteString; overload;
+    // which should be cleared by ItemLoadMemClear() before release
+    function ItemLoadMem(Source, SourceMax: PAnsiChar): RawByteString;
     /// search for an array element as saved by the ItemSave method
     // - same as ItemLoad() + Find()/IndexOf() + ItemLoadClear()
     // - will call Find() method if Compare property is set
     // - will call generic IndexOf() method if no Compare property is set
-    function ItemLoadFind(Source: PAnsiChar;
-      SourceMax: PAnsiChar = nil): integer;
-    /// finalize a temporary buffer used to store an element via ItemLoad()
+    function ItemLoadFind(Source, SourceMax: PAnsiChar): integer;
+    /// finalize a temporary buffer used to store an element via ItemLoadMem()
     // - will release any managed type referenced inside the RawByteString,
     // then void the variable
     // - is just a wrapper around ItemClear(pointer(ItemTemp)) + ItemTemp := ''
-    procedure ItemLoadClear(var ItemTemp: RawByteString);
+    procedure ItemLoadMemClear(var ItemTemp: RawByteString);
 
     /// retrieve or set the number of items of the dynamic array
     // - same as length(DynArray) or SetLength(DynArray)
@@ -4624,8 +4629,8 @@ begin
     if Map.Size <> 0 then
       case Map.TextFileKind of
       isUTF8:
-          // ignore UTF-8 BOM
-          SetTextPtr(P + 3, P + Map.Size, #13#10);
+        // ignore UTF-8 BOM
+        SetTextPtr(P + 3, P + Map.Size, #13#10);
       isUnicode:
         begin
           // conversion from UTF-16 content (mainly on Windows) into UTF-8
@@ -4963,27 +4968,27 @@ begin
   result := SizeOf(pointer);
 end;
 
-function _BC_PUTF8Char(A, B: PUTF8Char; Info: PRttiInfo; out Compared: integer): PtrInt;
+function _BC_LString(A, B: PPUTF8Char; Info: PRttiInfo; out Compared: integer): PtrInt;
 begin
-  compared := StrComp(A, B);
+  compared := StrComp(A^, B^);
   result := SizeOf(pointer);
 end;
 
-function _BC_PWideChar(A, B: PWideChar; Info: PRttiInfo; out Compared: integer): PtrInt;
+function _BC_WString(A, B: PPWideChar; Info: PRttiInfo; out Compared: integer): PtrInt;
 begin
-  compared := StrCompW(A, B);
+  compared := StrCompW(A^, B^);
   result := SizeOf(pointer);
 end;
 
-function _BCI_PUTF8Char(A, B: PUTF8Char; Info: PRttiInfo; out Compared: integer): PtrInt;
+function _BCI_LString(A, B: PPUTF8Char; Info: PRttiInfo; out Compared: integer): PtrInt;
 begin
-  compared := StrIComp(A, B);
+  compared := StrIComp(A^, B^);
   result := SizeOf(pointer);
 end;
 
-function _BCI_PWideChar(A, B: PWideChar; Info: PRttiInfo; out Compared: integer): PtrInt;
+function _BCI_WString(A, B: PPWideChar; Info: PRttiInfo; out Compared: integer): PtrInt;
 begin
-  compared := AnsiICompW(A, B);
+  compared := AnsiICompW(A^, B^);
   result := SizeOf(pointer);
 end;
 
@@ -5007,7 +5012,7 @@ var
   sav: TRttiBinarySave;
 begin
   Info := Info^.DynArrayItemType(itemsize);
-  Dest.Write1(0); // no stored itemsize for 32-bit/64-bit compatibility
+  Dest.WriteVarUInt32(itemsize); // may vary on 32-bit/64-bit compatibility
   Dest.Write1(DelphiType(Info));
   Data := PPointer(Data)^; // de-reference pointer to array data
   if Data = nil then
@@ -5043,12 +5048,24 @@ end;
 function DynArrayLoad(var Value; Source: PAnsiChar; TypeInfo: PRttiInfo;
   TryCustomVariants: PDocVariantOptions): PAnsiChar;
 begin
-  result := BinaryLoad(@Value, source, TypeInfo, nil, nil, [rkDynArray], TryCustomVariants);
+  result := BinaryLoad(
+    @Value, source, TypeInfo, nil, nil, [rkDynArray], TryCustomVariants);
 end;
 
 function DynArraySave(var Value; TypeInfo: PRttiInfo): RawByteString;
 begin
   result := BinarySave(@Value, TypeInfo, [rkDynArray]);
+end;
+
+function DynArrayLoadHeader(var Source: TFastReader;
+  ArrayInfo, ItemInfo: PRttiInfo): integer;
+begin
+  Source.VarNextInt; // ignore stored itemsize for 32-bit/64-bit compatibility
+  if Source.NextByte <> DelphiType(ItemInfo) then
+    Source.ErrorData('RTTI_BINARYLOAD[rkDynArray] failed for %', [ArrayInfo.RawName]);
+  result := Source.VarUInt32;
+  if result <> 0 then
+    Source.Next4; // ignore deprecated Hash32 checksum (0 stored now)
 end;
 
 function _BL_DynArray(Data: PAnsiChar; var Source: TFastReader; Info: PRttiInfo): PtrInt;
@@ -5058,16 +5075,12 @@ var
   load: TRttiBinaryLoad;
 begin
   iteminfo := Info^.DynArrayItemType(itemsize);
-  Source.VarNextInt; // ignore stored itemsize for 32-bit/64-bit compatibility
-  if Source.NextByte <> DelphiType(iteminfo) then
-    Source.ErrorData('RTTI_BINARYLOAD[rkDynArray] failed for %', [Info.Name^]);
+  n := DynArrayLoadHeader(Source, Info, iteminfo);
   if PPointer(Data)^ <> nil then
     FastDynArrayClear(pointer(Data), iteminfo);
-  n := Source.VarUInt32;
-  Source.Next4; // ignore legacy Hash32 checksum (was to avoid buffer overflow)
   if n > 0 then
   begin
-    DynArraySetLength(pointer(Data), Info, 1, @n); // allocate memory
+    DynArrayNew(pointer(Data), n, itemsize); // allocate zeroed  memory
     Data := PPointer(Data)^; // point to first item
     if iteminfo = nil then
       Source.Copy(Data, itemsize * n)
@@ -5615,7 +5628,17 @@ end;
 
 {$endif PUREMORMOT2}
 
-function BinarySave(Data: pointer; Info: PRttiInfo; Kinds: TRttiKinds): RawByteString;
+procedure BinarySave(Data: pointer; Info: PRttiInfo; Dest: TBufferWriter);
+var
+  save: TRttiBinarySave;
+begin
+  save := RTTI_BINARYSAVE[Info^.Kind];
+  if Assigned(save) then
+    save(Data, Dest, Info);
+end;
+
+function BinarySave(Data: pointer; Info: PRttiInfo;
+  Kinds: TRttiKinds): RawByteString;
 var
   W: TBufferWriter;
   temp: TTextWriterStackBuffer; // 8KB
@@ -5637,16 +5660,8 @@ begin
     result := '';
 end;
 
-procedure BinarySave(Data: pointer; Info: PRttiInfo; Dest: TBufferWriter);
-var
-  save: TRttiBinarySave;
-begin
-  save := RTTI_BINARYSAVE[Info^.Kind];
-  if Assigned(save) then
-    save(Data, Dest, Info);
-end;
-
-function BinarySaveBytes(Data: pointer; Info: PRttiInfo; Kinds: TRttiKinds): TBytes;
+function BinarySaveBytes(Data: pointer; Info: PRttiInfo;
+  Kinds: TRttiKinds): TBytes;
 var
   W: TBufferWriter;
   temp: TTextWriterStackBuffer; // 8KB
@@ -5862,6 +5877,9 @@ end;
 function RecordLoad(var Rec; Source: PAnsiChar; TypeInfo: PRttiInfo;
   Len: PInteger; SourceMax: PAnsiChar; TryCustomVariants: PDocVariantOptions): PAnsiChar;
 begin
+  if SourceMax = nil then
+    // backward compatible: assume fake 100MB Source input buffer
+    SourceMax := Source + 100 shl 20;
   result := BinaryLoad(@Rec, Source, TypeInfo, Len, SourceMax,
     rkRecordTypes, TryCustomVariants);
 end;
@@ -6295,7 +6313,7 @@ end;
 
 procedure TDynArray.SaveTo(W: TBufferWriter);
 begin
-  DynArraySave(pointer(fValue), fCountP, W, Info.Cache.ItemInfo);
+  DynArraySave(pointer(fValue), fCountP, W, Info.Info);
 end;
 
 procedure TDynArray.SaveToStream(Stream: TStream);
@@ -6328,9 +6346,12 @@ begin
   end;
 end;
 
-function TDynArray.LoadFrom(Source: PAnsiChar; SourceMax: PAnsiChar): PAnsiChar;
+function TDynArray.LoadFrom(Source, SourceMax: PAnsiChar): PAnsiChar;
 begin
-  result := BinaryLoad(fValue, Source, Info.Cache.ItemInfo, nil, SourceMax, [rkDynArray]);
+  if SourceMax = nil then
+    // backward compatible: assume fake 100MB Source input buffer
+    SourceMax := Source + 100 shl 20;
+  result := BinaryLoad(fValue, Source, Info.Info, nil, SourceMax, [rkDynArray]);
 end;
 
 procedure TDynArray.LoadFromStream(Stream: TCustomMemoryStream);
@@ -6339,13 +6360,13 @@ var
 begin
   S := PAnsiChar(Stream.Memory);
   P := S + Stream.Position;
-  P := BinaryLoad(fValue, P, Info.Cache.ItemInfo, nil, S + Stream.Size, [rkDynArray]);
+  P := BinaryLoad(fValue, P, Info.Info, nil, S + Stream.Size, [rkDynArray]);
   Stream.Seek(P - S, soFromBeginning);
 end;
 
 function TDynArray.LoadFromBinary(const Buffer: RawByteString): boolean;
 begin
-  result := BinaryLoad(fValue, Buffer, Info.Cache.ItemInfo, [rkDynArray]);
+  result := BinaryLoad(fValue, Buffer, Info.Info, [rkDynArray]);
 end;
 
 function TDynArray.SaveToJSON(EnumSetsAsText: boolean; reformat: TTextWriterJSONFormat): RawUTF8;
@@ -6396,19 +6417,20 @@ begin
   end;
 end;
 
-procedure _GetDataFromJSON(Data: pointer; var JSON: PUTF8Char; EndOfObject: PUTF8Char;
-  TypeInfo: PRttiInfo; CustomVariantOptions: PDocVariantOptions; Tolerant: boolean);
+procedure _GetDataFromJSON(Data: pointer; var JSON: PUTF8Char;
+  EndOfObject: PUTF8Char; TypeInfo: PRttiInfo;
+  CustomVariantOptions: PDocVariantOptions; Tolerant: boolean);
 begin
-  raise ERttiException.Create('GetDataFromJSON() not available - include ' +
-    'mormot.core.json.pas in your uses clause');
+  raise ERttiException.Create('_GetDataFromJSON not implemented - ' +
+    'please include mormot.core.json in your uses clause');
 end;
 
 function TDynArray.LoadFromJSON(P: PUTF8Char; EndOfObject: PUTF8Char;
   CustomVariantOptions: PDocVariantOptions; Tolerant: boolean): PUTF8Char;
 begin
   SetCount(0); // faster to use our own routine now
-  GetDataFromJSON(fValue, P, EndOfObject, Info.Cache.ItemInfo,
-    CustomVariantOptions, Tolerant);
+  GetDataFromJSON(fValue,
+    P, EndOfObject, Info.Info, CustomVariantOptions, Tolerant);
   result := P;
 end;
 
@@ -6461,7 +6483,8 @@ begin
           n := result - 1;
       until L > n;
     end
-    else // array is not sorted, or aIndex=nil -> use O(n) iterating search
+    else
+      // array is not sorted, or aIndex=nil -> use O(n) iterating search
       for result := 0 to n do
         if aCompare(P^, Item) = 0 then
           exit
@@ -7059,7 +7082,8 @@ begin
   fCountP := nil;
 end;
 
-procedure TDynArray.AddDynArray(aSource: PDynArray; aStartIndex: integer; aCount: integer);
+procedure TDynArray.AddDynArray(aSource: PDynArray;
+  aStartIndex: integer; aCount: integer);
 var
   SourceCount: integer;
 begin
@@ -7067,10 +7091,12 @@ begin
      (aSource^.fValue <> nil) and
      (fInfo.Cache.ItemInfo = aSource^.fInfo.Cache.ItemInfo) then
   begin
+    // check supplied aCount paramter with (external) Source.Count
     SourceCount := aSource^.Count;
     if (aCount < 0) or
        (aCount > SourceCount) then
-      aCount := SourceCount; // force use of external Source.Count, if any
+      aCount := SourceCount;
+    // actually add the items
     AddArray(aSource.fValue^, aStartIndex, aCount);
   end;
 end;
@@ -7104,7 +7130,7 @@ begin
     result := CompareMem(fValue^, B.fValue^, ElemSize * cardinal(n))
   else
     result := DynArrayCompare(pointer(fValue), pointer(B.fValue),
-      fCountP, B.fCountP, fInfo.Cache.ItemInfo, casesensitive) = 0;
+      fCountP, B.fCountP, fInfo.Info, casesensitive) = 0;
 end;
 
 function TDynArray.Compares(B: PDynArray; IgnoreCompare, CaseSensitive: boolean): integer;
@@ -7139,7 +7165,7 @@ begin
     result := StrCompL(fValue^, B.fValue^, ElemSize * cardinal(n))
   else
     result := DynArrayCompare(pointer(fValue), pointer(B.fValue),
-      fCountP, B.fCountP, fInfo.Cache.ItemInfo, casesensitive);
+      fCountP, B.fCountP, fInfo.Info, casesensitive);
 end;
 
 procedure TDynArray.Copy(Source: PDynArray; ObjArrayByRef: boolean);
@@ -7152,7 +7178,7 @@ begin
     LoadFromJSON(pointer(Source.SaveToJSON))
   else
   begin
-    DynArrayCopy(fValue^, Source.fValue^, fInfo.Cache.ItemInfo, Source.fCountP);
+    DynArrayCopy(fValue^, Source.fValue^, fInfo.Info, Source.fCountP);
     if fCountP <> nil then
       fCountP^ := GetCapacity;
   end;
@@ -7231,7 +7257,8 @@ begin // this method is faster than default System.DynArraySetLength() function
   if NewLength = 0 then
   begin
     if p <> nil then
-    begin // FastDynArrayClear() with ObjArray support
+    begin
+      // FastDynArrayClear() with ObjArray support
       dec(p);
       if (p^.refCnt >= 0) and
          RefCntDecFree(p^.refCnt) then
@@ -7419,7 +7446,7 @@ begin
     aCount := n - aFirstIndex;
   dst.InitRtti(fInfo, Dest);
   dst.SetCapacity(aCount);
-  CopySeveral(PPointer(Dest)^, @(PByteArray(fValue^)[aFirstIndex * ElemSize]),
+  CopySeveral(pointer(Dest), @(PByteArray(fValue^)[aFirstIndex * ElemSize]),
     aCount, fInfo.Cache.ItemInfo, ElemSize);
 end;
 
@@ -7450,7 +7477,7 @@ begin
   CopySeveral(PD, PS, aCount, fInfo.Cache.ItemInfo, ElemSize);
 end;
 
-function TDynArray.ItemLoad(Source: PAnsiChar; SourceMax: PAnsiChar): RawByteString;
+function TDynArray.ItemLoadMem(Source, SourceMax: PAnsiChar): RawByteString;
 begin
   if (Source <> nil) and
      (fInfo.Cache.ItemInfo = nil) then
@@ -7463,14 +7490,7 @@ begin
   end;
 end;
 
-procedure TDynArray.ItemLoadClear(var ItemTemp: RawByteString);
-begin
-  ItemClear(pointer(ItemTemp));
-  ItemTemp := '';
-end;
-
-procedure TDynArray.ItemLoad(Source: PAnsiChar; Item: pointer;
-  SourceMax: PAnsiChar);
+procedure TDynArray.ItemLoad(Source, SourceMax: PAnsiChar; Item: pointer);
 begin
   if Source <> nil then // avoid GPF
     if fInfo.Cache.ItemInfo = nil then
@@ -7481,6 +7501,12 @@ begin
     end
     else
       BinaryLoad(Item, Source, fInfo.Cache.ItemInfo, nil, SourceMax, rkAllTypes);
+end;
+
+procedure TDynArray.ItemLoadMemClear(var ItemTemp: RawByteString);
+begin
+  ItemClear(pointer(ItemTemp));
+  ItemTemp := '';
 end;
 
 function TDynArray.ItemSave(Item: pointer): RawByteString;
@@ -7712,6 +7738,7 @@ begin
 end;
 
 const
+  // copied into global PT_HASH[] var in interface section of this unit
   _PT_HASH: array[{caseinsensitive=}boolean, TRttiParserType] of pointer = (
    (nil, nil, @HashByte, @HashByte, @HashInteger, @HashInt64, @HashInt64,
     @HashExtended, @HashInt64, @HashInteger, @HashInt64, @HashAnsiString,
@@ -7869,7 +7896,7 @@ begin
       exit;
     end
     else if not aForAdd and
-                (HashOne(P + ndx * siz) = aHashCode) then
+            (HashOne(P + ndx * siz) = aHashCode) then
     begin
       result := ndx;
       exit;
@@ -8678,8 +8705,11 @@ function TSynQueue.PopEquals(aAnother: pointer; aCompare: TDynArraySortCompare;
 begin
   fSafe.Lock;
   try
-    result := (fFirst >= 0) and Assigned(aCompare) and Assigned(aAnother) and
-      (aCompare(fValues.ItemPtr(fFirst)^, aAnother^) = 0) and Pop(aValue);
+    result := (fFirst >= 0) and
+              Assigned(aCompare) and
+              Assigned(aAnother) and
+              (aCompare(fValues.ItemPtr(fFirst)^, aAnother^) = 0) and
+              Pop(aValue);
   finally
     fSafe.UnLock;
   end;
@@ -8715,11 +8745,13 @@ begin
   try
     endtix := GetTickCount64 + aTimeoutMS;
     repeat
-      if Assigned(aCompared) and Assigned(aCompare) then
+      if Assigned(aCompared) and
+         Assigned(aCompare) then
         result := PopEquals(aCompared, aCompare, aValue)
       else
         result := Pop(aValue);
-    until result or InternalWaitDone(endtix, aWhenIdle);
+    until result or
+          InternalWaitDone(endtix, aWhenIdle);
   finally
     InternalDestroying(-1);
   end;
@@ -8912,15 +8944,15 @@ begin
           if k = rkLString then
           begin
             RTTI_BINARYLOAD[k] := @_BL_LString;
-            RTTI_COMPARE[false, k] := @_BC_PUTF8Char;
-            RTTI_COMPARE[true, k] := @_BCI_PUTF8Char;
+            RTTI_COMPARE[false, k] := @_BC_LString;
+            RTTI_COMPARE[true, k] := @_BCI_LString;
           end
           {$ifdef HASVARUSTRING}
           else if k = rkUString then
           begin
             RTTI_BINARYLOAD[k] := @_BL_UString;
-            RTTI_COMPARE[false, k] := @_BC_PWideChar;
-            RTTI_COMPARE[true, k] := @_BCI_PWideChar;
+            RTTI_COMPARE[false, k] := @_BC_WString;
+            RTTI_COMPARE[true, k] := @_BCI_WString;
           end;
           {$endif HASVARUSTRING}
         end; // rkLStringOld not generated any more
@@ -8928,8 +8960,8 @@ begin
         begin
           RTTI_BINARYSAVE[k] := @_BS_WString;
           RTTI_BINARYLOAD[k] := @_BL_WString;
-          RTTI_COMPARE[false, k] := @_BC_PWideChar;
-          RTTI_COMPARE[true, k] := @_BCI_PWideChar;
+          RTTI_COMPARE[false, k] := @_BC_WString;
+          RTTI_COMPARE[true, k] := @_BCI_WString;
         end;
       {$ifdef FPC} rkObject, {$endif} rkRecord:
         begin
@@ -8973,8 +9005,6 @@ end;
 
 initialization
   InitializeUnit;
-
-finalization
 
 end.
 

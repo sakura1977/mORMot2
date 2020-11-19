@@ -2039,7 +2039,8 @@ function FromVarInt32(var Source: PByte): integer;
 var
   c: cardinal;
   p: PByte;
-begin // fast stand-alone function with no FromVarUInt32 call
+begin
+  // fast stand-alone function with no FromVarUInt32 call
   p := Source;
   result := p^;
   inc(p);
@@ -3349,6 +3350,7 @@ constructor TBufferWriter.Create(aStream: TStream;
   aTempBuf: pointer; aTempLen: integer);
 begin
   fBufLen := aTempLen;
+  fBufLen16 := fBufLen - 16;
   fBuffer := aTempBuf;
   fStream := aStream;
 end;
@@ -8194,4 +8196,5 @@ initialization
 
 finalization
   FinalizeUnit;
+  
 end.

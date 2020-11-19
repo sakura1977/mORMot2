@@ -458,7 +458,8 @@ type
     ifHasGuid,
     ifDispInterface,
     ifDispatch
-    {$ifdef FPC} , ifHasStrGUID {$endif});
+    {$ifdef FPC} ,
+    ifHasStrGUID {$endif});
 
   /// define the set of interface abilities
   TRttiIntfFlags = set of TRttiIntfFlag;
@@ -583,7 +584,7 @@ type
     /// the declared name of the type ('String','Word','RawUnicode'...)
     // - on FPC, will adjust 'integer'/'cardinal' from 'longint'/'longword' RTTI
     function Name: PShortString;
-      {$ifdef HASINLINE}inline;{$endif}
+      {$ifdef ISDELPHI2006ANDUP}inline;{$endif}
     /// efficiently finalize any (managed) type value
     // - do nothing for unmanaged types (e.g. integer)
     // - if you are sure that your type is managed, you may call directly
@@ -1454,6 +1455,11 @@ function FastRecordClear(Value: pointer; Info: PRttiInfo): PtrInt;
 procedure RawUTF8DynArrayClear(var Value: TRawUTF8DynArray);
   {$ifdef HASINLINE}inline;{$endif}
 
+/// check if the TypeInfo() points to an "array of RawUTF8"
+// - e.g. returns true for TypeInfo(TRawUTF8DynArray) or other sub-types
+// defined as "type aNewType = type TRawUTF8DynArray"
+function IsRawUTF8DynArray(Info: PRttiInfo): boolean;
+
 /// initialize a record content
 // - calls FastRecordClear() and FillCharFast() with 0
 // - do nothing if the TypeInfo is not from a record/object
@@ -1467,6 +1473,19 @@ procedure RecordCopy(var Dest; const Source; Info: PRttiInfo);
 // - faster than the RTL CopyArray() function
 procedure CopySeveral(Dest, Source: PByte; SourceCount: PtrInt;
   ItemInfo: PRttiInfo; ItemSize: PtrInt);
+
+/// low-level initialization of a dynamic array
+// - faster than System.DynArraySetLength() function on a void dynamic array,
+// when the RTTI is known
+// - caller should ensure that Dest is not nil, but Dest^ = nil (i.e. a
+// clear/void dynamic array)
+function DynArrayNew(Dest: PPointer; Count, ItemSize: PtrInt): pointer;
+
+/// low-level size up of a dynamic array
+// - faster than System.DynArraySetLength() function dynamic array with RefCnt=1
+// - caller should ensure that Dest is not nil
+// - DataBytes is expected to be Count * ItemSize
+function DynArrayGrow(Dest: PPointer; Count, ItemSize: PtrInt): PAnsiChar;
 
 /// create a dynamic array from another one
 // - same as RTTI_COPY[rkDynArray] but with an optional external source count
@@ -2861,7 +2880,8 @@ begin
     result := CP_RAWBLOB
   else
   {$ifdef HASCODEPAGE}
-  if Kind = rkLString then // has rkLStringOld any codepage? -> UTF-8
+  if Kind = rkLString then
+    // has rkLStringOld any codepage? don't think so -> UTF-8
     result := GetTypeData(@self)^.CodePage
   else
     result := CP_UTF8; // default is UTF-8
@@ -4653,6 +4673,18 @@ begin
   FastDynArrayClear(@Value, TypeInfo(RawUTF8));
 end;
 
+function IsRawUTF8DynArray(Info: PRttiInfo): boolean;
+var
+  r: TRttiCustom;
+begin
+  r := Rtti.RegisterType(Info);
+  if r <> nil then
+    r := r.ArrayRtti;
+  result := (r <> nil) and
+            (r.Parser = ptRawUTF8) and
+            (r.Cache.Info.AnsiStringCodePage = CP_UTF8);
+end;
+
 procedure _RecordClearSeveral(v: PAnsiChar; info: PRttiInfo; n: integer);
 var
   fields: TRttiRecordManagedFields;
@@ -4713,10 +4745,18 @@ var
 begin
   //  caller ensured ElemTypeInfo<>nil and Count>0
   case ElemTypeInfo^.Kind of
-    rkRecord {$ifdef FPC} , rkObject {$endif}:
+    {$ifdef FPC}
+    rkObject,
+    {$endif FPC}
+    rkRecord:
       // retrieve ElemTypeInfo.RecordManagedFields once
       _RecordClearSeveral(pointer(Value), ElemTypeInfo, Count);
-    {$ifdef HASVARUSTRING} rkUString, {$endif} {$ifdef FPC} rkLStringOld, {$endif}
+    {$ifdef FPC}
+    rkLStringOld,
+    {$endif FPC}
+    {$ifdef HASVARUSTRING}
+    rkUString,
+    {$endif HASVARUSTRING}
     rkLString:
       // optimized loop for AnsiString / UnicodeString (PStrRec header)
       _StringClearSeveral(pointer(Value), Count);
@@ -4804,30 +4844,44 @@ var
   fields: TRttiRecordManagedFields;
   f: PRttiRecordField;
   p: PRttiInfo;
-  i: PtrInt;
+  i, offset: PtrUInt;
   cop: PRttiCopiers;
 begin
   Info^.RecordManagedFields(fields); // retrieve RTTI once for all items
-  if fields.Count > 0 then
-  begin
-    cop := @RTTI_COPY;
-    repeat
+  cop := @RTTI_COPY;
+  repeat
+    i := fields.Count;
+    offset := 0;
+    if i > 0 then
+    begin
       f := fields.Fields;
-      i := fields.Count;
       repeat
         p := f^.{$ifdef HASDIRECTTYPEINFO}TypeInfo{$else}TypeInfoRef^{$endif};
         {$ifdef FPC_OLDRTTI}
-        if Assigned(cop[p^.Kind]) then
+        if Info^.Kind in rkManagedTypes then
         {$endif FPC_OLDRTTI}
-          cop[p^.Kind](Dest + f^.Offset, Source + f^.Offset, p);
+        begin
+          offset := f^.Offset - offset;
+          if offset <> 0 then
+          begin
+            MoveFast(Source^, Dest^, offset);
+            inc(Source, offset);
+            inc(Dest, offset);
+          end;
+          offset := cop[p^.Kind](Dest, Source, p);
+          inc(Source, offset);
+          inc(Dest, offset);
+          inc(offset, f^.Offset);
+        end;
         inc(f);
         dec(i);
       until i = 0;
-      inc(Source, fields.Size);
-      inc(Dest, fields.Size);
-      dec(n);
-    until n = 0;
-  end;
+    end;
+    offset := PtrUInt(fields.Size) - offset;
+    if offset <> 0 then
+      MoveFast(Source^, Dest^, offset);
+    dec(n);
+  until n = 0;
 end;
 
 procedure CopySeveral(Dest, Source: PByte; SourceCount: PtrInt;
@@ -4857,6 +4911,29 @@ begin
     end;
 end;
 
+function DynArrayNew(Dest: PPointer; Count, ItemSize: PtrInt): pointer;
+begin
+  result := AllocMem(Count * ItemSize +  SizeOf(TDynArrayRec));
+  PDynArrayRec(result)^.refCnt := 1;
+  PDynArrayRec(result)^.length := Count;
+  inc(PDynArrayRec(result));
+  Dest^ := result;
+end;
+
+function DynArrayGrow(Dest: PPointer; Count, ItemSize: PtrInt): PAnsiChar;
+var
+  old: PtrInt;
+begin
+  result := Dest^;
+  dec(PDynArrayRec(result));
+  ReallocMem(result, (Count * ItemSize) + SizeOf(TDynArrayRec));
+  old := PDynArrayRec(result)^.length * ItemSize;
+  PDynArrayRec(result)^.length := Count;
+  inc(PDynArrayRec(result));
+  FillCharFast(result[old], (Count - old) * ItemSize, 0);
+  Dest^ := result;
+end;
+
 procedure DynArrayCopy(Dest, Source: PPointer; Info: PRttiInfo;
   SourceExtCount: PInteger);
 var
@@ -4872,8 +4949,8 @@ begin
     if SourceExtCount <> nil then
       n := SourceExtCount^
     else
-      n := PDynArrayRec(PAnsiChar(Source) - SizeOf(TDynArrayRec))^.length;
-    DynArraySetLength(Dest^, Info, 1, @n); // allocate memory
+      n := PDALen(PAnsiChar(Source) - _DALEN)^ + _DAOFF;
+    DynArrayNew(Dest^, n, itemsize); // allocate zeroed memory
     CopySeveral(Dest^, pointer(Source), n, iteminfo, itemsize);
   end;
 end;
@@ -4888,11 +4965,11 @@ begin
   dec(p);
   if (p^.refCnt < 0) or
      ((p^.refCnt > 1) and
-     not RefCntDecFree(p^.refCnt)) then
+      not RefCntDecFree(p^.refCnt)) then
   begin
     n := p^.length;
-    DynArraySetLength(pointer(Value), Info, 1, @n);
     Info := Info^.DynArrayItemType(elemsize);
+    DynArrayNew(Value, n, elemsize); // allocate zeroed memory
     inc(p);
     CopySeveral(pointer(p), Value^, n, Info, elemsize);
   end;
@@ -4979,7 +5056,7 @@ var
   n: PtrInt;
   fin: TRttiFinalizer;
 begin
-  Info^.ArrayItemType(n, result);
+  Info := Info^.ArrayItemType(n, result);
   if Info = nil then
     FillCharFast(V^, result, 0)
   else
@@ -5097,10 +5174,11 @@ var
   fields: TRttiRecordManagedFields; // Size/Count/Fields
   offset: PtrUInt;
   f: PRttiRecordField;
+  cop: PRttiCopiers;
 begin
   Info^.RecordManagedFields(fields);
   f := fields.Fields;
-  fields.Fields := @RTTI_COPY; // reuse pointer slot on stack
+  cop := @RTTI_COPY; 
   offset := 0;
   while fields.Count <> 0 do
   begin
@@ -5117,7 +5195,7 @@ begin
         inc(Source, offset);
         inc(Dest, offset);
       end;
-      offset := PRttiCopiers(fields.Fields)[Info^.Kind](Dest, Source, Info);
+      offset := cop[Info^.Kind](Dest, Source, Info);
       inc(Source, offset);
       inc(Dest, offset);
       inc(offset, f^.Offset);
@@ -5141,7 +5219,7 @@ var
   n, itemsize: PtrInt;
   cop: TRttiCopier;
 begin
-  Info^.ArrayItemType(n, result);
+  Info := Info^.ArrayItemType(n, result);
   if Info = nil then
     MoveFast(Source^, Dest^, result)
   else
@@ -6107,14 +6185,18 @@ begin
           pt := DynArrayTypeInfoToStandardParserType(aInfo, fCache.ItemInfo,
             fCache.ItemSize, {exacttype=}true, dummy, @pct);
           fArrayFirstField := pt;
-          fCache.ItemInfo := ParserTypeToTypeInfo(pt, pct);
-        end;
-        fArrayRtti := Rtti.RegisterType(fCache.ItemInfo);
-        if (fArrayFirstField = ptNone) and
-           (fArrayRtti.Kind in rkRecordOrDynArrayTypes) then
-          // guess first field (using fProps[0] would break compatibility)
-          fArrayFirstField := DynArrayTypeInfoToStandardParserType(
-            aInfo, fCache.ItemInfo, fCache.ItemSize, {exacttype=}false, dummy);
+          fArrayRtti := Rtti.RegisterType(ParserTypeToTypeInfo(pt, pct));
+        end
+        else
+          fArrayRtti := Rtti.RegisterType(fCache.ItemInfo);
+        if (fArrayRtti <> nil) and
+           (fArrayFirstField = ptNone) then
+          if fArrayRtti.Kind in rkRecordOrDynArrayTypes then
+            // guess first field (using fProps[0] would break compatibility)
+            fArrayFirstField := DynArrayTypeInfoToStandardParserType(
+              aInfo, fCache.ItemInfo, fCache.ItemSize, {exacttype=}false, dummy)
+          else
+            fArrayFirstField := fArrayRtti.Parser;
       end;
     rkArray:
       fArrayRtti := Rtti.RegisterType(fCache.ItemInfo);
@@ -6162,7 +6244,7 @@ begin
       [self, ToText(ParserType)^]);
   end;
   // create fake RTTI which should be enough for our purpose
-  SetLength(fNoRttiInfo, length(TypeName) + 32); // all filled with zeros
+  SetLength(fNoRttiInfo, length(TypeName) + 64); // all filled with zeros
   fCache.Info := pointer(fNoRttiInfo);
   fCache.Info.Kind := fCache.Kind;
   if TypeName = '' then
@@ -7149,12 +7231,12 @@ begin
   PatchCode(@fpc_ansistr_incr_ref, @_ansistr_incr_ref, $17); // fpclen=$2f
   PatchJmp(@fpc_ansistr_decr_ref, @_ansistr_decr_ref, $27); // fpclen=$3f
   PatchJmp(@fpc_ansistr_assign, @_ansistr_assign, $3f);    // fpclen=$3f
-  PatchCode(@fpc_ansistr_compare, @_ansistr_compare,$77);   // fpclen=$12f
-  PatchCode(@fpc_ansistr_compare_equal, @_ansistr_compare_equal,$57); // =$cf
-  PatchCode(@fpc_unicodestr_incr_ref, @_ansistr_incr_ref, $17); // fpclen=$2f
-  PatchJmp(@fpc_unicodestr_decr_ref, @_ansistr_decr_ref, $27);  // fpclen=$3f
-  PatchJmp(@fpc_unicodestr_assign, @_ansistr_assign, $3f);      // fpclen=$3f
-  PatchCode(@fpc_dynarray_incr_ref, @_dynarray_incr_ref, $17);  // fpclen=$2f
+  PatchCode(@fpc_ansistr_compare, @_ansistr_compare,$77); // fpclen=$12f
+  PatchCode(@fpc_ansistr_compare_equal, @_ansistr_compare_equal,$57); // fpc=$cf
+  PatchCode(@fpc_unicodestr_incr_ref, @_ansistr_incr_ref, $17);      // fpc=$2f
+  PatchJmp(@fpc_unicodestr_decr_ref, @_ansistr_decr_ref, $27);      // fpc=$3f
+  PatchJmp(@fpc_unicodestr_assign, @_ansistr_assign, $3f);         // fpc=$3f
+  PatchCode(@fpc_dynarray_incr_ref, @_dynarray_incr_ref, $17);    // fpc=$2f
   PatchJmp(@fpc_dynarray_clear, @_dynarray_decr_ref, $2f,
     PtrUInt(@_dynarray_decr_ref_free));
   RedirectCode(@fpc_dynarray_decr_ref, @fpc_dynarray_clear);
@@ -7196,5 +7278,6 @@ initialization
 
 finalization
   FinalizeUnit;
+  
 end.
 
