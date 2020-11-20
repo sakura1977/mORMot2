@@ -1672,16 +1672,22 @@ asm
 {$endif FPCMM_LOCKLESSFREE}
 end;
 
+{$ifdef FPCMM_REPORTMEMORYLEAKS}
+const
+  /// mark freed blocks with 00000000 BLOODLESS marker to track incorrect usage
+  REPORTMEMORYLEAK_FREEDHEXSPEAK = $B100D1E55;
+{$endif FPCMM_REPORTMEMORYLEAKS}
+
 function _FreeMem(P: pointer): PtrUInt; nostackframe; assembler;
 asm
-        xor     eax, eax
         {$ifndef MSWINDOWS}
         mov     rcx, P
         {$endif MSWINDOWS}
         test    P, P
         jz      @VoidPointer
         {$ifdef FPCMM_REPORTMEMORYLEAKS}
-        mov     qword ptr [P], rax // reset TObject VMT or string/dynarray header
+        mov     eax, REPORTMEMORYLEAK_FREEDHEXSPEAK // 00000000 BLOODLESS marker
+        mov     qword ptr [P], rax // over TObject VMT or string/dynarray header
         {$endif FPCMM_REPORTMEMORYLEAKS}
         mov     rdx, qword ptr [P - BlockHeaderSize]
         {$ifndef FPCMM_ASSUMEMULTITHREAD}
@@ -1715,7 +1721,7 @@ asm
         mov     eax, $100
   lock  cmpxchg byte ptr [rbx].TSmallBlockType.BlockTypeLocked, ah
         je      @FreeAndUnlock
-        @CheckTinySmallLock:
+@CheckTinySmallLock:
         {$ifdef FPCMM_LOCKLESSFREE}
         // Try to put rcx=P in TSmallBlockType.BinInstance[]
         cmp     byte ptr [rbx].TSmallBlockType.BinCount, SmallBlockBinCount

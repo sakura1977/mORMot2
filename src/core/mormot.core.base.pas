@@ -887,9 +887,16 @@ procedure Int64ToCurrency(const i: Int64; c: PCurrency); overload;
 
 /// no banker rounding into two digits after the decimal point
 // - #.##51 will round to #.##+0.01 and #.##50 will be truncated to #.##
-// - due to floating point number limitations, some numbers may have inifinite
-// digits encoded (e.g. 1.333333): display should ignore the additional digits
-function SimpleRoundTo2Digits(const d: double): double;
+// - implementation will use fast Int64 math to avoid any precision loss due to
+// temporary floating-point conversion
+function SimpleRoundTo2Digits(Value: Currency): Currency;
+  {$ifdef HASINLINE}inline;{$endif}
+
+/// simple, no banker rounding of a Currency value, stored as Int64, to only 2 digits
+// - #.##51 will round to #.##+0.01 and #.##50 will be truncated to #.##
+// - implementation will use fast Int64 math to avoid any precision loss due to
+// temporary floating-point conversion
+procedure SimpleRoundTo2DigitsCurr64(var Value: Int64);
 
 /// no banker rounding into text, with two digits after the decimal point
 // - #.##51 will round to #.##+0.01 and #.##50 will be truncated to #.##
@@ -1131,7 +1138,7 @@ function CompareCardinal(const A, B: cardinal): integer;
 
 /// a comparison function for sorting 64-bit signed integer values
 function CompareInt64(const A, B: Int64): integer;
-  {$ifdef FPC_OR_UNICODE}inline;{$endif}
+  {$ifdef HASINLINE}inline;{$endif}
 
 /// a comparison function for sorting 32/64-bit signed integer values
 function ComparePtrInt(const A, B: PtrInt): integer;
@@ -1146,7 +1153,7 @@ function ComparePointer(const A, B: pointer): integer;
 // should better use this function or SortDynArrayQWord() to properly compare
 // two QWord values over CPUX86 on Delphi 7-2007
 function CompareQWord(const A, B: QWord): integer;
-  {$ifdef FPC_OR_UNICODE}inline;{$endif}
+  {$ifdef HASINLINE}inline;{$endif}
 
 /// fast search of an unsigned integer position in an integer array
 // - Count is the number of cardinal entries in P^
@@ -3704,21 +3711,24 @@ begin
   PVarData(@v).VCurrency := c;
 end;
 
-function SimpleRoundTo2Digits(const d: double): double;
-var
-  v: Int64;
-  m: PtrInt;
+function SimpleRoundTo2Digits(Value: Currency): Currency;
 begin
-  v := trunc(d * CURR_RES);
-  m := v mod 100;
-  if m <> 0 then
-    if m > 50 then
-      inc(v, 100 - m)
-    else if m < -50 then
-      dec(v, 100 + m)
+  SimpleRoundTo2DigitsCurr64(PInt64(@Value)^);
+  result := Value;
+end;
+
+procedure SimpleRoundTo2DigitsCurr64(var Value: Int64);
+var
+  Spare: PtrInt;
+begin
+  Spare := Value mod 100;
+  if Spare <> 0 then
+    if Spare > 50 then
+      inc(Value, 100 - Spare)
+    else if Spare < -50 then
+      dec(Value, 100 + Spare)
     else
-      dec(v, m);
-  result := v / CURR_RES;
+      dec(Value, Spare);
 end;
 
 function TwoDigits(const d: double): TShort31;
@@ -5080,6 +5090,20 @@ end;
 function CompareQword(const A, B: QWord): integer;
 begin
   result := ord(A > B) - ord(A < B);
+end;
+
+{$else}
+
+function CompareInt64(const A, B: Int64): integer;
+begin
+  // Delphi x86 compiler is not efficient at compiling Int64 comparisons
+  result := SortDynArrayInt64(A, B);
+end;
+
+function CompareQword(const A, B: QWord): integer;
+begin
+  // Delphi x86 compiler is not efficient, and oldest even incorrect
+  result := SortDynArrayQWord(A, B);
 end;
 
 {$endif FPC_OR_UNICODE}

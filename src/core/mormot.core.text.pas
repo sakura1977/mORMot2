@@ -1104,7 +1104,7 @@ type
     /// this class implementation will raise an exception
     // - use overriden TTextWriter version instead!
     procedure AddVariant(const Value: variant; Escape: TTextWriterKind = twJSONEscape;
-      WriteOptions: TTextWriterWriteObjectOptions = [woFullExpand]); virtual;
+      WriteOptions: TTextWriterWriteObjectOptions = []); virtual;
     /// this class implementation will raise an exception
     // - use overriden TTextWriter version instead!
     // - TypeInfo is a PRttiInfo instance - but not available in this early unit
@@ -2374,6 +2374,12 @@ procedure GUIDToShort(const
 // - this will be the format used for JSON encoding, e.g.
 // $ { "UID": "C9A646D3-9C61-4CB7-BFCD-EE2522C8F633" }
 function TextToGUID(P: PUTF8Char; guid: PByteArray): PUTF8Char;
+
+/// convert some VCL text into a TGUID
+// - expect e.g. '{3F2504E0-4F89-11D3-9A0C-0305E82C3301}' (with the {})
+// - return {00000000-0000-0000-0000-000000000000} if the supplied text buffer
+// is not a valid TGUID
+function StringToGUID(const text: string): TGUID;
 
 /// convert some UTF-8 encoded text into a TGUID
 // - expect e.g. '{3F2504E0-4F89-11D3-9A0C-0305E82C3301}' (with the {})
@@ -10409,6 +10415,29 @@ begin
   result := P;
 end;
 
+function StringToGUID(const text: string): TGUID;
+{$ifdef UNICODE}
+var
+  tmp: array[0..35] of byte;
+  i: integer;
+{$endif UNICODE}
+begin
+  if (length(text) = 38) and
+     (text[1] = '{') and
+     (text[38] = '}') then
+  begin
+    {$ifdef UNICODE}
+    for i := 0 to 35 do
+      tmp[i] := PWordArray(text)[i + 1];
+    if TextToGUID(@tmp, @result) <> nil then
+    {$else}
+    if TextToGUID(@text[2], @result) <> nil then
+    {$endif UNICODE}
+      exit; // conversion OK
+  end;
+  FillZero(PHash128(@result)^);
+end;
+
 function RawUTF8ToGUID(const text: RawByteString): TGUID;
 begin
   // decode from '{3F2504E0-4F89-11D3-9A0C-0305E82C3301}'
@@ -10497,6 +10526,14 @@ begin
     TwoDigitsHexLower[i][1] := HexCharsLower[i shr 4];
     TwoDigitsHexLower[i][2] := HexCharsLower[i and $f];
   end;
+  {$ifndef EXTENDEDTOSHORT_USESTR}
+    {$ifdef ISDELPHIXE}
+    SettingsUS := TFormatSettings.Create($0409);
+    {$else}
+    GetLocaleFormatSettings($0409, SettingsUS);
+    {$endif ISDELPHIXE}
+    SettingsUS.DecimalSeparator := '.'; // value may have been overriden :(
+  {$endif EXTENDEDTOSHORT_USESTR}
   {$ifdef DOUBLETOSHORT_USEGRISU}
   MoveFast(TwoDigitLookup[0], TwoDigitByteLookupW[0], SizeOf(TwoDigitLookup));
   for i := 0 to 199 do

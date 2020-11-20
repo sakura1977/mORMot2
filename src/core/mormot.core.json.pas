@@ -789,14 +789,14 @@ type
     // - this overriden version will properly handle JSON escape
     // - properly handle Value as a TRttiVarData from TRttiProp.GetValue
     procedure AddVariant(const Value: variant; Escape: TTextWriterKind = twJSONEscape;
-      WriteOptions: TTextWriterWriteObjectOptions = [woFullExpand]); override;
+      WriteOptions: TTextWriterWriteObjectOptions = []); override;
     /// append complex types as JSON content using raw TypeInfo()
     // - handle rkClass as WriteObject, rkEnumeration/rkSet with proper options,
     // rkRecord, rkDynArray or rkVariant using proper JSON serialization
     // - other types will append 'null'
     // - returns the size of the Value, in bytes
     procedure AddTypedJSON(Value, TypeInfo: pointer;
-      WriteOptions: TTextWriterWriteObjectOptions = [woFullExpand]); override;
+      WriteOptions: TTextWriterWriteObjectOptions = []); override;
     /// append complex types as JSON content using TRttiCustom
     // - called e.g. by TTextWriter.AddVariant() for varAny / TRttiVarData
     procedure AddRttiCustomJSON(Value: pointer; RttiCustom: TObject;
@@ -1637,6 +1637,8 @@ type
   // TObjectList serialized field with the global Classes.FindClass() function
   // - null will release any class instance, unless jpoNullDontReleaseObjectInstance
   // is set which will leave the instance untouched
+  // - class instances will be left untouched before parsing, unless
+  // jpoClearClassPublishedProperties is defined
   TJsonParserOption = (
     jpoIgnoreUnknownProperty,
     jpoIgnoreStringType,
@@ -1648,7 +1650,8 @@ type
     jpoAllowInt64Hex,
     jpoAllowDouble,
     jpoObjectListClassNameGlobalFindClass,
-    jpoNullDontReleaseObjectInstance);
+    jpoNullDontReleaseObjectInstance,
+    jpoClearClassPublishedProperties);
 
   /// set of options for JsonParser() parsing process
   TJsonParserOptions = set of TJsonParserOption;
@@ -4103,9 +4106,11 @@ begin
     while not (jcEndOfJSONFieldOr0 in tab[P^]) do
       inc(P); // not #0 , ] } :
     EndOfObject := P^;
-    while (P^ <= ' ') and
-          (P^ <> #0) do
-      inc(P);
+    if P^ <> #0 then
+      repeat
+        inc(P); // ignore trailing , ] } and any successive spaces
+      until (P^ > ' ') or
+            (P^ = #0);
   end;
   result := P;
 end;
@@ -7103,10 +7108,12 @@ begin
           FreeAndNil(PObject(Data)^);
         exit;
       end;
-      if PPointer(Data)^ = nil then // e.g. from _JL_DynArray for T*ObjArray
+      if PPointer(Data)^ = nil then
+        // e.g. from _JL_DynArray for T*ObjArray
         PPointer(Data)^ := TRttiJson(Ctxt.Info).fClassNewInstance(Ctxt.Info)
       else
-        Ctxt.Info.Props.FinalizeAndClearPublishedProperties(PPointer(Data)^);
+        if jpoClearClassPublishedProperties in Ctxt.Options then
+          Ctxt.Info.Props.FinalizeAndClearPublishedProperties(PPointer(Data)^);
       // class instances are accessed by reference, records are stored by value
       Data := PPointer(Data)^;
       if (rcfSynPersistentHook in Ctxt.Info.Flags) and
@@ -7173,6 +7180,7 @@ begin
           break;
         end;
       end;
+      Ctxt.ParseEnd; // mimics GetJsonField() - set Ctxt.EndOfObject
       Ctxt.Info := root; // restore
     end;
     if rcfSynPersistentHook in Ctxt.Info.Flags then
@@ -8800,6 +8808,7 @@ function TSynDictionary.LoadFromBinary(const binary: RawByteString): boolean;
 var
   plain: RawByteString;
   rdr: TFastReader;
+  n: integer;
 begin
   result := false;
   plain := fCompressAlgo.Decompress(binary);
@@ -8811,8 +8820,12 @@ begin
     try
       RTTI_BINARYLOAD[rkDynArray](fKeys.Value, rdr, fKeys.Info.Info);
       RTTI_BINARYLOAD[rkDynArray](fValues.Value, rdr, fValues.Info.Info);
-      if fKeys.Count = fValues.Count then
+      n := fKeys.Capacity;
+      if n = fValues.Capacity then
       begin
+        // RTTI_BINARYLOAD[rkDynArray]() did not set the external count
+        fSafe.Padding[DIC_KEYCOUNT].VInteger := n;
+        fSafe.Padding[DIC_VALUECOUNT].VInteger := n;      
         SetTimeouts;  // set ComputeNextTimeOut for all items
         fKeys.ReHash; // optimistic: input from safe TSynDictionary.SaveToBinary
         result := true;
@@ -8930,8 +8943,16 @@ begin
   // set Name and Flags from Props[]
   inherited SetParserType(aParser, aParserComplex);
   // handle default comparison
-  fCompare[true] := RTTI_COMPARE[true][Kind];
-  fCompare[false] := RTTI_COMPARE[false][Kind];
+  if rcfObjArray in fFlags then
+  begin
+    fCompare[true] := _BC_ObjArray;
+    fCompare[false] := _BCI_ObjArray;
+  end
+  else
+  begin
+    fCompare[true] := RTTI_COMPARE[true][Kind];
+    fCompare[false] := RTTI_COMPARE[false][Kind];
+  end;
   // handle default JSON serialization/unserialization
   if aParser = ptClass then
   begin
@@ -9159,9 +9180,10 @@ end;
 function DynArraySaveJSON(const Value; TypeInfo: PRttiInfo;
   EnumSetsAsText: boolean): RawUTF8;
 begin
-  if (PPointer(Value)^ = nil) or
-     (TypeInfo^.Kind <> rkDynArray) then
+  if TypeInfo^.Kind <> rkDynArray then
     result := NULL_STR_VAR
+  else if pointer(Value) = nil then
+    result := '[]'
   else
     result := SaveJSON(Value, TypeInfo, EnumSetsAsText);
 end;
@@ -9477,7 +9499,7 @@ end;
 function DoRegisterAutoCreateFields(ObjectInstance: TObject): TRttiCustom;
 begin
   result := Rtti.RegisterType(ObjectInstance.ClassInfo);
-  if PPPointer(PAnsiChar(ObjectInstance) + vmtAutoTable)^^ <> result then
+  if PPPointer(PPAnsiChar(ObjectInstance)^ + vmtAutoTable)^^ <> result then
     raise ERttiException.CreateUTF8('AutoCreateFields(%): unexpected vmtAutoTable',
       [ObjectInstance]); // paranoid check
   result.Props.SetAutoCreateFields;
@@ -9491,7 +9513,9 @@ var
   p: ^PRttiCustomProp;
 begin
   // faster than ClassPropertiesGet: we know it is the first slot
-  rtti := PPPointer(PAnsiChar(ObjectInstance) + vmtAutoTable)^^;
+  rtti := PPointer(PPAnsiChar(ObjectInstance)^ + vmtAutoTable)^;
+  if rtti <> nil then
+    rtti := PPointer(rtti)^;
   if (rtti = nil) or
      not (rcfAutoCreateFields in rtti.Flags) then
     rtti := DoRegisterAutoCreateFields(ObjectInstance);
@@ -9517,7 +9541,8 @@ var
   arr: PPAnsiChar;
   o: TObject;
 begin
-  props := @TRttiCustom(PPPointer(PAnsiChar(ObjectInstance) + vmtAutoTable)^^).Props;
+  props := @TRttiCustom(
+    PPPointer(PPAnsiChar(ObjectInstance)^ + vmtAutoTable)^^).Props;
   // free all published class fields
   p := pointer(props.AutoCreateClasses);
   if p <> nil then
@@ -9553,8 +9578,7 @@ end;
 constructor TPersistentAutoCreateFields.Create;
 begin
   AutoCreateFields(self);
-  inherited Create;
-end;
+end; // no need to call the void inherited TPersistentWithCustomCreate
 
 destructor TPersistentAutoCreateFields.Destroy;
 begin
@@ -9568,7 +9592,7 @@ end;
 constructor TSynAutoCreateFields.Create;
 begin
   AutoCreateFields(self);
-end; // no need to call inherited TSynPersistent.Create
+end; // no need to call the void inherited TSynPersistent
 
 destructor TSynAutoCreateFields.Destroy;
 begin
@@ -9686,7 +9710,8 @@ begin
   end;
   // initialize JSON serialization
   if Rtti.Count > 0 then
-    raise EJSONException.CreateUTF8('Rtti.Count=% at mormot.core.json start', [Rtti.Count]);
+    raise EJSONException.CreateUTF8(
+      'Rtti.Count=% at mormot.core.json start', [Rtti.Count]);
   Rtti.GlobalClass := TRttiJson;
   GetDataFromJSON := _GetDataFromJSON;
 end;
