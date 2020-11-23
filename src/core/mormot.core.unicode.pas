@@ -2341,12 +2341,17 @@ function TSynAnsiConvert.AnsiBufferToRawUTF8(Source: PAnsiChar;
   SourceChars: cardinal): RawUTF8;
 var
   tmp: TSynTempBuffer;
+  P: pointer;
 begin
   if (Source = nil) or
      (SourceChars = 0) then
     result := ''
   else
-    tmp.Done(AnsiBufferToUTF8(tmp.Init(SourceChars * 3), Source, SourceChars), result);
+  begin
+    P := tmp.Init(SourceChars * 3);
+    P := AnsiBufferToUTF8(P, Source, SourceChars);
+    tmp.Done(P, result);
+  end;
 end;
 
 constructor TSynAnsiConvert.Create(aCodePage: cardinal);
@@ -2742,7 +2747,7 @@ begin
     for i := 0 to 255 do
       A256[i] := AnsiChar(i);
     FillcharFast(U256, SizeOf(U256), 0);
-    if Unicode_AnsiToWide(A256, U256, 256, 256, fCodePage) <> 256 then
+    if PtrUInt(inherited AnsiBufferToUnicode(U256, A256, 256)) - PtrUInt(@U256) > 512 then
       // warning: CreateUTF8() uses UTF8ToString() -> call CreateFmt() now
       raise ESynUnicode.CreateFmt('OS error for %s.Create(%d)',
         [ClassName, aCodePage]);
@@ -4052,7 +4057,7 @@ var
   t, o: PtrInt;
   {$ifdef CPUX86NOTPIC}
   tab: TNormTableByte absolute NormToUpperAnsi7;
-  {$else}
+  {$else}            
   tab: PNormTableByte; // faster on PIC/ARM and x86_64
   {$endif CPUX86NOTPIC}
 begin
@@ -4064,8 +4069,9 @@ begin
     begin
       o := t - length(upArray[result]);
       if (o >= 0) and
-         IdemPCharByte(tab, PUTF8Char(pointer(text)) + o,
-            pointer(upArray[result])) then
+         ((upArray[result] = '') or
+          IdemPCharByte(tab, PUTF8Char(pointer(text)) + o,
+            pointer(upArray[result]))) then
         exit;
     end;
   end;

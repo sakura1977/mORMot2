@@ -2201,7 +2201,7 @@ type
    cf_TSXLDTRK, cf_d17, cf_PCFG, cf_d19, cf_IBT, cf_d21, cf_d22, cf_d34,
    cf_d24, cf_d25, cf_IBRSPB, cf_STIBP, cf_dL1DFL, cf_ARCAB, cf_d30, cf_SSBD);
 
-  /// all features, as retrieved from an Intel CPU
+  /// all CPU features flags, as retrieved from an Intel/AMD CPU
   TIntelCpuFeatures = set of TIntelCpuFeature;
 
 {$ifdef CPUINTEL}
@@ -2212,7 +2212,7 @@ var
 
 /// compute 32-bit random number using Intel hardware
 // - using NIST SP 800-90A compliant RDRAND Intel x86/x64 opcode
-// - caller should ensure that  cfSSE42 in CpuFeatures
+// - caller should ensure that cfSSE42 is included in CpuFeatures flags
 // - you should rather call Random32() functions which are faster and safer
 function RdRand32: cardinal;
 
@@ -2268,7 +2268,8 @@ function BSRqword(const q: Qword): cardinal;
 type
   /// most common x86_64 CPU abilities, used e.g. by FillCharFast/MoveFast
   // - cpuERMS is slightly slower than cpuAVX so is not available by default
-  TX64CpuFeatures = set of(cpuAVX, cpuAVX2 {$ifdef WITH_ERMS}, cpuERMS{$endif});
+  TX64CpuFeatures = set of(
+    cpuAVX, cpuAVX2 {$ifdef WITH_ERMS}, cpuERMS{$endif});
 
 var
   /// internal flags used by FillCharFast - easier from asm that CpuFeatures
@@ -2469,12 +2470,15 @@ type
 // - this function will use well documented and proven Pierre L'Ecuyer software
 // generator - which happens to be faster (and safer) than RDRAND opcode (which
 // is used for seeding anyway)
-// - use rather TAESPRNG.Main.FillRandom() for cryptographic-level randomness
+// - consider using TAESPRNG.Main.Random32(), which offers cryptographic-level
+// randomness, but is twice slower (even with AES-NI)
 // - thread-safe function: each thread will maintain its own TLecuyer table
 function Random32: cardinal; overload;
 
 /// fast compute of bounded 32-bit random value, using the gsl_rng_taus2 generator
 // - calls internally the overloaded Random32 function
+// - consider using TAESPRNG.Main.Random32(), which offers cryptographic-level
+// randomness, but is twice slower (even with AES-NI)
 function Random32(max: cardinal): cardinal; overload;
 
 /// seed the gsl_rng_taus2 Random32 generator
@@ -2500,6 +2504,7 @@ procedure FillRandom(Dest: PCardinal; CardinalCount: PtrInt);
 // - calls RTL Now(), Random(), CreateGUID(), GetCurrentThreadID() and
 // current gsl_rng_taus2 Lecuyer state
 // - will also use RdRand32 and Rdtsc low-level sources, on Intel/AMD CPUs
+// - execution is fast, but not good as unique seed for a cryptographic PRNG
 procedure XorEntropy(entropy: PBlock128);
 
 /// convert the endianness of a given unsigned 32-bit integer into BigEndian
@@ -8037,7 +8042,8 @@ var
   i: integer;
 begin
   {$ifdef FPC} // to use fast FPC SSE version
-  if length(SepStr) = 1 then
+  if (length(SepStr) = 1) and
+     (StartPos <= 1) then
     i := PosExChar(SepStr[1], Str)
   else
   {$endif FPC}
@@ -8261,16 +8267,18 @@ var
 procedure XorEntropy(entropy: PBlock128);
 var
   e, f: THash128Rec;
-begin // xor entropy with its existing (on-stack) values
+begin
   e := _EntropyGlobal;
+  // no mormot.core.os yet, so we can't use QueryPerformanceMicroSeconds()
   {$ifdef CPUINTEL}
   e.Hi := e.Hi xor Rdtsc;
   {$else}
   e.Hi := e.Hi xor GetTickCount64; // FPC always defines this function
   {$endif CPUINTEL}
-  crcblock(entropy, @e.b);
+  crcblock(entropy, @e.b);       // includes on-stack undeterministic values
   crcblock(entropy, @_Lecuyer); // perfect forward security
   unaligned(PDouble(@e.L)^) := Now * 2123923447; // cross-platform time
+  // xor with some fast and simple sources of entropy
   e.c2 := e.c2 xor e.c1 xor PtrUInt(entropy);
   e.c3 := e.c3 xor e.c0 {$ifdef FPC} xor PtrUInt(GetCurrentThreadID) {$endif};
   crcblock(entropy, @e.b);
@@ -8296,8 +8304,10 @@ begin // xor entropy with its existing (on-stack) values
   CreateGUID(PGuid(@e)^); // FPC uses Random() on non-Windows -> not needed
   crcblock(entropy, @e.b);
   {$endif MSWINDOWS}
+  // persist the current entropy state for the next call
   _EntropyGlobal.c := entropy^;
-  e.c0 := e.c0 xor xxHash32(e.c3, @e, SizeOf(e)); // cascaded crcblock hashes
+  // final cross-wired xxHash32() round not to rely on crc32c hash only
+  e.c0 := e.c0 xor xxHash32(e.c3, @e, SizeOf(e));
   e.c1 := e.c1 xor xxHash32(e.c2, @e, SizeOf(e));
   e.c2 := e.c2 xor xxHash32(e.c1, @e, SizeOf(e));
   e.c3 := e.c3 xor xxHash32(e.c0, @e, SizeOf(e));
@@ -8860,7 +8870,7 @@ begin // this code is faster than Borland's original str() or IntToStr()
       break;
     end;
     dec(P, 2);
-    c100 := val div 100;
+    c100 := val div 100; // FPC will use fast reciprocal
     dec(val, c100 * 100);
     PWord(P)^ := tab[val];
     val := c100;
@@ -9281,11 +9291,11 @@ begin
         exit;
       len := SynLZdecompressdestlen(P + 8);
       tmp.Init(len);
-      if (len <> 0) and
-         ((SynLZDecompress1(P + 8, DataLen - 8, tmp.buf) <> len) or
-          (Hash32(tmp.buf, len) <> PCardinal(P)^)) then
-        exit;
-      SetString(Data, PAnsiChar(tmp.buf), len);
+      if (len = 0) or
+         ((SynLZDecompress1(P + 8, DataLen - 8, tmp.buf) = len) and
+          (Hash32(tmp.buf, len) = PCardinal(P)^)) then
+        SetString(Data, PAnsiChar(tmp.buf), len);
+      tmp.Done;
     end;
   result := 'synlz';
 end;
@@ -9354,7 +9364,7 @@ end;
 
 function TSynTempBuffer.InitRandom(RandomLen: integer): pointer;
 begin
-  Init(RandomLen);
+  Init(RandomLen); // ensure has 16 bytes more than RandomLen so +1 below is ok
   if RandomLen > 0 then
     FillRandom(buf, (RandomLen shr 2) + 1);
   result := buf;
@@ -9857,8 +9867,8 @@ end;
 procedure crcblockfast(crc128, data128: PBlock128);
 var
   c: cardinal;
-  tab: PCrc32tab;
-begin // efficient registers use on 64-bit, ARM or PIC
+  tab: PCrc32tab; // efficient registers use on 64-bit, ARM or PIC
+begin
   tab := @crc32ctab;
   c := crc128^[0] xor data128^[0];
   crc128^[0] := tab[3, ToByte(c)]        xor tab[2, ToByte(c shr 8)] xor
@@ -9926,7 +9936,7 @@ var d100: PtrUInt;
     tab: PWordArray;
 begin
   tab := @TwoDigitLookupW;
-  d100 := Y div 100;
+  d100 := Y div 100; // FPC will use fast reciprocal
   PWordArray(P)[0] := tab[d100];
   PWordArray(P)[1] := tab[Y-(d100*100)];
 end;

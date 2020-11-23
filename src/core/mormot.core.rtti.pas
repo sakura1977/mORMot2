@@ -131,10 +131,28 @@ type
   ///  TTypeKind enumerate as defined in Delphi 6 and up
   // - dkUString and following appear only since Delphi 2009
   TDelphiType = (
-    dkUnknown, dkInteger, dkChar, dkEnumeration, dkFloat,
-    dkString, dkSet, dkClass, dkMethod, dkWChar, dkLString, dkWString,
-    dkVariant, dkArray, dkRecord, dkInterface, dkInt64, dkDynArray,
-    dkUString, dkClassRef, dkPointer, dkProcedure);
+    dkUnknown,
+    dkInteger,
+    dkChar,
+    dkEnumeration,
+    dkFloat,
+    dkString,
+    dkSet,
+    dkClass,
+    dkMethod,
+    dkWChar,
+    dkLString,
+    dkWString,
+    dkVariant,
+    dkArray,
+    dkRecord,
+    dkInterface,
+    dkInt64,
+    dkDynArray,
+    dkUString,
+    dkClassRef,
+    dkPointer,
+    dkProcedure);
 
 const
   /// convert our TRttiKind to Delphi's TTypeKind enumerate
@@ -159,10 +177,30 @@ const
   /// available type families for Delphi 6 and up, similar to typinfo.pas
   // - redefined here to leverage FPC and Delphi compatibility as much as possible
   TRttiKind = (
-    rkUnknown, rkInteger, rkChar, rkEnumeration, rkFloat,
-    rkSString, rkSet, rkClass, rkMethod, rkWChar, rkLString, rkWString,
-    rkVariant, rkArray, rkRecord, rkInterface, rkInt64, rkDynArray
-    {$ifdef UNICODE}, rkUString, rkClassRef, rkPointer, rkProcedure {$endif});
+    rkUnknown,
+    rkInteger,
+    rkChar,
+    rkEnumeration,
+    rkFloat,
+    rkSString,
+    rkSet,
+    rkClass,
+    rkMethod,
+    rkWChar,
+    rkLString,
+    rkWString,
+    rkVariant,
+    rkArray,
+    rkRecord,
+    rkInterface,
+    rkInt64,
+    rkDynArray
+    {$ifdef UNICODE},
+    rkUString,
+    rkClassRef,
+    rkPointer,
+    rkProcedure
+    {$endif UNICODE});
 
 const
   /// potentially managed types in TRttiKind enumerates
@@ -195,6 +233,9 @@ const
 
   /// maps records or dynamic arrays
   rkRecordOrDynArrayTypes = rkRecordTypes + [rkDynArray];
+
+  /// maps records or static arrays
+  rkRecordOrArrayTypes = rkRecordTypes + [rkArray];
 
   /// all recognized TRttiKind enumerates, i.e. all but rkUnknown
   rkAllTypes = [succ(low(TRttiKind))..high(TRttiKind)];
@@ -651,8 +692,13 @@ type
     procedure RecordManagedFields(out Fields: TRttiRecordManagedFields);
       {$ifdef HASINLINE}inline;{$endif}
     /// for rkRecordTypes: retrieve enhanced RTTI information about all fields
-    // of this record
+    // of this record, for JSON serialization without text definition
     // - this information is currently only available since Delphi 2010
+    // - if any field has no RTTI (e.g. a static array of unmanaged type), then
+    // it will ignore this uncomplete, therefore non-useful RTTI
+    // - in practice, it may be a good habit to always define the records used
+    // within the SOA (e.g. as DTOs) calling RegisterFromText, and don't rely on
+    // this RTTI, since it will be more cross-platform, and more customizable
     function RecordAllFields(out RecSize: PtrInt): TRttiRecordAllFields;
     /// for rkDynArray: get the dynamic array type information of the stored item
     // - caller should ensure the type is indeed a dynamic array
@@ -1625,6 +1671,10 @@ var
   /// simple lookup to the plain RTTI type of most simple managed types
   // - nil for unmanaged types (e.g. rkOrdinals) or for more complex types
   // requering additional PRttiInfo (rkRecord, rkDynArray, rkArray...)
+  // - you can use PT_INFO[] for types with no RTTI before Delphi 2010, for
+  // instance PT_INFO[ptGUID], PT_INFO[ptHash128], PT_INFO[ptHash256] and
+  // PT_INFO[ptHash512] since oldest compilers refuse to compile TypeInfo(TGUID),
+  // TypeInfo(THash128), TypeInfo(THash256) and TypeInfo(THash512)
   PT_INFO: array[TRttiParserType] of PRttiInfo;
 
   /// simple lookup to the plain RTTI type of most simple managed types
@@ -1710,13 +1760,11 @@ function DynArrayItemTypeLen(const DynArrayTypeName: RawUTF8): PtrInt;
 { ************** RTTI-based Registration for Custom JSON Parsing }
 
 const
-  /// TRttiCustomList stores its TypeInfo() by PRttiInfo.Kind + NameLen and xxx
+  /// TRttiCustomList stores its TypeInfo() by PRttiInfo.Kind + Name[0..1]
   // - optimized "hash table of the poor" (tm) for Find(TypeInfo) and Find(Name)
   // - should be a bit mask (i.e. power of two minus 1)
   RTTICUSTOMTYPEINFOHASH = 15;
 
-{ TODO : replace Kind+NameLen with a better distribution using primes (xxHash32) }
-  
 type
   TRttiCustom = class;
 
@@ -2042,7 +2090,7 @@ type
     Lock: TRTLCriticalSection;
     // speedup search by name e.g. from a loop
     LastPair: array[succ(low(TRttiKind)) .. high(TRttiKind)] of TRttiCustom;
-    // store PRttiInfo/TRttiCustom pairs by TRttiKind.Kind+Name[0] for efficiency
+    // store PRttiInfo/TRttiCustom pairs by TRttiKind.Kind+Name[0..1] 
     Pairs: array[succ(low(TRttiKind)) .. high(TRttiKind)] of
            array[0..RTTICUSTOMTYPEINFOHASH] of TPointerDynArray;
     // used to release memory used by registered customizations
@@ -2103,6 +2151,7 @@ type
     // - will use GlobalClass to instantiate a new TRttiCustom
     function RegisterTypeFromName(const Name: RawUTF8;
       ParserType: PRTTIParserType = nil): TRttiCustom; overload;
+      {$ifdef HASINLINE}inline;{$endif}
     /// register a given class type, using its RTTI
     // - returns existing or new TRttiCustom
     // - please call RegisterCollection for TCollection
@@ -4956,7 +5005,7 @@ begin
       n := SourceExtCount^
     else
       n := PDALen(PAnsiChar(Source) - _DALEN)^ + _DAOFF;
-    DynArrayNew(Dest^, n, itemsize); // allocate zeroed memory
+    DynArrayNew(Dest, n, itemsize); // allocate zeroed memory
     CopySeveral(Dest^, pointer(Source), n, iteminfo, itemsize);
   end;
 end;
@@ -5277,11 +5326,11 @@ const
     ptRawUTF8, ptVariant, ptWideString, ptWord);
   SORTEDCOMPLEX: array[0..SORTEDMAX] of TRttiParserComplexType = (
     pctNone, pctNone, pctNone, pctNone, pctNone, pctNone, pctNone,
-    pctNone, pctNone, pctNone, pctNone, pctNone, pctNone, pctNone, pctNone, pctNone,
-    pctNone, pctNone, pctNone, pctNone, pctNone, pctNone,
+    pctNone, pctNone, pctNone, pctNone, pctNone, pctNone, pctNone, pctNone,
+    pctNone, pctNone, pctNone, pctNone, pctNone, pctNone, pctNone, pctNone,
     pctCreateTime, pctNone, pctNone, pctNone, pctNone, pctNone,
     pctNone, pctID, pctModTime, pctRecordReference, pctRecordReferenceToBeDeleted,
-    pctRecordVersion, pctNone, pctTimeLog, pctNone, pctNone,
+    pctRecordVersion, pctNone, pctTimeLog, pctNone, 
     pctNone, pctNone, pctNone, pctNone, pctNone);
 var
   ndx: PtrInt;
@@ -5333,6 +5382,8 @@ var
   cp: integer;
 begin
   result := ptNone;
+  if Complex <> nil then
+    Complex^ := pctNone;
   if Info = nil then
     exit;
   if FirstSearchByName then
@@ -5473,6 +5524,8 @@ var
   offset: integer;
 begin
   result := ptNone;
+  if Complex <> nil then
+    Complex^ := pctNone;
   FieldSize := 0;
   case ElemSize of // very fast guess of most known ArrayType
     1:
@@ -6610,14 +6663,13 @@ end;
 function TRttiCustomList.Find(Info: PRttiInfo): TRttiCustom;
 var
   PEnd: PAnsiChar;
-  k: TRttiKind;
   // paranoid use of a local TPointerDynArray for refcnt? slower...
 begin
-  k := Info^.Kind;
-  if k <> rkClass then
+  if Info^.Kind <> rkClass then
   begin
     // use optimized "hash table of the poor" (tm) lists
-    result := pointer(Pairs[k, ord(Info.RawName[0]) and RTTICUSTOMTYPEINFOHASH]);
+    result := pointer(Pairs[Info^.Kind, (PtrUInt(Info.RawName[0]) xor
+      PtrUInt(Info.RawName[1])) and RTTICUSTOMTYPEINFOHASH]);
     if result = nil then
       exit;
     PEnd := @PPointerArray(result)[PDALen(PAnsiChar(result) - _DALEN)^ + _DAOFF];
@@ -6679,13 +6731,14 @@ begin
      (Name <> nil) and
      (NameLen > 0) then
   begin
-    // try latest found value for huge speed up e.g. calling from TObjectList
+    // try latest found value e.g. calling from JSONRetrieveObjectRttiCustom()
     result := LastPair[Kind];
     if (result <> nil) and
        IdemPropNameU(result.Name, Name, NameLen) then
       exit;
     // use optimized "hash table of the poor" (tm) lists
-    result := pointer(Pairs[Kind, NameLen and RTTICUSTOMTYPEINFOHASH]);
+    result := pointer(Pairs[Kind,
+      (PtrUInt(NameLen) xor PtrUInt(Name[0])) and RTTICUSTOMTYPEINFOHASH]);
     if result <> nil then
     begin
       result := FindNameInPairs(pointer(result), Name, NameLen);
@@ -6702,6 +6755,7 @@ function TRttiCustomList.Find(Name: PUTF8Char; NameLen: PtrInt;
 var
   k: TRttiKind;
 begin
+  // not very optimized, but called only at startup from Rtti.RegisterFromText()
   if Kinds = [] then
     Kinds := rkAllTypes;
   for k := low(Pairs) to high(Pairs) do
@@ -6767,7 +6821,8 @@ var
 begin
   EnterCriticalSection(Lock);
   try
-    hash := ord(Instance.Info.RawName[0]) and RTTICUSTOMTYPEINFOHASH;
+    hash := (PtrUInt(Instance.Info.RawName[0]) xor
+             PtrUInt(Instance.Info.RawName[1])) and RTTICUSTOMTYPEINFOHASH;
     newlist := copy(Pairs[Instance.Kind, hash]);
     n := length(newlist);
     SetLength(newlist, n + 2); // PRttiInfo/TRttiCustom pairs
@@ -7265,6 +7320,12 @@ begin
   {$endif FPC_X64MM}
   {$endif NOPATCHRTL}
   {$endif FPC_CPUX64}
+  // validate some redefined RTTI structures with TypInfo definitions
+  assert(SizeOf(TRttiVarData) = SizeOf(TVarData));
+  assert(@PRttiVarData(nil)^.VInt64 = @PVarData(nil)^.VInt64);
+  {$ifdef FPC_OR_UNICODE}
+  assert(SizeOf(TRttiRecordField) = SizeOf(TManagedField));
+  {$endif FPC_OR_UNICODE}
 end;
 
 procedure FinalizeUnit;
@@ -7277,11 +7338,6 @@ end;
 
 initialization
   InitializeUnit;
-  assert(SizeOf(TRttiVarData) = SizeOf(TVarData));
-  assert(@PRttiVarData(nil)^.VInt64 = @PVarData(nil)^.VInt64);
-  {$ifdef FPC_OR_UNICODE}
-  assert(SizeOf(TRttiRecordField) = SizeOf(TManagedField));
-  {$endif FPC_OR_UNICODE}
 
 finalization
   FinalizeUnit;
