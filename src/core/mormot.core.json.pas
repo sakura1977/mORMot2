@@ -674,8 +674,9 @@ type
   // kind of value, including objects
   TTextWriter = class(TBaseWriter)
   protected
+    // used by AddCRAndIndent for enums, sets and T*ObjArray comment of values
     fBlockComment: RawUTF8;
-    /// used by WriteObjectAsString/AddDynArrayJSONAsString methods
+    // used by WriteObjectAsString/AddDynArrayJSONAsString methods
     fInternalJSONWriter: TTextWriter;
     procedure InternalAddFixedAnsi(Source: PAnsiChar; SourceChars: cardinal;
       AnsiToWide: PWordArray; Escape: TTextWriterKind);
@@ -1024,10 +1025,10 @@ type
     /// search for the first chars of a Name, return the index in List
     // - using O(n) calls of IdemPChar() function
     // - here aUpperName should be already uppercase, as expected by IdemPChar()
-    function FindStart(const aUpperName: RawUTF8): integer;
+    function FindStart(const aUpperName: RawUTF8): PtrInt;
     /// search for a Value, return the index in List
     // - using O(n) brute force algoritm with case-sensitive aValue search
-    function FindByValue(const aValue: RawUTF8): integer;
+    function FindByValue(const aValue: RawUTF8): PtrInt;
     /// search for a Name, and delete its entry in the List if it exists
     function Delete(const aName: RawUTF8): boolean;
     /// search for a Value, and delete its entry in the List if it exists
@@ -1676,23 +1677,40 @@ type
     Prop: PRttiCustomProp;
     /// force the item class when reading a TObjectList without "ClassName":...
     ObjectListItem: TRttiCustom;
-    /// initialize this context
+    /// if ParseNext unserialized a JSON string
+    WasString: boolean;
+    /// ParseNext unserialized value
+    Value: PUTF8Char;
+    /// ParseNext unserialized value length
+    ValueLen: integer;
+    /// TDocVariant initialization options
+    DVO: TDocVariantOptions;
+    /// initialize this unserialization context
     procedure Init(P: PUTF8Char; Rtti: TRttiCustom; O: TJsonParserOptions;
       CV: PDocVariantOptions; ObjectListItemClass: TClass);
-  protected
-    WasString: boolean;
-    Value: PUTF8Char;
-    ValueLen: integer;
-    DVO: TDocVariantOptions;
+    /// call GetJSONField() to retrieve the next JSON value
+    // - on success, return true and set Value/ValueLen and WasString fields
     function ParseNext: boolean;
       {$ifdef HASINLINE}inline;{$endif}
-    procedure ParseEnd;
+    /// retrieve the next JSON value as text
+    function ParseUTF8: RawUTF8;
+    /// set the EndOfObject field of a JSON buffer, just like GetJsonField() does
+    procedure ParseEndOfObject;
       {$ifdef HASINLINE}inline;{$endif}
+    /// parse a 'null' value from JSON buffer
     function ParseNull: boolean;
       {$ifdef HASINLINE}inline;{$endif}
+    /// parse initial '[' token from JSON buffer
     function ParseArray: boolean;
+    /// parse a JSON object from the buffer into a
+    // - if ObjectListItem was not defined, expect the JSON input to start as
+    // '{"ClassName":"TMyClass",...}'
     function ParseNewObject: TObject;
       {$ifdef HASINLINE}inline;{$endif}
+    /// wrapper around JSONDecode()
+    function ParseObject(const Names: array of RawUTF8;
+      Values: PValuePUTF8CharArray;
+      HandleValuesAsObjectOrArray: boolean = false): boolean;
   end;
 
   PJsonParserContext = ^TJsonParserContext;
@@ -1703,12 +1721,12 @@ type
 
 var
   /// default options for the JSON parser
-  // - as supplied to GetDataFromJSON() global function with Tolerant=false
+  // - as supplied to LoadJson() with Tolerant=false
   // - defined as var, not as const, to allow process-wide override
   JSONPARSER_DEFAULTOPTIONS: TJsonParserOptions = [];
 
   /// some open-minded options for the JSON parser
-  // - as supplied to GetDataFromJSON() global function with Tolerant=true
+  // - as supplied to LoadJson() with Tolerant=true
   // - won't block JSON unserialization due to some minor unexpected values
   // - used e.g. by TObjArraySerializer.CustomReader and
   // TInterfacedObjectFake.FakeCall/TServiceMethodExecute.ExecuteJson methods
@@ -1793,9 +1811,11 @@ type
       ParserOptions: TJsonParserOptions; CustomVariantOptions: PDocVariantOptions;
       ObjectListItemClass: TClass = nil);
     /// register a custom callback for JSON serialization of a given TypeInfo()
+    // - replace deprecated TJSONSerializer.RegisterCustomSerializer() method
     class function RegisterCustomSerializer(Info: PRttiInfo;
       const Writer: TOnRttiJsonWrite; const Reader: TOnRttiJsonRead): TRttiCustom; overload;
     /// register a custom callback for JSON serialization of a given class
+    // - replace deprecated TJSONSerializer.RegisterCustomSerializer() method
     class function RegisterCustomSerializer(ObjectClass: TClass;
       const Writer: TOnRttiJsonWrite; const Reader: TOnRttiJsonRead): TRttiCustom; overload;
   end;
@@ -2233,7 +2253,6 @@ uses
 
 
 { ********** Low-Level JSON Processing Functions }
-
 
 function NeedsJsonEscape(P: PUTF8Char; PLen: integer): boolean;
 var
@@ -3143,7 +3162,7 @@ var
 begin
   {$ifdef FPC}
   Values := nil;
-  {$endif}
+  {$endif FPC}
   result := nil;
   n := 0;
   if P <> nil then
@@ -4896,7 +4915,8 @@ begin
   if woIDAsIDstr in Ctxt.Options then
   begin
     Ctxt.W.BlockAfterItem(Ctxt.Options);
-    if Ctxt.Prop <> nil then
+    if (Ctxt.Prop <> nil) and
+       (Ctxt.Prop^.Name <> nil) then
     begin
       FormatShort('%_str', [Ctxt.Prop^.Name^], _str);
       Ctxt.W.WriteObjectPropName(_str, Ctxt.Options);
@@ -5057,8 +5077,10 @@ type
 procedure _JS_RttiCustom(Data: PAnsiChar; const Ctxt: TJsonSaveContext);
 var
   c: TJsonSaveContext;
+  p: PRttiCustomProp;
   n: integer;
   rvd: TRttiVarData;
+  done: boolean;
 begin
   c.W := Ctxt.W;
   c.Options := Ctxt.Options;
@@ -5067,7 +5089,7 @@ begin
     // class instances are accessed by reference, records are stored by value
     Data := PPointer(Data)^
   else
-    exclude(c.Options, woFullExpand); // not for records
+    exclude(c.Options, woFullExpand); // not for null or for records
   if Data = nil then
     // append 'null' for nil class instance
     c.W.AddNull
@@ -5105,56 +5127,65 @@ begin
           c.W.BlockAfterItem(c.Options);
       end;
     end;
+    if woDontStoreInherited in c.Options then
     with Ctxt.Info.Props do
-      if woDontStoreInherited in c.Options then
-      begin
-        // List[NotInheritedIndex]..List[Count-1] store the last hierarchy level
-        n := Count - NotInheritedIndex;
-        inc(c.Prop, NotInheritedIndex);
-      end
-      else
-        n := Count;
+    begin
+      // List[NotInheritedIndex]..List[Count-1] store the last hierarchy level
+      n := Count - NotInheritedIndex;
+      inc(c.Prop, NotInheritedIndex);
+    end
+    else
+      n := Ctxt.Info.Props.Count;
     if n > 0 then
       // this is the main loop serializing Info.Props[]
       repeat
-        // handle woStoreStoredFalse flag and "stored" attribute in code
-        if ((c.Prop^.Prop = nil) or
+        p := c.Prop;
+        if // handle Props.NameChange() set to New='' to ignore this field
+           (p^.Name <> nil) and
+           // handle woStoreStoredFalse flag and "stored" attribute in code
+           ((p^.Prop = nil) or
             (woStoreStoredFalse in c.Options) or
-            (c.Prop^.Prop.IsStored(pointer(Data)))) and
+            (p^.Prop.IsStored(pointer(Data)))) and
            // handle woDontStoreDefault flag over "default" attribute in code
-           (not (woDontStoreDefault in c.Options) or
-            (c.Prop.PropDefault = NO_DEFAULT) or
-            not c.Prop.ValueIsDefault(Data)) and
+           ((p^.Prop = nil) or
+            not (woDontStoreDefault in c.Options) or
+            (p.PropDefault = NO_DEFAULT) or
+            not p.ValueIsDefault(Data)) and
            // detect 0 numeric values and empty strings
            (not (woDontStoreVoid in c.Options) or
-            not c.Prop.ValueIsVoid(Data)) then
+            not p.ValueIsVoid(Data)) then
         begin
           // if we reached here, we should serialize this property
-          c.W.WriteObjectPropName(c.Prop^.Name^, c.Options);
+          c.W.WriteObjectPropName(p^.Name^, c.Options);
           if not (rcfSynPersistentHook in Ctxt.Info.Flags) or
-             not TSPHook(Data).RttiWritePropertyValue(c.W, c.Prop, c.Options) then
+             not TSPHook(Data).RttiWritePropertyValue(c.W, p, c.Options) then
             if (woHideSensitivePersonalInformation in c.Options) and
-               (rcfSPI in c.Prop^.Value.Flags) then
+               (rcfSPI in p^.Value.Flags) then
               c.W.AddShorter('"***"')
-            else if c.Prop^.OffsetGet >= 0 then
+            else if p^.OffsetGet >= 0 then
             begin
               // direct value write (record field or plain class property)
-              c.Info := c.Prop^.Value;
-              TRttiJsonSave(c.Info.JsonSave)(Data + c.Prop^.OffsetGet, c);
+              c.Info := p^.Value;
+              TRttiJsonSave(c.Info.JsonSave)(Data + p^.OffsetGet, c);
             end
             else
             begin
               // need to call a getter method
-              c.Prop^.Prop.GetValue(pointer(Data), c.Prop^.Value, rvd);
+              p^.Prop.GetValue(pointer(Data), p^.Value, rvd);
               c.W.AddVariant(variant(rvd), twJSONEscape, c.Options);
               if rvd.NeedsClear then
                 VarClearProc(rvd.Data);
             end;
-        end;
+          done := true;
+        end
+        else
+          done := false;
         dec(n);
         if n = 0 then
           break;
-        c.W.BlockAfterItem(c.Options);
+        if done then
+          // append ',' and proper indentation
+          c.W.BlockAfterItem(c.Options);
         inc(c.Prop);
       until false;
     if rcfSynPersistentHook in Ctxt.Info.Flags then
@@ -5180,15 +5211,16 @@ begin
   W.BlockBegin('[', Options);
   if Count > 0 then
     repeat
-      if Value^ = nil then
+      v := Value^;
+      if v = nil then
         W.AddNull
       else
       begin
-        v := PPointer(Value^)^; // check Value class
+        v := PPointer(v)^; // check Value class
         if v <> c then
         begin
           c := v;
-          ctxt.Info := Rtti.RegisterClass(c);
+          ctxt.Info := Rtti.RegisterClass(v);
           save := ctxt.Info.JsonSave;
         end;
         save(pointer(Value), ctxt);
@@ -6646,11 +6678,19 @@ begin
   Valid := result;
 end;
 
-procedure TJsonParserContext.ParseEnd;
+function TJsonParserContext.ParseUTF8: RawUTF8;
+begin
+  if ParseNext then
+    FastSetString(result, Value, ValueLen)
+  else
+    result := '';
+end;
+
+procedure TJsonParserContext.ParseEndOfObject;
 begin
   if Valid then
   begin
-    JSON := ParseEndOfObject(JSON, EndOfObject);
+    JSON := mormot.core.json.ParseEndOfObject(JSON, EndOfObject);
     Valid := JSON <> nil;
   end;
 end;
@@ -6665,7 +6705,7 @@ begin
     P := GotoNextNotSpace(JSON);
     if PCardinal(P)^ = NULL_LOW then
     begin
-      P := ParseEndOfObject(P + 4, EndOfObject);
+      P := mormot.core.json.ParseEndOfObject(P + 4, EndOfObject);
       if P <> nil then
       begin
         JSON := P;
@@ -6689,7 +6729,7 @@ begin
     if P^ = ']' then
     begin
       // void but valid array
-      P := ParseEndOfObject(P + 1, EndOfObject);
+      P := mormot.core.json.ParseEndOfObject(P + 1, EndOfObject);
       Valid := P <> nil;
       JSON := P;
     end
@@ -6721,6 +6761,15 @@ begin
     end;
   end;
   result := TRttiJson(Info).ParseNewInstance(self);
+end;
+
+function TJsonParserContext.ParseObject(const Names: array of RawUTF8;
+  Values: PValuePUTF8CharArray; HandleValuesAsObjectOrArray: boolean): boolean;
+begin
+  JSON := JSONDecode(JSON, Names, Values, HandleValuesAsObjectOrArray);
+  if JSON = nil then
+    Valid := false;
+  result := Valid;
 end;
 
 
@@ -7046,7 +7095,7 @@ begin
       PDALen(PAnsiChar(arr^) - _DALEN)^ := n - _DAOFF;
     Ctxt.Info := arrinfo;
   end;
-  Ctxt.ParseEnd; // mimics GetJsonField() / Ctxt.ParseNext
+  Ctxt.ParseEndOfObject; // mimics GetJsonField() / Ctxt.ParseNext
 end;
 
 procedure _JL_Interface(Data: PInterface; var Ctxt: TJsonParserContext);
@@ -7154,7 +7203,7 @@ begin
     end;
     Ctxt.JSON := GotoNextNotSpace(Ctxt.JSON + 1);
     if Ctxt.JSON^ = '}' then
-      Ctxt.ParseEnd
+      Ctxt.ParseEndOfObject
     else
     begin
       root := pointer(Ctxt.Info); // Ctxt.Info overriden in JsonLoadProp()
@@ -7167,7 +7216,8 @@ begin
         if not Ctxt.Valid then
           break;
         // O(1) optimistic process of the propertyname
-        if IdemPropName(prop^.Name^, propname, propnamelen) then
+        if (prop^.Name <> nil) and
+           IdemPropName(prop^.Name^, propname, propnamelen) then
           if JsonLoadProp(Data, prop^, Ctxt) then
             inc(prop)
           else
@@ -7199,7 +7249,7 @@ begin
           break;
         end;
       end;
-      Ctxt.ParseEnd; // mimics GetJsonField() - set Ctxt.EndOfObject
+      Ctxt.ParseEndOfObject; // mimics GetJsonField() - set Ctxt.EndOfObject
       Ctxt.Info := root; // restore
     end;
     if rcfSynPersistentHook in Ctxt.Info.Flags then
@@ -7224,7 +7274,7 @@ begin
     Data^.Add(item);
   until Ctxt.EndOfObject = ']';
   Ctxt.Info := root;
-  Ctxt.ParseEnd;
+  Ctxt.ParseEndOfObject;
 end;
 
 procedure _JL_TCollection(Data: PCollection; var Ctxt: TJsonParserContext);
@@ -7247,7 +7297,7 @@ begin
     until (not Ctxt.Valid) or
           (Ctxt.EndOfObject = ']');
     Ctxt.Info := root;
-    Ctxt.ParseEnd;
+    Ctxt.ParseEndOfObject;
   finally
     Data^.EndUpdate;
   end;
@@ -7270,7 +7320,7 @@ begin
     Data^.Add(item);
   until Ctxt.EndOfObject = ']';
   Ctxt.Info := root;
-  Ctxt.ParseEnd;
+  Ctxt.ParseEndOfObject;
 end;
 
 procedure _JL_TStrings(Data: PStrings; var Ctxt: TJsonParserContext);
@@ -7293,7 +7343,7 @@ begin
   finally
     Data^.EndUpdate;
   end;
-  Ctxt.ParseEnd;
+  Ctxt.ParseEndOfObject;
 end;
 
 procedure _JL_TRawUTF8List(Data: PRawUTF8List; var Ctxt: TJsonParserContext);
@@ -7316,7 +7366,7 @@ begin
   finally
     Data^.EndUpdate;
   end;
-  Ctxt.ParseEnd;
+  Ctxt.ParseEndOfObject;
 end;
 
 var
@@ -7462,7 +7512,7 @@ begin
   result := DynArray.FindHashed(aName);
 end;
 
-function TSynNameValue.FindStart(const aUpperName: RawUTF8): integer;
+function TSynNameValue.FindStart(const aUpperName: RawUTF8): PtrInt;
 begin
   for result := 0 to Count - 1 do
     if IdemPChar(pointer(List[result].Name), pointer(aUpperName)) then
@@ -7470,7 +7520,7 @@ begin
   result := -1;
 end;
 
-function TSynNameValue.FindByValue(const aValue: RawUTF8): integer;
+function TSynNameValue.FindByValue(const aValue: RawUTF8): PtrInt;
 begin
   for result := 0 to Count - 1 do
     if List[result].Value = aValue then
@@ -7485,7 +7535,7 @@ end;
 
 function TSynNameValue.DeleteByValue(const aValue: RawUTF8; Limit: integer): integer;
 var
-  ndx: integer;
+  ndx: PtrInt;
 begin
   result := 0;
   if Limit < 1 then
@@ -7619,7 +7669,7 @@ end;
 
 function TSynNameValue.AsJSON: RawUTF8;
 var
-  i: integer;
+  i: PtrInt;
   temp: TTextWriterStackBuffer;
 begin
   with TTextWriter.CreateOwnedStream(temp) do
@@ -7643,7 +7693,7 @@ end;
 
 procedure TSynNameValue.AsNameValues(out Names, Values: TRawUTF8DynArray);
 var
-  i: integer;
+  i: PtrInt;
 begin
   SetLength(Names, Count);
   SetLength(Values, Count);
@@ -7656,7 +7706,7 @@ end;
 
 function TSynNameValue.ValueVariantOrNull(const aName: RawUTF8): variant;
 var
-  i: integer;
+  i: PtrInt;
 begin
   i := Find(aName);
   if i < 0 then
@@ -9143,7 +9193,7 @@ begin
   result := Rtti.RegisterType(Info);
   res.fJsonWriter := TMethod(Writer);
   res.fJsonReader := TMethod(Reader);
-  res.SetParserType(res.Parser, res.ParserComplex); // set fJsonSave/fJsonLoad
+  res.SetParserType(res.Parser, res.ParserComplex); // (re)set fJsonSave/fJsonLoad
 end;
 
 class function TRttiJson.RegisterCustomSerializer(ObjectClass: TClass;
@@ -9239,7 +9289,8 @@ begin
     end;
 end;
 
-function ObjectsToJSON(const Names: array of RawUTF8; const Values: array of TObject;
+function ObjectsToJSON(const Names: array of RawUTF8;
+  const Values: array of TObject;
   Options: TTextWriterWriteObjectOptions): RawUTF8;
 var
   i, n: PtrInt;
@@ -9294,7 +9345,8 @@ begin
     result := FileFromString(json, JSONFile);
 end;
 
-function ObjectToJSONDebug(Value: TObject; Options: TTextWriterWriteObjectOptions): RawUTF8;
+function ObjectToJSONDebug(Value: TObject;
+  Options: TTextWriterWriteObjectOptions): RawUTF8;
 begin
   // our JSON serialization detects and serialize Exception.Message
   result := ObjectToJSON(Value, Options);
@@ -9520,8 +9572,8 @@ function DoRegisterAutoCreateFields(ObjectInstance: TObject): TRttiCustom;
 begin
   result := Rtti.RegisterType(ObjectInstance.ClassInfo);
   if PPPointer(PPAnsiChar(ObjectInstance)^ + vmtAutoTable)^^ <> result then
-    raise ERttiException.CreateUTF8('AutoCreateFields(%): unexpected vmtAutoTable',
-      [ObjectInstance]); // paranoid check
+    raise ERttiException.CreateUTF8( // paranoid check
+      'AutoCreateFields(%): unexpected vmtAutoTable', [ObjectInstance]);
   result.Props.SetAutoCreateFields;
   result.Flags := result.Flags + [rcfAutoCreateFields];
 end;
@@ -9735,6 +9787,7 @@ begin
   Rtti.GlobalClass := TRttiJson;
   GetDataFromJSON := _GetDataFromJSON;
 end;
+
 
 initialization
   InitializeUnit;

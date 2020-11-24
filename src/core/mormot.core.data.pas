@@ -717,8 +717,8 @@ type
     // - dvoInternNames and dvoInternValues will use shared TRawUTF8Interning
     // instances to maintain a list of RawUTF8 names/values for all TDocVariant,
     // so that redundant text content will be allocated only once on heap
-    TDocVariantOption =
-      (dvoIsArray,
+    TDocVariantOption = (
+       dvoIsArray,
        dvoIsObject,
        dvoNameCaseSensitive,
        dvoCheckForDuplicatedNames,
@@ -5548,12 +5548,15 @@ begin
     rB := Rtti.RegisterClass(PPointer(B)^);
     for i := 1 to rA.Props.Count do
     begin
-      pB := rB.Props.Find(pA^.Name^);
-      if pB <> nil then
+      if pA^.Name <> nil then
       begin
-        result := pA^.CompareValue(A, B, pB^, CaseInSensitive);
-        if result <> 0 then
-          exit;
+        pB := rB.Props.Find(pA^.Name^);
+        if pB <> nil then
+        begin
+          result := pA^.CompareValue(A, B, pB^, CaseInSensitive);
+          if result <> 0 then
+            exit;
+        end;
       end;
       inc(pA);
     end;
@@ -5941,6 +5944,8 @@ begin
   result := BinaryLoadBase64(Source, Len, @Rec, TypeInfo, UriCompatible,
     rkRecordTypes, {notrailer=}false, TryCustomVariants);
 end;
+
+
 
 
 
@@ -7734,7 +7739,7 @@ begin
           len := length(UnicodeString(VAny));
           P := VAny;
         end;
-      {$endif}
+      {$endif HASVARUSTRING}
       else
       begin
         S := TFakeWriterStream.Create;
