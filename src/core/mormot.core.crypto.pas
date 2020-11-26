@@ -3691,6 +3691,15 @@ end;
 
 { TAESAbstract }
 
+function SetMainAESPRNG: TAESPRNG;
+begin
+  GlobalLock;
+  if MainAESPRNG = nil then
+    MainAESPRNG := TAESPRNG.Create;
+  GlobalUnLock;
+  result := MainAESPRNG;
+end;
+
 // defined here for proper inlining :)
 class function TAESPRNG.Main: TAESPRNG;
 begin
@@ -5614,15 +5623,6 @@ begin
          (LowerCase(result) <> result));
 end;
 
-function SetMainAESPRNG: TAESPRNG;
-begin
-  GlobalLock;
-  if MainAESPRNG = nil then
-    MainAESPRNG := TAESPRNG.Create;
-  GlobalUnLock;
-  result := MainAESPRNG;
-end;
-
 procedure AFDiffusion(buf, rnd: pointer; size: cardinal);
 var
   sha: TSHA256;
@@ -5818,27 +5818,6 @@ begin
   end;
   FastSetString(result, nil, blen);
   RawBase64URI(pointer(result), P, len);
-end;
-
-// required by read__h__hmac -> strictly private if PUREMORMOT2 is defined
-procedure SHA256Weak(const s: RawByteString; out Digest: TSHA256Digest);
-var
-  L: integer;
-  SHA: TSHA256;
-  p: PAnsiChar;
-  tmp: array[0..255] of byte;
-begin
-  L := length(s);
-  p := pointer(s);
-  if L < SizeOf(tmp) then
-  begin
-    FillcharFast(tmp, SizeOf(tmp), L); // add some salt to unweak password
-    if L > 0 then
-      MoveFast(p^, tmp, L);
-    SHA.Full(@tmp, SizeOf(tmp), Digest);
-  end
-  else
-    SHA.Full(p, L, Digest);
 end;
 
 procedure read__h__hmac;
@@ -9116,6 +9095,28 @@ begin
 end;
 
 {$endif PUREMORMOT2}
+
+// required by read__h__hmac -> deprecated even if available with PUREMORMOT2
+procedure SHA256Weak(const s: RawByteString; out Digest: TSHA256Digest);
+var
+  L: integer;
+  SHA: TSHA256;
+  p: PAnsiChar;
+  tmp: array[0..255] of byte;
+begin
+  L := length(s);
+  p := pointer(s);
+  if L < SizeOf(tmp) then
+  begin
+    FillcharFast(tmp, SizeOf(tmp), L); // add some salt to unweak password
+    if L > 0 then
+      MoveFast(p^, tmp, L);
+    SHA.Full(@tmp, SizeOf(tmp), Digest);
+  end
+  else
+    SHA.Full(p, L, Digest);
+end;
+
 
 
 procedure InitializeUnit;
