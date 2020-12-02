@@ -420,23 +420,21 @@ var
   Bits64: Int64 absolute Bits;
   Si, i: integer;
   c: cardinal;
-    {$ifdef FPC}
+  {$ifdef FPC}
   u: PtrUInt;
   timer: TPrecisionTimer;
-    {$endif FPC}
+  {$endif FPC}
 begin
   {$ifdef CPUINTEL}
   GetBitsCountPtrInt := @GetBitsCountPurePascal;
   TestPopCnt('pas');
   GetBitsCountPtrInt := @GetBitsCountPas; // x86/x86_64 assembly
   TestPopCnt('asm');
-  {$ifndef ABSOLUTEPASCAL}
   if cfPOPCNT in CpuFeatures then
   begin
     GetBitsCountPtrInt := @GetBitsCountSSE42;
     TestPopCnt('sse4.2');
   end;
-  {$endif ABSOLUTEPASCAL}
   {$else}
   TestPopCnt('pas');
   {$endif CPUINTEL}
@@ -717,12 +715,14 @@ begin
     e := $2526;
   Check(SoundExAnsi(PAnsiChar('bonjour')) = e);
   Check(SoundExAnsi(PAnsiChar(' 123 bonjour.  m'), @PC) = e);
-  Check((PC <> nil) and (PC^ = '.'));
+  Check((PC <> nil) and
+        (PC^ = '.'));
   s := ' 123 bonjourtreslongmotquidepasse  m';
   s[15] := #232;
   s[28] := #233;
   Check(SoundExAnsi(pointer(s), @PC) <> 0);
-  Check((PC <> nil) and (PC^ = ' '));
+  Check((PC <> nil) and
+        (PC^ = ' '));
   Check(SoundExAnsi(PAnsiChar('BOnjour')) = e);
   Check(SoundExAnsi(PAnsiChar('Bnjr')) = e);
   Check(SoundExAnsi(PAnsiChar('bonchour')) = e);
@@ -742,9 +742,11 @@ begin
     e := $2526;
   Check(SoundExUTF8('bonjour') = e);
   Check(SoundExUTF8(' 123 bonjour.  m', @PC) = e);
-  Check((PC <> nil) and (PC^ = 'm'));
+  Check((PC <> nil) and
+        (PC^ = 'm'));
   Check(SoundExUTF8(Pointer(WinAnsiToUTF8(s)), @PC) <> 0);
-  Check((PC <> nil) and (PC^ = 'm'));
+  Check((PC <> nil) and
+        (PC^ = 'm'));
   Check(SoundExUTF8('BOnjour') = e);
   Check(SoundExUTF8('Bnjr') = e);
   Check(SoundExUTF8('bonchour') = e);
@@ -1951,18 +1953,12 @@ begin
   result := true;
 end;
 
-{$ifndef ABSOLUTEPASCAL}
-{$ifdef CPUX64} // will define its own self-dispatched SSE2/AVX functions
-  {$define HASCPUIDX64}
-{$endif CPUX64}
-{$endif ABSOLUTEPASCAL}
-
 procedure TTestCoreBase.CustomRTL;
 // note: FPC uses the RTL for FillCharFast/MoveFast
 var
   buf: RawByteString;
 
-  procedure Validate(rtl: boolean = false);
+  procedure Validate(rtl: boolean);
   var
     i, len, filled, moved: PtrInt;
     b1, b2: byte;
@@ -2009,9 +2005,9 @@ var
         inc(len, 777 + len shr 4);
     until len >= length(buf);
     timer.Stop;
-     {$ifdef HASCPUIDX64}
+    {$ifdef ASMX64}
     cpu := GetSetName(TypeInfo(TX64CpuFeatures), CPUIDX64);
-     {$endif HASCPUIDX64}
+    {$endif ASMX64}
     if rtl then
       msg := 'FillChar'
     else
@@ -2097,32 +2093,34 @@ var
       end;
     CheckEqual(Hash32(buf), 1646145792);
   end;
-{$ifdef HASCPUIDX64}
+{$ifdef ASMX64}
 
 var
   cpu: TX64CpuFeatures;
-{$endif HASCPUIDX64}
+{$endif ASMX64}
 begin
   SetLength(buf, 16 shl 20); // 16MB
-  {$ifdef HASCPUIDX64} // activate and validate SSE2 + AVX branches
+  {$ifdef ASMX64} // activate and validate SSE2 + AVX branches
   cpu := CPUIDX64;
   CPUIDX64 := []; // default SSE2 128-bit process
-  Validate;
+  Validate({rtl=}false);
   {$ifdef FPC} // Delphi doesn't support AVX asm
   if cpuAvx in cpu then
   begin
     CPUIDX64 := [cpuAvx]; // AVX 256-bit process
-    Validate;
+    Validate(false);
   end;
   {$endif FPC}
   CPUIDX64 := cpu; // there is no AVX2 move/fillchar (still 256-bit wide)
-  if (cpu <> []) and (cpu <> [cpuAvx]) and (cpu <> [cpuAvx, cpuAvx2]) then
-    Validate;
+  if (cpu <> []) and
+     (cpu <> [cpuAvx]) and
+     (cpu <> [cpuAvx, cpuAvx2]) then
+    Validate(false);
   // no Validate(true): RedirectCode(@System.FillChar,@FillcharFast)
   {$else}
   Validate({rtl=}true);
   Validate(false);
-  {$endif HASCPUIDX64}
+  {$endif ASMX64}
 end;
 {$endif CPUINTEL}
 
@@ -2350,7 +2348,8 @@ procedure TTestCoreBase._ParseCommandArguments;
       exit;
     FillcharFast(a, SizeOf(a), 255);
     check(ParseCommandArgs(cmd, @a, @n, @tmp, posix) = flags);
-    if (flags = []) and not CheckFailed(n = length(expected)) then
+    if (flags = []) and
+       not CheckFailed(n = length(expected)) then
     begin
       for i := 0 to high(expected) do
         check(StrComp(pointer(a[i]), pointer(expected[i])) = 0);
@@ -2799,8 +2798,9 @@ var
   timer: TPrecisionTimer;
 const
   MAX = 500000;
-  DIRSIZE = 16 * (MAX + 1); // assume each SmallUInt32UTF8[] uses 16 heap bytes
-  INTSIZE = 512 * 16;
+  ONESIZE = 32; // assume each SmallUInt32UTF8[] uses 32 heap bytes
+  DIRSIZE = ONESIZE * (MAX + 1);
+  INTSIZE = ONESIZE * 512;
 begin
   {$ifndef HASINLINE} // inlining induces optimizations which trigger Clean
   int := TRawUTF8Interning.Create(1);
@@ -3033,7 +3033,7 @@ var
 
   procedure Test(hash: THasher; const name: string);
   var
-    i: Integer;
+    i: PtrInt;
     Timer: TPrecisionTimer;
     a: string[10];
   begin
@@ -3182,7 +3182,8 @@ begin
     Test(crc32csse42, 'sse42');
   {$endif DARWIN}
   {$ifdef CPUX64}
-  if (cfSSE42 in CpuFeatures) and (cfAesNi in CpuFeatures) then
+  if (cfSSE42 in CpuFeatures) and
+     (cfAesNi in CpuFeatures) then
     Test(crc32c, 'sse42+aesni'); // use SSE4.2+pclmulqdq instructions on x64
   {$endif CPUX64}
   {$endif CPUINTEL}
@@ -3901,7 +3902,8 @@ begin
     Check(FormatUTF8('?', [], [k]) = ':(' + s + '):');
     err := 1;
     l := GetInt64(pointer(s), err);
-    Check((err = 0) and (l = k));
+    Check((err = 0) and
+        (l = k));
     SetInt64(pointer(s), l);
     s := s + 'z';
     l := GetInt64(pointer(s), err);
@@ -3950,7 +3952,8 @@ begin
     e := GetExtended(Pointer(s), err);
     Check(SameValue(e, d, 0));
     e := d;
-    if (i < 9000) or (i > 9999) then
+    if (i < 9000) or
+       (i > 9999) then
     begin
       a[0] := AnsiChar(ExtendedToShort(a, d, DOUBLE_PRECISION));
       a2[0] := AnsiChar(DoubleToShort(a2, d));
@@ -3975,7 +3978,8 @@ begin
     check(d < e);
     Check(SortDynArrayDouble(d, e) = -1);
     Check(SortDynArrayDouble(e, d) = 1);
-    if (i < 9000) or (i > 9999) then
+    if (i < 9000) or
+       (i > 9999) then
     begin
       se := e;
       Check(SortDynArraySingle(sd{%H-}, se) = -1);
@@ -4096,7 +4100,8 @@ begin
   while L <> 0 do
   begin
     Ch := Source^;
-    if (Ch >= 'A') and (Ch <= 'Z') then
+    if (Ch >= 'A') and
+       (Ch <= 'Z') then
       Inc(Ch, 32);
     Dest^ := Ch;
     Inc(Source);
@@ -4182,7 +4187,7 @@ procedure TTestCoreBase._UTF8;
     t: RawUTF8;
   begin
     trimcopy(S, start, count, t);
-    checkEqual(t, trim(copy(S, start, count)));
+    checkEqual(t, TrimU(copy(S, start, count)));
   end;
 
 var
@@ -4332,17 +4337,21 @@ begin
       if str[1] <> str[2] then
       begin
         check(PosExString(str[2], str) = 2);
-        if (str[1] <> str[2]) and (str[2] <> str[3]) and (str[1] <> str[3]) then
+        if (str[1] <> str[2]) and
+           (str[2] <> str[3]) and
+           (str[1] <> str[3]) then
           check(PosExString(str[3], str) = 3);
       end;
       for j := 1 to lenup100 do
       begin
         check(PosExString(#13, str, j) = 0);
         check(PosExString(str[j], str, j) = j);
-        if (j > 1) and (str[j - 1] <> str[j]) then
+        if (j > 1) and
+           (str[j - 1] <> str[j]) then
           check(PosExString(str[j], str, j - 1) = j);
         k := PosExString(str[j], str);
-        check((k > 0) and (str[k] = str[j]));
+        check((k > 0) and
+             (str[k] = str[j]));
       end;
     end
     else
@@ -4363,11 +4372,15 @@ begin
     begin
       check(PosEx(U[1], U) = 1);
       check(PosExChar(U[1], U) = 1);
-      if (len > 1) and (U[1] <> U[2]) then
+      if (len > 1) and
+         (U[1] <> U[2]) then
       begin
         check(PosEx(U[2], U) = 2);
         check(PosExChar(U[2], U) = 2);
-        if (len > 2) and (U[1] <> U[2]) and (U[2] <> U[3]) and (U[1] <> U[3]) then
+        if (len > 2) and
+           (U[1] <> U[2]) and
+           (U[2] <> U[3]) and
+           (U[1] <> U[3]) then
         begin
           check(PosEx(U[3], U) = 3);
           check(PosExChar(U[3], U) = 3);
@@ -4378,10 +4391,12 @@ begin
     begin // validates with offset parameter
       check(PosEx(#13, U, j) = 0);
       check(PosEx(U[j], U, j) = j);
-      if (j > 1) and (U[j - 1] <> U[j]) then
+      if (j > 1) and
+         (U[j - 1] <> U[j]) then
         check(PosEx(U[j], U, j - 1) = j);
       k := PosEx(U[j], U);
-      check((k > 0) and (U[k] = U[j]));
+      check((k > 0) and
+            (U[k] = U[j]));
       check(PosExChar(U[j], U) = k);
     end;
     Unic := Utf8DecodeToRawUnicode(U);
@@ -4764,12 +4779,12 @@ end;
 {$ifdef FPC}
 function _LocalTimeToUniversal(LT: TDateTime; TZOffset: Integer): TDateTime;
 begin
-  if (TZOffset > 0) then
-    Result := LT - EncodeTime(TZOffset div 60, TZOffset mod 60, 0, 0)
+  if TZOffset > 0 then
+    result := LT - EncodeTime(TZOffset div 60, TZOffset mod 60, 0, 0)
   else if (TZOffset < 0) then
-    Result := LT + EncodeTime(Abs(TZOffset) div 60, Abs(TZOffset) mod 60, 0, 0)
+    result := LT + EncodeTime(Abs(TZOffset) div 60, Abs(TZOffset) mod 60, 0, 0)
   else
-    Result := LT;
+    result := LT;
 end;
 {$endif FPC}
 
@@ -5084,7 +5099,8 @@ procedure TTestCoreBase._TSynValidate;
         V := RandomUTF8(i);
         Check(Utf8ToUnicodeLength(pointer(V)) = i, 'Unicode glyph=Ansi char=i');
         Msg := '';
-        ok := (i >= aMin) and (i <= aMax);
+        ok := (i >= aMin) and
+              (i <= aMax);
         Check(valid.Process(0, V, Msg) = ok, Msg);
         Check(Msg = '' = ok, Msg);
       end;

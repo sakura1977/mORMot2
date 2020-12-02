@@ -135,7 +135,8 @@ function StringReplaceAll(const S, OldPattern, NewPattern: RawUTF8): RawUTF8; ov
   {$ifdef HASINLINE}inline;{$endif}
 
 /// fast version of several cascaded StringReplaceAll()
-function StringReplaceAll(const S: RawUTF8; const OldNewPatternPairs: array of RawUTF8): RawUTF8; overload;
+function StringReplaceAll(const S: RawUTF8;
+  const OldNewPatternPairs: array of RawUTF8): RawUTF8; overload;
 
 /// fast replace of a specified char by a given string
 function StringReplaceChars(const Source: RawUTF8; OldChar, NewChar: AnsiChar): RawUTF8;
@@ -650,7 +651,7 @@ type
   // $ "Enum": "Destroying", // Idle,Started,Finished,Destroying
   // - woEnumSetsAsText will store sets and enumerables as text (is also
   // included in woFullExpand or woHumanReadable)
-  // - woDateTimeWithMagic will append the JSON_SQLDATE_MAGIC (i.e. U+FFF1)
+  // - woDateTimeWithMagic will append the JSON_SQLDATE_MAGIC_C (i.e. U+FFF1)
   // before the ISO-8601 encoded TDateTime value
   // - woDateTimeWithZSuffix will append the Z suffix to the ISO-8601 encoded
   // TDateTime value, to identify the content as strict UTC value
@@ -853,9 +854,11 @@ type
     procedure Add(Value: boolean); overload;
       {$ifdef HASINLINE}inline;{$endif}
     /// append a Currency from its Int64 in-memory representation
-    procedure AddCurr64(Value: PInt64); overload;
-    /// append a Currency from its Int64 in-memory representation
-    procedure AddCurr64(const Value: currency); overload;
+    // - expects a PInt64 to avoid ambiguity with the AddCurr() method
+    procedure AddCurr64(Value: PInt64);
+    /// append a Currency value
+    // - just an inlined wrapper around AddCurr64(PInt64(@Value))
+    procedure AddCurr(const Value: currency); 
       {$ifdef HASINLINE}inline;{$endif}
     /// append an Unsigned 32-bit integer Value as a String
     procedure AddU(Value: cardinal);
@@ -1112,9 +1115,9 @@ type
       WriteOptions: TTextWriterWriteObjectOptions = []); virtual;
 
     /// serialize as JSON the given object
-    // - is just a wrapper around AddTypeJSON()
+    // - use overriden TTextWriter version instead!
     procedure WriteObject(Value: TObject;
-      Options: TTextWriterWriteObjectOptions = [woDontStoreDefault]);
+      WriteOptions: TTextWriterWriteObjectOptions = [woDontStoreDefault]); virtual;
     /// append a T*ObjArray dynamic array as a JSON array
     // - as expected by Rtti.RegisterObjArray()
     procedure AddObjArrayJSON(const aObjArray;
@@ -2736,7 +2739,13 @@ begin
     result := S
   else
   begin
-    found := PosEx(OldPattern, S, 1); // our PosEx() is faster than Pos()
+    {$ifdef FPC} // will use fast FPC SSE version
+    if length(OldPattern) = 1 then
+      found := IndexByte(pointer(S)^, PStrLen(PtrUInt(S) - _STRLEN)^,
+        byte(OldPattern[1])) + 1
+    else
+    {$endif FPC}
+      found := PosEx(OldPattern, S, 1); // our PosEx() is faster than RTL Pos()
     if found = 0 then
       result := S
     else
@@ -4690,12 +4699,11 @@ begin
   inc(B, 4);
 end;
 
-procedure TBaseWriter.WriteObject(Value: TObject; Options: TTextWriterWriteObjectOptions);
+procedure TBaseWriter.WriteObject(Value: TObject;
+  WriteOptions: TTextWriterWriteObjectOptions);
 begin
-  if Value <> nil then
-    AddTypedJSON(@Value, Value.ClassInfo, Options)
-  else
-    AddNull;
+  raise ESynException.CreateUTF8(
+    '%.WriteObject unimplemented: use TTextWriter', [self]);
 end;
 
 procedure TBaseWriter.AddObjArrayJSON(const aObjArray;
@@ -5002,18 +5010,22 @@ begin
       if P[Len - 2] = '0' then
         if P[Len - 3] = '0' then
           if P[Len - 4] = '0' then
+            // 'xxx.0000' -> 'xxx'
             dec(Len, 5)
           else
+            // 'xxx.1000' -> 'xxx.1'
             dec(Len, 3)
         else
+          // 'xxx.1200' -> 'xxx.12'
           dec(Len, 2)
       else
+        // 'xxx.1220' -> 'xxx.123'
         dec(Len);
   MoveSmall(P, B + 1, Len);
   inc(B, Len);
 end;
 
-procedure TBaseWriter.AddCurr64(const Value: currency);
+procedure TBaseWriter.AddCurr(const Value: currency);
 begin
   AddCurr64(PInt64(@Value));
 end;
@@ -5137,14 +5149,16 @@ var
   ntabs: cardinal;
 begin
   if B^ = #9 then
-    exit; // we most probably just added an indentation level
+    // we just already added an indentation level - do it once
+    exit;
   ntabs := fHumanReadableLevel;
   if ntabs >= cardinal(fTempBufSize) then
-    ntabs := 0; // avoid buffer overflow
+    ntabs := 0; // fHumanReadableLevel=-1 after the last level of a document
   if BEnd - B <= PtrInt(ntabs) then
     FlushToStream;
   PWord(B + 1)^ := 13 + 10 shl 8; // CR + LF
-  FillCharFast(B[3], ntabs, 9);   // #9=tab
+  if ntabs > 0 then
+    FillCharFast(B[3], ntabs, 9); // #9=tab
   inc(B, ntabs + 2);
 end;
 

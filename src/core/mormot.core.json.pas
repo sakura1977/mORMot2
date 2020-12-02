@@ -424,6 +424,7 @@ type
       {$ifdef HASINLINE}inline;{$endif}
     /// convert the value into a VCL/generic string
     function ToString: string;
+      {$ifdef HASINLINE}inline;{$endif}
     /// convert the value into a signed integer
     function ToInteger: PtrInt;
       {$ifdef HASINLINE}inline;{$endif}
@@ -803,9 +804,11 @@ type
     // - handle rkClass as WriteObject, rkEnumeration/rkSet with proper options,
     // rkRecord, rkDynArray or rkVariant using proper JSON serialization
     // - other types will append 'null'
-    // - returns the size of the Value, in bytes
     procedure AddTypedJSON(Value, TypeInfo: pointer;
       WriteOptions: TTextWriterWriteObjectOptions = []); override;
+    /// serialize as JSON the given object
+    procedure WriteObject(Value: TObject;
+      WriteOptions: TTextWriterWriteObjectOptions = [woDontStoreDefault]); override;
     /// append complex types as JSON content using TRttiCustom
     // - called e.g. by TTextWriter.AddVariant() for varAny / TRttiVarData
     procedure AddRttiCustomJSON(Value: pointer; RttiCustom: TObject;
@@ -1646,8 +1649,8 @@ type
   // TObjectList serialized field with the global Classes.FindClass() function
   // - null will release any class instance, unless jpoNullDontReleaseObjectInstance
   // is set which will leave the instance untouched
-  // - class instances will be left untouched before parsing, unless
-  // jpoClearClassPublishedProperties is defined
+  // - values will be left untouched before parsing, unless jpoClearValues
+  // is defined, to void existing record fields or class published properties
   TJsonParserOption = (
     jpoIgnoreUnknownProperty,
     jpoIgnoreStringType,
@@ -1660,7 +1663,7 @@ type
     jpoAllowDouble,
     jpoObjectListClassNameGlobalFindClass,
     jpoNullDontReleaseObjectInstance,
-    jpoClearClassPublishedProperties);
+    jpoClearValues);
 
   /// set of options for JsonParser() parsing process
   TJsonParserOptions = set of TJsonParserOption;
@@ -1758,7 +1761,7 @@ type
   TJSONToObjectOptions = TJsonParserOptions;
 
 const
-  woSQLRawBlobAsBase64 = woRawBlobAsBase64;
+  j2oSQLRawBlobAsBase64 = woRawBlobAsBase64;
   j2oIgnoreUnknownProperty = jpoIgnoreUnknownProperty;
   j2oIgnoreStringType = jpoIgnoreStringType;
   j2oIgnoreUnknownEnum = jpoIgnoreUnknownEnum;
@@ -1787,6 +1790,17 @@ type
   // - set Context.Valid=true if Context.JSON has been parsed into Data^
   TOnRttiJsonRead = procedure(var Context: TJsonParserContext;
     Data: pointer) of object;
+
+  /// the callback signature used by TRttiJson for serializing JSON
+  // - is in fact a convenient alias to the TOnRttiJsonWrite callback
+  TOnClassJsonWrite = procedure(W: TTextWriter; Data: TObject;
+    Options: TTextWriterWriteObjectOptions) of object;
+
+  /// the callback signature used by TRttiJson for unserializing JSON
+  // - set Context.Valid=true if Context.JSON has been parsed into Data^
+  // - is in fact a convenient alias to the TOnRttiJsonRead callback
+  TOnClassJsonRead = procedure(var Context: TJsonParserContext;
+    Data: TObject) of object;
 
   /// used internally by TRttiJson for fast allocation of a rkClass instance
   TRttiJsonNewInstance = function(Rtti: TRttiCustom): pointer;
@@ -1825,13 +1839,14 @@ type
     class function Find(Info: PRttiInfo): TRttiJson;
       {$ifdef HASINLINE}inline;{$endif}
     /// register a custom callback for JSON serialization of a given TypeInfo()
+    // - for a dynamic array, will customize the item serialization callbacks
     // - replace deprecated TJSONSerializer.RegisterCustomSerializer() method
     class function RegisterCustomSerializer(Info: PRttiInfo;
       const Reader: TOnRttiJsonRead; const Writer: TOnRttiJsonWrite): TRttiJSON; overload;
     /// register a custom callback for JSON serialization of a given class
     // - replace deprecated TJSONSerializer.RegisterCustomSerializer() method
     class function RegisterCustomSerializer(ObjectClass: TClass;
-      const Reader: TOnRttiJsonRead; const Writer: TOnRttiJsonWrite): TRttiJSON; overload;
+      const Reader: TOnClassJsonRead; const Writer: TOnClassJsonWrite): TRttiJSON; overload;
     /// unregister any custom callback for JSON serialization of a given TypeInfo()
     // - will also work after RegisterFromText()
     class function UnRegisterCustomSerializer(Info: PRttiInfo): TRttiJSON; overload;
@@ -2501,6 +2516,7 @@ begin
   result := false;
   if (P = nil) or
      (len <= 0) or
+     // ensure there is no unexpected/unsupported #0 in the middle of input
      (StrLen(P) <> len) then
     exit;
   B := P;
@@ -2780,19 +2796,22 @@ num:    result := P;
     exit;
   end;
   while not (jcEndOfJSONFieldOr0 in jsonset[P^]) do
-    // loop until #0 , ] } : delimiter
-    inc(P);
+    if P^ = #0 then
+      // leave PDest=nil for unexpected end
+      exit
+    else
+      // loop until #0 , ] } : delimiter
+      inc(P);
   if EndOfObject <> nil then
     EndOfObject^ := P^;
-  if P^ = #0 then
-    // reached end of input buffer: keep position in trailing #0
-    PDest := P
-  else
+  // ensure JSON value is zero-terminated, and continue after it
+  if P^ <> #0 then
   begin
-    // ensure JSON value is zero-terminated, and continue after it
     P^ := #0;
     PDest := P + 1;
-  end;
+  end
+  else
+    PDest := P;
 end;
 
 function GotoEndOfJSONString(P: PUTF8Char; tab: PJsonCharSet): PUTF8Char;
@@ -2929,7 +2948,7 @@ begin
     tab := @JSON_CHARS;
     repeat
       inc(P);
-    until not (jcJSONStringMarker in tab[P^]);
+    until jcJSONStringMarker in tab[P^]; // end at [#0, '"', '\']
     if P^ <> '"' then
       exit;
     SetString(PropName, Name, P - Name); // note: won't unescape JSON strings
@@ -3247,8 +3266,9 @@ begin
   inc(P);
   Field := P;
   tab := @JSON_CHARS;
-  while jcJSONStringMarker in tab[P^] do
-    inc(P);   // not [#0, '"', '\']
+  while not (jcJSONStringMarker in tab[P^]) do
+    // not [#0, '"', '\']
+    inc(P); // very fast parsing of most UTF-8 chars within "string"
   if P^ <> '"' then
     exit; // here P^ should be '"'
   FieldLen := P - Field;
@@ -3407,7 +3427,11 @@ end;
 function GotoNextJSONObjectOrArrayInternal(P, PMax: PUTF8Char;
   EndChar: AnsiChar): PUTF8Char;
 var
-  tab: PJsonCharSet;
+  {$ifdef CPUX86NOTPIC}
+  jsonset: TJsonCharSet absolute JSON_CHARS; // not enough registers
+  {$else}
+  jsonset: PJsonCharSet;
+  {$endif CPUX86NOTPIC}
 label
   Prop;
 begin // should match GetJSONPropName()
@@ -3460,10 +3484,12 @@ begin // should match GetJSONPropName()
         end;
       '-', '+', '0'..'9':
         begin // '0123' excluded by JSON, but not here
-          tab := @JSON_CHARS;
+          {$ifndef CPUX86NOTPIC}
+          jsonset := @JSON_CHARS;
+          {$endif CPUX86NOTPIC}
           repeat
             inc(P);
-          until not (jcDigitFloatChar in tab[P^]);
+          until not (jcDigitFloatChar in jsonset[P^]);
           // not ['-', '+', '0'..'9', '.', 'E', 'e']
         end;
       't':
@@ -3509,12 +3535,14 @@ begin // should match GetJSONPropName()
         end;
     else
       begin
-Prop:   tab := @JSON_CHARS;
-        if not (jcJsonIdentifierFirstChar in tab[P^]) then
+Prop:   {$ifndef CPUX86NOTPIC}
+        jsonset := @JSON_CHARS;
+        {$endif CPUX86NOTPIC}
+        if not (jcJsonIdentifierFirstChar in jsonset[P^]) then
           exit; // not ['_', '0'..'9', 'a'..'z', 'A'..'Z', '$']
         repeat
           inc(P);
-        until not (jcJsonIdentifier in tab[P^]);
+        until not (jcJsonIdentifier in jsonset[P^]);
         // not ['_', '0'..'9', 'a'..'z', 'A'..'Z', '.', '[', ']']
         while (P^ <= ' ') and
               (P^ <> #0) do
@@ -3527,7 +3555,7 @@ Prop:   tab := @JSON_CHARS;
             inc(P);
           if P^ = '"' then
           begin
-            P := GotoEndOfJSONString(P, tab);
+            P := GotoEndOfJSONString(P, {$ifdef CPUX86NOTPIC}@{$endif}jsonset);
             if P^ <> '"' then
               exit;
           end;
@@ -4253,7 +4281,7 @@ var
   MaxValue: integer;
 begin
   if (Info <> nil) and
-     (Info^.Kind = rkEnumeration) and
+     (Info^.Kind = rkSet) and
      (Info^.SetEnumType(Names, MaxValue) <> nil) then
     result := GetSetNameValue(Names, MaxValue, P, EndOfObject)
   else
@@ -4479,6 +4507,7 @@ begin
     result := '""'
   else if (pointer(result) = pointer(P)) or
           NeedsJsonEscape(P, PLen) then
+    // use TTextWriter.AddJSONEscape() for proper JSON escape
     with TTextWriter.CreateOwnedStream(temp) do
     try
       AddString(aPrefix);
@@ -4493,6 +4522,7 @@ begin
     end
   else
   begin
+    // direct allocation if no JSON escape is needed
     Lp := length(aPrefix);
     Ls := length(aSuffix);
     FastSetString(result, nil, PLen + Lp + Ls + 2);
@@ -4740,6 +4770,13 @@ end;
 
 { ********** Low-Level JSON Serialization for all TRttiParserType }
 
+procedure TTextWriter.BlockAfterItem(Options: TTextWriterWriteObjectOptions);
+begin // defined here for proper inlining
+  Add(',');
+  if woHumanReadable in Options then
+    AddCRAndIndent;
+end;
+
 { TJsonSaveContext }
 
 procedure TJsonSaveContext.Init(WR: TTextWriter;
@@ -4786,7 +4823,7 @@ end;
 procedure TJsonSaveContext.AddDateTime(Value: PDateTime; WithMS: boolean);
 begin
   if woDateTimeWithMagic in Options then
-    W.AddNoJSONEscape(@JSON_SQLDATE_MAGIC_QUOTE_VAR, 4)
+    W.AddShorter(JSON_SQLDATE_MAGIC_QUOTE_STR)
   else
     W.Add('"');
   W.AddDateTime(Value^, WithMS);
@@ -4847,7 +4884,7 @@ end;
 procedure _JS_RawByteString(Data: PRawByteString; const Ctxt: TJsonSaveContext);
 begin
   if (rcfIsRawBlob in Ctxt.Info.Cache.Flags) and
-     (woRawBlobAsBase64 in Ctxt.Options) then
+     not (woRawBlobAsBase64 in Ctxt.Options) then
     Ctxt.W.AddNull
   else
     Ctxt.W.WrBase64(pointer(Data^), length(Data^), {withmagic=}true);
@@ -4864,6 +4901,15 @@ begin
   Ctxt.W.AddJSONEscape(Data^);
   Ctxt.W.Add('"');
 end;
+
+{$ifndef UNICODE}
+procedure _JS_AnsiString(Data: PRawByteString; const Ctxt: TJsonSaveContext);
+begin
+  Ctxt.W.Add('"');
+  Ctxt.W.AddJSONEscapeAnsiString(Data^);
+  Ctxt.W.Add('"');
+end;
+{$endif UNICODE}
 
 procedure _JS_Single(Data: PSingle; const Ctxt: TJsonSaveContext);
 begin
@@ -4951,13 +4997,6 @@ begin
   Ctxt.W.AddNull;
 end;
 
-procedure TTextWriter.BlockAfterItem(Options: TTextWriterWriteObjectOptions);
-begin // defined here for proper inlining
-  Add(',');
-  if woHumanReadable in Options then
-    AddCRAndIndent;
-end;
-
 procedure _JS_ID(Data: PInt64; const Ctxt: TJsonSaveContext);
 var
   _str: shortstring;
@@ -5041,8 +5080,9 @@ begin
       begin
         if GetBitPtr(Data, i) then
         begin
+          Ctxt.W.Add('"');
           Ctxt.W.AddShort(PS^);
-          Ctxt.W.Add(',');
+          Ctxt.W.Add('"', ',');
         end;
         inc(PByte(PS), PByte(PS)^ + 1); // next
       end;
@@ -5057,14 +5097,21 @@ begin
   begin
     // standard serialization as unsigned integer (up to 64 items)
     v := 0;
-    MoveSmall(Data, @v, Ctxt.Info.Cache.Size);
+    MoveSmall(Data, @v, Ctxt.Info.Size);
     Ctxt.W.AddQ(v);
   end;
 end;
 
+procedure _JS_DynArray_Custom(Data: pointer; const Ctxt: TJsonSaveContext);
+begin
+  // TRttiJson.RegisterCustomSerializer() custom callback for each item
+  TOnRttiJsonWrite(TRttiJson(Ctxt.Info).fJsonWriter)(
+    Ctxt.W, Data, Ctxt.Options);
+end;
+
 procedure _JS_DynArray(Data: PPointer; const Ctxt: TJsonSaveContext);
 var
-  n: PtrInt;
+  n, s: PtrInt;
   jsonsave: TRttiJsonSave;
   P: PAnsiChar;
   c: TJsonSaveContext;
@@ -5073,25 +5120,33 @@ begin
   c.W.BlockBegin('[', c.Options);
   if Data^ <> nil then
   begin
-    if (c.Info <> nil) and
-       Assigned(c.Info.JsonSave) then
+    if TRttiJson(Ctxt.Info).fJsonWriter.Code <> nil then
     begin
-      // efficient JSON serialization from recognized PT_JSONSAVE/PTC_JSONSAVE
+      // TRttiJson.RegisterCustomSerializer() custom callbacks
+      c.Info := Ctxt.Info;
+      jsonsave := @_JS_DynArray_Custom;
+    end
+    else if c.Info = nil then
+      jsonsave := nil
+    else
+      jsonsave := c.Info.JsonSave; // e.g. PT_JSONSAVE/PTC_JSONSAVE
+    if Assigned(jsonsave) then
+    begin
+      // efficient JSON serialization
       P := Data^;
       n := PDALen(P - _DALEN)^ + _DAOFF; // length(Data)
-      jsonsave := c.Info.JsonSave;
-      if Assigned(jsonsave) then
-        repeat
-          jsonsave(P, c);
-          dec(n);
-          if n = 0 then
-            break;
-          c.W.BlockAfterItem(c.Options);
-          inc(P, c.Info.Size);
-        until false;
+      s := Ctxt.Info.Cache.ItemSize; // c.Info may be nil
+      repeat
+        jsonsave(P, c);
+        dec(n);
+        if n = 0 then
+          break;
+        c.W.BlockAfterItem(c.Options);
+        inc(P, s);
+      until false;
     end
     else
-      // fallback to binary serialization with Base64 encoding
+      // fallback to raw RTTI binary serialization with Base64 encoding
       c.W.BinarySaveBase64(Data, Ctxt.Info.Info, [rkDynArray], {withMagic=}true);
   end
   else if (woHumanReadableEnumSetAsComment in Ctxt.Options) and
@@ -5110,7 +5165,7 @@ const
     nil, nil, @_JS_Boolean, @_JS_Byte, @_JS_Cardinal, @_JS_Currency,
     @_JS_Double, @_JS_Extended, @_JS_Int64, @_JS_Integer, @_JS_QWord,
     @_JS_RawByteString, @_JS_RawJSON, @_JS_RawUTF8, nil, @_JS_Single,
-    {$ifdef UNICODE} @_JS_Unicode {$else} @_JS_RawByteString {$endif},
+    {$ifdef UNICODE} @_JS_Unicode {$else} @_JS_AnsiString {$endif},
     @_JS_Unicode, @_JS_DateTime, @_JS_DateTimeMS, @_JS_GUID, @_JS_Hash,
     @_JS_Hash, @_JS_Hash, nil, @_JS_TimeLog, @_JS_Unicode, @_JS_UnixTime,
     @_JS_UnixMSTime, @_JS_Variant, @_JS_Unicode, @_JS_WinAnsi, @_JS_Word,
@@ -5125,6 +5180,7 @@ type
   TSPHook = class(TSynPersistent); // to access its protected methods
   TSPHookClass = class of TSPHook;
 
+// serialization of published props for records and classes
 procedure _JS_RttiCustom(Data: PAnsiChar; const Ctxt: TJsonSaveContext);
 var
   c: TJsonSaveContext;
@@ -5145,7 +5201,7 @@ begin
     // append 'null' for nil class instance
     c.W.AddNull
   else if TRttiJson(Ctxt.Info).fJsonWriter.Code <> nil then
-    // custom JSON serialization via a callback
+    // TRttiJson.RegisterCustomSerializer() custom callbacks
     TOnRttiJsonWrite(TRttiJson(Ctxt.Info).fJsonWriter)(c.W, Data, c.Options)
   else if not (rcfSynPersistentHook in Ctxt.Info.Flags) or
           not TSPHook(Data).RttiBeforeWriteObject(c.W, c.Options) then
@@ -5179,14 +5235,15 @@ begin
       end;
     end;
     if woDontStoreInherited in c.Options then
-    with Ctxt.Info.Props do
-    begin
-      // List[NotInheritedIndex]..List[Count-1] store the last hierarchy level
-      n := Count - NotInheritedIndex;
-      inc(c.Prop, NotInheritedIndex);
-    end
+      with Ctxt.Info.Props do
+      begin
+        // List[NotInheritedIndex]..List[Count-1] store the last hierarchy level
+        n := Count - NotInheritedIndex;
+        inc(c.Prop, NotInheritedIndex);
+      end
     else
       n := Ctxt.Info.Props.Count;
+    done := false;
     if n > 0 then
       // this is the main loop serializing Info.Props[]
       repeat
@@ -5194,12 +5251,12 @@ begin
         if // handle Props.NameChange() set to New='' to ignore this field
            (p^.Name <> nil) and
            // handle woStoreStoredFalse flag and "stored" attribute in code
-           ((p^.Prop = nil) or
-            (woStoreStoredFalse in c.Options) or
+           ((woStoreStoredFalse in c.Options) or
+            (p^.Prop = nil) or
             (p^.Prop.IsStored(pointer(Data)))) and
            // handle woDontStoreDefault flag over "default" attribute in code
-           ((p^.Prop = nil) or
-            not (woDontStoreDefault in c.Options) or
+           (not (woDontStoreDefault in c.Options) or
+            (p^.Prop = nil) or
             (p.PropDefault = NO_DEFAULT) or
             not p.ValueIsDefault(Data)) and
            // detect 0 numeric values and empty strings
@@ -5207,6 +5264,10 @@ begin
             not p.ValueIsVoid(Data)) then
         begin
           // if we reached here, we should serialize this property
+          if done then
+            // append ',' and proper indentation if a field was just appended
+            c.W.BlockAfterItem(c.Options);
+          done := true;
           c.W.WriteObjectPropName(p^.Name^, c.Options);
           if not (rcfSynPersistentHook in Ctxt.Info.Flags) or
              not TSPHook(Data).RttiWritePropertyValue(c.W, p, c.Options) then
@@ -5227,16 +5288,10 @@ begin
               if rvd.NeedsClear then
                 VarClearProc(rvd.Data);
             end;
-          done := true;
-        end
-        else
-          done := false;
+        end;
         dec(n);
         if n = 0 then
           break;
-        if done then
-          // append ',' and proper indentation
-          c.W.BlockAfterItem(c.Options);
         inc(c.Prop);
       until false;
     if rcfSynPersistentHook in Ctxt.Info.Flags then
@@ -5289,13 +5344,21 @@ end;
 
 procedure _JS_TList(Data: PList; const Ctxt: TJsonSaveContext);
 begin
-  _JS_Objects(Ctxt.W, pointer(Data^.List), Data^.Count, Ctxt.Options);
+  if Data^ = nil then
+    Ctxt.W.AddNull
+  else
+    _JS_Objects(Ctxt.W, pointer(Data^.List), Data^.Count, Ctxt.Options);
 end;
 
 procedure _JS_TObjectList(Data: PObjectList; const Ctxt: TJsonSaveContext);
 var
   o: TTextWriterWriteObjectOptions;
 begin
+  if Data^ = nil then
+  begin
+    Ctxt.W.AddNull;
+    exit;
+  end;
   o := Ctxt.Options;
   if not (woObjectListWontStoreClassName in o) then
     include(o, woStoreClassName);
@@ -5308,6 +5371,11 @@ var
   i, last: PtrInt;
   c: TJsonSaveContext; // reuse same context for all collection items
 begin
+  if Data^ = nil then
+  begin
+    Ctxt.W.AddNull;
+    exit;
+  end;
   // can't use AddObjects() since we don't have access to the TCollection list
   {%H-}c.Init(Ctxt.W, Ctxt.Options, Rtti.RegisterClass(Data^.ItemClass));
   c.W.BlockBegin('[', c.Options);
@@ -5329,6 +5397,11 @@ procedure _JS_TStrings(Data: PStrings; const Ctxt: TJsonSaveContext);
 var
   i, last: PtrInt;
 begin
+  if Data^ = nil then
+  begin
+    Ctxt.W.AddNull;
+    exit;
+  end;
   Ctxt.W.BlockBegin('[', Ctxt.Options);
   i := 0;
   last := Data^.Count - 1;
@@ -5350,6 +5423,11 @@ var
   i, last: PtrInt;
   u: PPUtf8CharArray;
 begin
+  if Data^ = nil then
+  begin
+    Ctxt.W.AddNull;
+    exit;
+  end;
   Ctxt.W.BlockBegin('[', Ctxt.Options);
   i := 0;
   u := Data^.TextPtr;
@@ -5369,13 +5447,21 @@ end;
 
 procedure _JS_TSynList(Data: PSynList; const Ctxt: TJsonSaveContext);
 begin
-  _JS_Objects(Ctxt.W, pointer(Data^.List), Data^.Count, Ctxt.Options);
+  if Data^ = nil then
+    Ctxt.W.AddNull
+  else
+    _JS_Objects(Ctxt.W, pointer(Data^.List), Data^.Count, Ctxt.Options);
 end;
 
 procedure _JS_TSynObjectList(Data: PSynObjectList; const Ctxt: TJsonSaveContext);
 var
   o: TTextWriterWriteObjectOptions;
 begin
+  if Data^ = nil then
+  begin
+    Ctxt.W.AddNull;
+    exit;
+  end;
   o := Ctxt.Options;
   if not (woObjectListWontStoreClassName in o) then
     include(o, woStoreClassName);
@@ -5393,7 +5479,7 @@ procedure TTextWriter.WriteObjectPropName(const PropName: ShortString;
 begin
   if woHumanReadable in Options then
     AddCRAndIndent; // won't do anything if has already been done
-  AddPropName(PropName); // handle twoForceJSONExtended in CustomOptions
+  AddProp(@PropName[1], ord(PropName[0])); // handle twoForceJSONExtended
   if woHumanReadable in Options then
     Add(' ');
 end;
@@ -5609,7 +5695,7 @@ begin
   if L = 0 then
     exit;
   if (L > 2) and
-     (PInteger(s)^ and $ffffff = JSON_BASE64_MAGIC) then
+     (PInteger(s)^ and $ffffff = JSON_BASE64_MAGIC_C) then
   begin
     AddNoJSONEscape(pointer(s), L); // was marked as a BLOB content
     exit;
@@ -5640,19 +5726,24 @@ var
   engine: TSynAnsiConvert;
 begin
   if Len > 0 then
+  begin
+    {$ifdef FPC} // CP_UTF8 is very likely on POSIX or LCL
+    if CodePage = 0 then
+      CodePage := CurrentAnsiConvert.CodePage;
+    {$endif FPC}
     case CodePage of
       CP_UTF8:          // direct write of RawUTF8 content
         if Escape = twJSONEscape then
-          Add(PUTF8Char(P), 0, Escape) // faster with no Len
+          Add(PUTF8Char(P), 0, Escape)    // faster with no Len
         else
           Add(PUTF8Char(P), Len, Escape); // expects a supplied Len
       CP_RAWBYTESTRING: // direct write of RawByteString content
         Add(PUTF8Char(P), Len, Escape);
       CP_UTF16:         // direct write of UTF-16 content
         AddW(PWord(P), 0, Escape);
-      CP_RAWBLOB:    // RawBlob written with Base-64 encoding
+      CP_RAWBLOB:       // RawBlob written with Base-64 encoding
         begin
-          AddNoJSONEscape(@PByteArray(@JSON_BASE64_MAGIC_QUOTE_VAR)[1], 3);
+          AddShorter(JSON_BASE64_MAGIC_S); // \uFFF0
           WrBase64(P, Len, {withMagic=}false);
         end;
     else
@@ -5686,6 +5777,7 @@ begin
           EngineAppendUTF8(self, engine, P, Len, Escape);
       end;
     end;
+  end;
 end;
 
 procedure TTextWriter.WrBase64(P: PAnsiChar; Len: PtrUInt; withMagic: boolean);
@@ -5699,7 +5791,7 @@ begin
       exit;
     end
     else
-      AddNoJSONEscape(@JSON_BASE64_MAGIC_QUOTE_VAR, 4);
+      AddShorter(JSON_BASE64_MAGIC_QUOTE_S); // "\uFFF0
   if Len > 0 then
   begin
     n := Len div 3;
@@ -5936,7 +6028,7 @@ begin
     varDate:
       AddDateTime(@v.VDate, 'T', '"');
     varCurrency:
-      AddCurr64(v.VInt64);
+      AddCurr64(@v.VInt64);
     varBoolean:
       Add(v.VBoolean); // 'true'/'false'
     varVariant:
@@ -5972,11 +6064,34 @@ var
   save: TRttiJsonSave;
 begin
   {%H-}ctxt.Init(self, WriteOptions, Rtti.RegisterType(TypeInfo));
-  save := ctxt.Info.JsonSave;
+  if ctxt.Info = nil then
+    save := nil // paranoid check
+  else
+    save := ctxt.Info.JsonSave;
   if Assigned(save) then
     save(Value, ctxt)
   else
     AddNull;
+end;
+
+procedure TTextWriter.WriteObject(Value: TObject;
+  WriteOptions: TTextWriterWriteObjectOptions);
+var
+  ctxt: TJsonSaveContext;
+  save: TRttiJsonSave;
+begin
+  if Value = nil then
+    AddNull
+  else
+  begin
+    // Rtti.RegisterClass() may create fake RTTI if {$M+} was not used
+    {%H-}ctxt.Init(self, WriteOptions, Rtti.RegisterClass(PClass(Value)^));
+    save := ctxt.Info.JsonSave;
+    if Assigned(save) then
+      save(@Value, ctxt)
+    else
+      AddNull;
+  end;
 end;
 
 procedure TTextWriter.AddRttiCustomJSON(Value: pointer; RttiCustom: TObject;
@@ -6238,8 +6353,8 @@ begin
       else
       begin
         c := PInteger(Value)^ and $ffffff;
-        if (c = JSON_BASE64_MAGIC) or
-           (c = JSON_SQLDATE_MAGIC) then
+        if (c = JSON_BASE64_MAGIC_C) or
+           (c = JSON_SQLDATE_MAGIC_C) then
           inc(Value, 3); // just ignore the Magic codepoint encoded as UTF-8
         AddXmlEscape(Value);
       end;
@@ -6269,7 +6384,7 @@ var
   tab: TNormTableByte absolute JSON_ESCAPE;
   {$else}
   tab: PNormTableByte;
-  {$endif}
+  {$endif CPUX86NOTPIC}
 label
   noesc;
 begin
@@ -6280,8 +6395,8 @@ begin
   i := 0;
   {$ifndef CPUX86NOTPIC}
   tab := @JSON_ESCAPE;
-  {$endif}
-  if tab[PByteArray(P)[i]] = 0 then
+  {$endif CPUX86NOTPIC}
+  if tab[PByteArray(P)[i]] = JSON_ESCAPE_NONE then
   begin
 noesc:
     start := i;
@@ -6439,7 +6554,7 @@ begin
       vtExtended:
         AddDouble(VExtended^);
       vtCurrency:
-        AddCurr64(VInt64^);
+        AddCurr64(VInt64);
       vtObject:
         WriteObject(VObject);
       vtVariant:
@@ -6487,7 +6602,7 @@ begin
       vtExtended:
         AddDouble(VExtended^);
       vtCurrency:
-        AddCurr64(VInt64^);
+        AddCurr64(VInt64);
       vtInt64:
         Add(VInt64^);
       {$ifdef FPC}
@@ -6636,7 +6751,7 @@ begin
   begin
     // we know the fields from text definition
     {%H-}ctxt.Init(self, WriteOptions, RecordInfo);
-    _JS_RttiCustom(Value, ctxt);
+    TRttiJsonSave(ctxt.Info.JsonSave)(Value, ctxt);
   end
   else
     // fallback to binary serialization and Base64 encoding
@@ -6688,7 +6803,7 @@ var
 begin
   temp.InitRtti(Info, Value^);
   AddDynArrayJSON(temp, WriteOptions);
-  result := temp.ElemSize;
+  result := temp.Info.Cache.ItemSize;
 end;
 
 
@@ -6701,7 +6816,9 @@ procedure TJsonParserContext.Init(P: PUTF8Char; Rtti: TRttiCustom;
 begin
   JSON := P;
   Valid := true;
-  Options := O + TRttiJson(Rtti).fIncludeReadOptions;
+  if Rtti <> nil then
+    O := O + TRttiJson(Rtti).fIncludeReadOptions;
+  Options := O;
   if CV <> nil then
   begin
     DVO := CV^;
@@ -6743,7 +6860,8 @@ procedure TJsonParserContext.ParseEndOfObject;
 begin
   if Valid then
   begin
-    JSON := mormot.core.json.ParseEndOfObject(JSON, EndOfObject);
+    if JSON^ <> #0 then
+      JSON := mormot.core.json.ParseEndOfObject(JSON, EndOfObject);
     Valid := JSON <> nil;
   end;
 end;
@@ -6756,6 +6874,7 @@ begin
   if Valid then
   begin
     P := GotoNextNotSpace(JSON);
+    JSON := P;
     if PCardinal(P)^ = NULL_LOW then
     begin
       P := mormot.core.json.ParseEndOfObject(P + 4, EndOfObject);
@@ -6776,6 +6895,7 @@ var
 begin
   result := false; // no need to parse
   P := GotoNextNotSpace(JSON);
+  JSON := P;
   if P^ = '[' then
   begin
     P := GotoNextNotSpace(P + 1); // ignore trailing [
@@ -6821,7 +6941,9 @@ function TJsonParserContext.ParseObject(const Names: array of RawUTF8;
 begin
   JSON := JSONDecode(JSON, Names, Values, HandleValuesAsObjectOrArray);
   if JSON = nil then
-    Valid := false;
+    Valid := false
+  else
+    ParseEndOfObject;
   result := Valid;
 end;
 
@@ -7082,6 +7204,12 @@ begin
   MoveSmall(@v, Data, Ctxt.Info.Size);
 end;
 
+procedure _JL_DynArray_Custom(Data: PAnsiChar; var Ctxt: TJsonParserContext);
+begin
+  // TRttiJson.RegisterCustomSerializer() custom callback for each item
+  TOnRttiJsonRead(TRttiJson(Ctxt.Info).fJsonReader)(Ctxt, Data);
+end;
+
 procedure _JL_DynArray(Data: PAnsiChar; var Ctxt: TJsonParserContext);
 var
   load: TRttiJsonLoad;
@@ -7095,20 +7223,29 @@ begin
   if not Ctxt.ParseArray then
     // detect void (i.e. []) or invalid array
     exit;
-  if PCardinal(Ctxt.JSON)^ = JSON_BASE64_MAGIC_QUOTE then
-    // legacy binary layout with a single Base-64 encoded item
+  if PCardinal(Ctxt.JSON)^ = JSON_BASE64_MAGIC_QUOTE_C then
+    // raw RTTI binary layout with a single Base-64 encoded item
     Ctxt.Valid := Ctxt.ParseNext and
-                  (Ctxt.EndOfObject = ']') and
-                  (Ctxt.Value <> nil) and
-      (PCardinal(Ctxt.Value)^ and $ffffff = JSON_BASE64_MAGIC) and
-      BinaryLoadBase64(PAnsiChar(pointer(Ctxt.Value)) + 3, Ctxt.ValueLen - 3,
-        Data, Ctxt.Info.Info, {uri=}false, [rkDynArray], {nocrc=}true)
+              (Ctxt.EndOfObject = ']') and
+              (Ctxt.Value <> nil) and
+              (PCardinal(Ctxt.Value)^ and $ffffff = JSON_BASE64_MAGIC_C) and
+              BinaryLoadBase64(pointer(Ctxt.Value + 3), Ctxt.ValueLen - 3,
+                Data, Ctxt.Info.Info, {uri=}false, [rkDynArray], {nocrc=}true)
   else
   begin
     // efficient load of all JSON items
     arrinfo := Ctxt.Info;
-    Ctxt.Info := Ctxt.Info.ArrayRtti;
-    load := TRttiJson(Ctxt.Info).fJsonLoad;
+    if TRttiJson(arrinfo).fJsonReader.Code <> nil then
+      // TRttiJson.RegisterCustomSerializer() custom callbacks
+      load := @_JL_DynArray_Custom
+    else
+    begin
+      Ctxt.Info := arrinfo.ArrayRtti;
+      if Ctxt.Info = nil then
+        load := nil
+      else
+        load := Ctxt.Info.JsonLoad;
+    end;
     // initial guess of the JSON array count - will browse up to 256KB of input
     cap := abs(JSONArrayCount(Ctxt.JSON, Ctxt.JSON + 256 shl 10));
     if (cap = 0) or
@@ -7117,7 +7254,7 @@ begin
       Ctxt.Valid := false;
       exit;
     end;
-    Data := DynArrayNew(arr, cap, Ctxt.Info.Size); // allocate new zeroed memory
+    Data := DynArrayNew(arr, cap, arrinfo.Cache.ItemSize); // alloc zeroed mem
     // main JSON unserialization loop
     n := 0;
     repeat
@@ -7125,15 +7262,17 @@ begin
       begin
         // grow if our initial guess was aborted due to huge input
         cap := NextGrow(cap);
-        Data := DynArrayGrow(arr, cap, Ctxt.Info.Size) + (n * Ctxt.Info.Size);
+        Data := DynArrayGrow(arr, cap, arrinfo.Cache.ItemSize) +
+                  (n * arrinfo.Cache.ItemSize);
       end;
-      // unserialize the next item
+      // unserialize one item
       load(Data, Ctxt); // will call _JL_RttiCustom() for T*ObjArray
       inc(n);
       if Ctxt.Valid then
         if Ctxt.EndOfObject = ',' then
         begin
-          inc(Data, Ctxt.Info.Size);
+          // continue with the next item
+          inc(Data, arrinfo.Cache.ItemSize);
           continue;
         end
         else if Ctxt.EndOfObject = ']' then
@@ -7166,7 +7305,7 @@ var
 begin
   Ctxt.Info := Prop.Value; // caller will restore it afterwards
   Ctxt.Prop := @Prop;
-  load := TRttiJson(Ctxt.Info).fJsonLoad;
+  load := Ctxt.Info.JsonLoad;
   if not Assigned(load) then
     Ctxt.Valid := false
   else if Prop.OffsetSet >= 0 then
@@ -7214,10 +7353,17 @@ var
   prop: PRttiCustomProp;
   propname: PUTF8Char;
   propnamelen: integer;
+label
+  nxt, any;
 begin
   Ctxt.JSON := GotoNextNotSpace(Ctxt.JSON);
   if TRttiJson(Ctxt.Info).fJsonReader.Code <> nil then
+  begin
+    // TRttiJson.RegisterCustomSerializer() custom callbacks
+    if Ctxt.Info.Kind = rkClass then
+      Data := PPointer(Data)^; // as expected by the callback
     TOnRttiJsonRead(TRttiJson(Ctxt.Info).fJsonReader)(Ctxt, Data)
+  end
   else
   begin
     // always finalize and reset the existing values (in case of missing props)
@@ -7232,9 +7378,8 @@ begin
       if PPointer(Data)^ = nil then
         // e.g. from _JL_DynArray for T*ObjArray
         PPointer(Data)^ := TRttiJson(Ctxt.Info).fClassNewInstance(Ctxt.Info)
-      else
-        if jpoClearClassPublishedProperties in Ctxt.Options then
-          Ctxt.Info.Props.FinalizeAndClearPublishedProperties(PPointer(Data)^);
+      else if jpoClearValues in Ctxt.Options then
+        Ctxt.Info.Props.FinalizeAndClearPublishedProperties(PPointer(Data)^);
       // class instances are accessed by reference, records are stored by value
       Data := PPointer(Data)^;
       if (rcfSynPersistentHook in Ctxt.Info.Flags) and
@@ -7243,7 +7388,8 @@ begin
     end
     else
     begin
-      Ctxt.Info.ValueFinalizeAndClear(Data);
+      if jpoClearValues in Ctxt.Options then
+        Ctxt.Info.ValueFinalizeAndClear(Data);
       if Ctxt.ParseNull then
         exit;
     end;
@@ -7256,25 +7402,41 @@ begin
     end;
     Ctxt.JSON := GotoNextNotSpace(Ctxt.JSON + 1);
     if Ctxt.JSON^ = '}' then
-      Ctxt.ParseEndOfObject
+    begin
+      inc(Ctxt.JSON);
+      Ctxt.ParseEndOfObject;
+    end
     else
     begin
       root := pointer(Ctxt.Info); // Ctxt.Info overriden in JsonLoadProp()
       prop := pointer(root.Props.List);
       for p := 1 to root.Props.Count do
       begin
-        propname := GetJSONPropName(Ctxt.JSON, @propnamelen);
+nxt:    propname := GetJSONPropName(Ctxt.JSON, @propnamelen);
         Ctxt.Valid := (Ctxt.JSON <> nil) and
                       (propname <> nil);
         if not Ctxt.Valid then
           break;
-        // O(1) optimistic process of the propertyname
+        // O(1) optimistic process of the property name, following RTTI order
         if (prop^.Name <> nil) and
            IdemPropName(prop^.Name^, propname, propnamelen) then
           if JsonLoadProp(Data, prop^, Ctxt) then
-            inc(prop)
+            if Ctxt.EndOfObject = '}' then
+              break
+            else
+              inc(prop)
           else
             break
+        else if (Ctxt.Info.Kind = rkClass) and
+                IdemPropName('ClassName', propname, propnamelen) then
+        begin
+          // woStoreClassName was used -> just ignore the class name
+          Ctxt.JSON := GotoNextJSONItem(Ctxt.JSON, 1, @Ctxt.EndOfObject);
+          Ctxt.Valid := Ctxt.JSON <> nil;
+          if Ctxt.Valid then
+            goto nxt;
+          break;
+        end
         else
         begin
           // we didn't find the property in its natural place -> full lookup
@@ -7295,13 +7457,18 @@ begin
             if (not Ctxt.Valid) or
                (Ctxt.EndOfObject = '}') then
                break;
-            propname := GetJSONPropName(Ctxt.JSON, @propnamelen);
+any:        propname := GetJSONPropName(Ctxt.JSON, @propnamelen);
             Ctxt.Valid := (Ctxt.JSON <> nil) and
                           (propname <> nil);
           until not Ctxt.Valid;
           break;
         end;
       end;
+      if Ctxt.Valid and
+         (Ctxt.EndOfObject = ',') and
+         ((rcfReadIgnoreUnknownFields in root.Flags) or
+          (jpoIgnoreUnknownProperty in Ctxt.Options)) then
+        goto any;
       Ctxt.ParseEndOfObject; // mimics GetJsonField() - set Ctxt.EndOfObject
       Ctxt.Info := root; // restore
     end;
@@ -7315,8 +7482,14 @@ var
   root: TRttiCustom;
   item: TObject;
 begin
+  if Data^ = nil then
+  begin
+    Ctxt.Valid := Ctxt.ParseNull;
+    exit;
+  end;
   Data^.Clear;
-  if not Ctxt.ParseArray then
+  if Ctxt.ParseNull or
+     not Ctxt.ParseArray then
     exit;
   root := Ctxt.Info;
   Ctxt.Info := Ctxt.ObjectListItem;
@@ -7332,20 +7505,36 @@ end;
 
 procedure _JL_TCollection(Data: PCollection; var Ctxt: TJsonParserContext);
 var
-  root: TRttiCustom;
+  root: TRttiJSON;
   load: TRttiJsonLoad;
   item: TCollectionItem;
 begin
+  if Data^ = nil then
+  begin
+    Ctxt.Valid := Ctxt.ParseNull;
+    exit;
+  end;
   Data^.BeginUpdate;
   try
     Data^.Clear;
-    if not Ctxt.ParseArray then
+    if Ctxt.ParseNull or
+       not Ctxt.ParseArray then
       exit;
-    root := Ctxt.Info;
-    Ctxt.Info := TRttiJSON(root).fCollectionItemRtti;
-    load := TRttiJSON(Ctxt.Info).fJsonLoad;
+    root := TRttiJSON(Ctxt.Info);
+    load := nil;
     repeat
       item := Data^.Add;
+      if not Assigned(load) then
+      begin
+        if root.fCollectionItemRtti = nil then
+        begin
+          // RegisterCollection() was not called -> compute after Data^.Add
+          root.fCollectionItem := PPointer(item)^;
+          root.fCollectionItemRtti := Rtti.RegisterClass(PClass(item)^);
+        end;
+        Ctxt.Info := root.fCollectionItemRtti;
+        load := Ctxt.Info.JsonLoad;
+      end;
       load(@item, Ctxt);
     until (not Ctxt.Valid) or
           (Ctxt.EndOfObject = ']');
@@ -7361,8 +7550,14 @@ var
   root: TRttiCustom;
   item: TObject;
 begin
+  if Data^ = nil then
+  begin
+    Ctxt.Valid := Ctxt.ParseNull;
+    exit;
+  end;
   Data^.Clear;
-  if not Ctxt.ParseArray then
+  if Ctxt.ParseNull or
+     not Ctxt.ParseArray then
     exit;
   root := Ctxt.Info;
   Ctxt.Info := Ctxt.ObjectListItem;
@@ -7380,10 +7575,16 @@ procedure _JL_TStrings(Data: PStrings; var Ctxt: TJsonParserContext);
 var
   item: string;
 begin
+  if Data^ = nil then
+  begin
+    Ctxt.Valid := Ctxt.ParseNull;
+    exit;
+  end;
   Data^.BeginUpdate;
   try
     Data^.Clear;
-    if not Ctxt.ParseArray then
+    if Ctxt.ParseNull or
+       not Ctxt.ParseArray then
       exit;
     repeat
       if Ctxt.ParseNext then
@@ -7403,10 +7604,16 @@ procedure _JL_TRawUTF8List(Data: PRawUTF8List; var Ctxt: TJsonParserContext);
 var
   item: RawUTF8;
 begin
+  if Data^ = nil then
+  begin
+    Ctxt.Valid := Ctxt.ParseNull;
+    exit;
+  end;
   Data^.BeginUpdate;
   try
     Data^.Clear;
-    if not Ctxt.ParseArray then
+    if Ctxt.ParseNull or
+       not Ctxt.ParseArray then
       exit;
     repeat
       if Ctxt.ParseNext then
@@ -8328,15 +8535,14 @@ const
 
 function TSynDictionary.KeyFullHash(const Elem): cardinal;
 begin
-  result := fKeys.Hasher.Hasher(0, @Elem, fKeys.ElemSize);
+  result := fKeys.Hasher.Hasher(0, @Elem, fKeys.Info.Cache.ItemSize);
 end;
 
 function TSynDictionary.KeyFullCompare(const A, B): integer;
 var
   i: PtrInt;
 begin
-
-  for i := 0 to fKeys.ElemSize - 1 do
+  for i := 0 to fKeys.Info.Cache.ItemSize - 1 do
   begin
     result := TByteArray(A)[i] - TByteArray(B)[i];
     if result <> 0 then
@@ -8680,7 +8886,7 @@ begin
   if ndx < 0 then
     result := nil
   else
-    result := PAnsiChar(fValues.Value^) + PtrUInt(ndx) * fValues.ElemSize;
+    result := PAnsiChar(fValues.Value^) + ndx * fValues.Info.Cache.ItemSize;
 end;
 
 function TSynDictionary.FindValueOrAdd(const aKey; var added: boolean;
@@ -8774,7 +8980,7 @@ function TSynDictionary.ForEach(const OnEach: TOnSynDictionary;
   Opaque: pointer): integer;
 var
   k, v: PAnsiChar;
-  i, n, ks, vs: integer;
+  i, n, ks, vs: PtrInt;
 begin
   result := 0;
   fSafe.Lock;
@@ -8784,9 +8990,9 @@ begin
        not Assigned(OnEach) then
       exit;
     k := fKeys.Value^;
-    ks := fKeys.ElemSize;
+    ks := fKeys.Info.Cache.ItemSize;
     v := fValues.Value^;
-    vs := fValues.ElemSize;
+    vs := fValues.Info.Cache.ItemSize;
     for i := 0 to n - 1 do
     begin
       inc(result);
@@ -8805,7 +9011,7 @@ function TSynDictionary.ForEach(const OnMatch: TOnSynDictionary;
   Opaque: pointer): integer;
 var
   k, v: PAnsiChar;
-  i, n, ks, vs: integer;
+  i, n, ks, vs: PtrInt;
 begin
   fSafe.Lock;
   try
@@ -8816,9 +9022,9 @@ begin
       exit;
     n := fSafe.Padding[DIC_KEYCOUNT].VInteger;
     k := fKeys.Value^;
-    ks := fKeys.ElemSize;
+    ks := fKeys.Info.Cache.ItemSize;
     v := fValues.Value^;
-    vs := fValues.ElemSize;
+    vs := fValues.Info.Cache.ItemSize;
     for i := 0 to n - 1 do
     begin
       if (Assigned(KeyCompare) and
@@ -9048,6 +9254,9 @@ end;
 
 function _New_Collection(Rtti: TRttiCustom): pointer;
 begin
+  if Rtti.CollectionItem = nil then
+    raise ERttiException.CreateUTF8('% with CollectionItem=nil: please call ' +
+      'Rtti.RegisterCollection()', [Rtti.ValueClass]);
   result := TCollectionClass(Rtti.ValueClass).Create(Rtti.CollectionItem);
 end;
 
@@ -9102,11 +9311,7 @@ begin
       else if C = TInterfacedCollection then
         fClassNewInstance := @_New_InterfacedCollection
       else if C = TCollection then
-        if CollectionItem = nil then
-          raise EJSONException.CreateUTF8(
-            '%.SetParserType: % has no CollectionItem', [self, Name])
-        else
-          fClassNewInstance := @_New_Collection
+        fClassNewInstance := @_New_Collection
       else if C = TCollectionItem then
         fClassNewInstance := @_New_CollectionItem
       else if C = TObject then
@@ -9246,26 +9451,36 @@ begin
   // (re)set fJsonSave/fJsonLoad
   result.fJsonWriter := TMethod(Writer);
   result.fJsonReader := TMethod(Reader);
-  result.SetParserType(result.Parser, result.ParserComplex);
+  if result.Kind <> rkDynArray then // Reader/Writer are for items, not array
+    result.SetParserType(result.Parser, result.ParserComplex);
 end;
 
 class function TRttiJson.RegisterCustomSerializer(ObjectClass: TClass;
-  const Reader: TOnRttiJsonRead; const Writer: TOnRttiJsonWrite): TRttiJson;
+  const Reader: TOnClassJsonRead; const Writer: TOnClassJsonWrite): TRttiJson;
 begin
-  result := RegisterCustomSerializer(ObjectClass.ClassInfo, Reader, Writer);
+  // without {$M+} ObjectClasss.ClassInfo=nil -> ensure fake RTTI is available
+  result := Rtti.RegisterClass(ObjectClass) as TRttiJson;
+  result.fJsonWriter := TMethod(Writer);
+  result.fJsonReader := TMethod(Reader);
+  result.SetParserType(ptClass, pctNone);
 end;
 
 class function TRttiJson.UnRegisterCustomSerializer(Info: PRttiInfo): TRttiJSON;
 begin
   result := Rtti.RegisterType(Info) as TRttiJson;
-  result.fJsonWriter.Code := nil; // this force reset of the JSON serialization
+  result.fJsonWriter.Code := nil; // force reset of the JSON serialization
   result.fJsonReader.Code := nil;
-  result.SetParserType(result.Parser, result.ParserComplex);
+  if result.Kind <> rkDynArray then // Reader/Writer are for items, not array
+    result.SetParserType(result.Parser, result.ParserComplex);
 end;
 
 class function TRttiJson.UnRegisterCustomSerializer(ObjectClass: TClass): TRttiJSON;
 begin
-  result := UnRegisterCustomSerializer(ObjectClass.ClassInfo);
+  // without {$M+} ObjectClasss.ClassInfo=nil -> ensure fake RTTI is available
+  result := Rtti.RegisterClass(ObjectClass) as TRttiJson;
+  result.fJsonWriter.Code := nil; // force reset of the JSON serialization
+  result.fJsonReader.Code := nil;
+  result.SetParserType(result.Parser, result.ParserComplex);
 end;
 
 class function TRttiJson.RegisterFromText(DynArrayOrRecord: PRttiInfo;
@@ -9509,7 +9724,7 @@ begin
     raise ERttiException.Create('JSONToObject(nil)');
   ctxt.Init(From, Rtti.RegisterClass(PPointer(ObjectInstance)^), Options,
     nil, TObjectListItemClass);
-  _JL_RttiCustom(@ObjectInstance, ctxt);
+  TRttiJsonLoad(Ctxt.Info.JsonLoad)(@ObjectInstance, ctxt);
   Valid := ctxt.Valid;
   result := ctxt.JSON;
 end;

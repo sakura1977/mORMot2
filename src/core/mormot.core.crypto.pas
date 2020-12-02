@@ -53,6 +53,7 @@ type
   {$ifdef HASAESNI}
     {$define USEAESNI}
     {$define USEAESNI64}
+    {$define USECLMUL} // gf_mul_pclmulqdq() requires some complex opcodes
   {$endif USEAESNI}
   {$ifndef BSD}
     {$define CRC32C_X64} // external crc32_iscsi_01 for win64/lin64
@@ -63,6 +64,9 @@ type
 {$ifdef ASMX86}
   {$define USEAESNI}
   {$define USEAESNI32}
+  {$ifdef HASAESNI}
+    {$define USECLMUL} // gf_mul_pclmulqdq() requires some complex opcodes
+  {$endif HASAESNI}
   {$ifndef BSD}
     {$define SHA512_X86} // external sha512-x86 for win32/lin32
   {$endif BSD}
@@ -264,7 +268,8 @@ type
       doEncrypt: boolean); overload;
     /// performs AES-OFB encryption and decryption on whole blocks
     // - may be called instead of TAESOFB when only a raw TAES is available
-    // - this method is thread-safe
+    // - as used e.g. by mormot.db.raw.sqlite3.static.pas for its DB encryption
+    // - this method is thread-safe, and is optimized for AES-NI on x86_64
     procedure DoBlocksOFB(const iv: TAESBlock; src, dst: pointer;
       blockcount: PtrUInt);
     /// TRUE if the context was initialized via EncryptInit/DecryptInit
@@ -284,11 +289,11 @@ type
 
   /// low-level AES-GCM processing
   // - implements standard AEAD (authenticated-encryption with associated-data)
-  // algorithm, as defined by NIST and
+  // algorithm, as defined by NIST Special Publication 800-38D
+  // - will use AES-NI and CLMUL Intel/AMD opcodes if available
   TAESGCMEngine = object
   private
     /// standard AES encryption context
-    // - will use AES-NI if available
     actx: TAES;
     /// ghash value of the Authentication Data
     aad_ghv: TAESBlock;
@@ -305,15 +310,14 @@ type
     /// current 0..15 position in encryption block
     blen: byte;
     /// the state of this context
-    flags: set of (flagInitialized, flagFinalComputed, flagFlushed);
+    flags: set of (flagFinalComputed, flagFlushed, flagCLMUL);
     /// 4KB lookup table for fast Galois Finite Field multiplication
     // - is defined as last field of the object for better code generation
-    gf_t4k: array[byte] of TAESBlock;
+    gf_t4k: array[byte] of THash128Rec;
     /// build the gf_t4k[] internal table - assuming set to zero by caller
     procedure Make4K_Table;
-    /// compute a * ghash_h in Galois Finite Field 2^128
-    procedure gf_mul_h(var a: TAESBlock);
-      {$ifdef FPC} inline; {$endif}
+    /// compute a * ghash_h in Galois Finite Field 2^128 using gf_t4k[]
+    procedure gf_mul_h_pas(var a: TAESBlock);
     /// low-level AES-CTR encryption
     procedure internal_crypt(ptp, ctp: PByte; ILen: PtrUInt);
     /// low-level GCM authentication
@@ -2386,7 +2390,7 @@ type
     buf: TAESBlock;  // Work buffer
     DoBlock: procedure(const ctxt, Source, Dest); // main AES function
     {$ifdef USEAESNI32}
-    AesNi32: pointer;
+    AesNi32: pointer; // xmm7 AES-NI encoding
     {$endif USEAESNI32}
     Initialized: boolean;
     Rounds: byte;    // Number of rounds
@@ -2711,9 +2715,10 @@ end;
 procedure ComputeAesStaticTables;
 var
   i, x, y: byte;
+  j: PtrInt;
   pow, log: array[byte] of byte;
   c: cardinal;
-begin // 835 bytes of code to compute 4.5 KB of tables
+begin // 744 bytes of x86_64 code to compute 4.5 KB of tables
   x := 1;
   for i := 0 to 255 do
   begin
@@ -2726,9 +2731,9 @@ begin // 835 bytes of code to compute 4.5 KB of tables
   end;
   SBox[0] := $63;
   InvSBox[$63] := 0;
-  for i := 1 to 255 do
+  for j := 1 to 255 do
   begin
-    x := pow[255 - log[i]];
+    x := pow[255 - log[j]];
     y := (x shl 1) + (x shr 7);
     x := x xor y;
     y := (y shl 1) + (y shr 7);
@@ -2737,28 +2742,35 @@ begin // 835 bytes of code to compute 4.5 KB of tables
     x := x xor y;
     y := (y shl 1) + (y shr 7);
     x := x xor y xor $63;
-    SBox[i] := x;
-    InvSBox[x] := i;
+    SBox[j] := x;
+    InvSBox[x] := j;
   end;
-  for i := 0 to 255 do
+  for j := 0 to 255 do
   begin
-    x := SBox[i];
+    x := SBox[j];
     y := x shl 1;
     if x and $80 <> 0 then
       y := y xor $1B;
-    Te0[i] := y + x shl 8 + x shl 16 + (y xor x) shl 24;
-    Te1[i] := Te0[i] shl 8 + Te0[i] shr 24;
-    Te2[i] := Te1[i] shl 8 + Te1[i] shr 24;
-    Te3[i] := Te2[i] shl 8 + Te2[i] shr 24;
-    x := InvSBox[i];
+    c := y + x shl 8 + x shl 16 + (y xor x) shl 24;
+    Te0[j] := c;
+    c := c shl 8 + c shr 24;
+    Te1[j] := c;
+    c := c shl 8 + c shr 24;
+    Te2[j] := c;
+    Te3[j] := c shl 8 + c shr 24;
+    x := InvSBox[j];
     if x = 0 then
       continue;
     c := log[x]; // Td0[c] = Si[c].[0e,09,0d,0b] -> e.g. log[$0e]=223 below
-    Td0[i] := pow[(c + 223) mod 255] + pow[(c + 199) mod 255] shl 8 +
-       pow[(c + 238) mod 255] shl 16 + pow[(c + 104) mod 255] shl 24;
-    Td1[i] := Td0[i] shl 8 + Td0[i] shr 24;
-    Td2[i] := Td1[i] shl 8 + Td1[i] shr 24;
-    Td3[i] := Td2[i] shl 8 + Td2[i] shr 24;
+    c := pow[(c + 223) mod 255] + pow[(c + 199) mod 255] shl 8 +
+         pow[(c + 238) mod 255] shl 16 + pow[(c + 104) mod 255] shl 24;
+    Td0[j] := c;
+    c := c shl 8 + c shr 24;
+    Td1[j] := c;
+    c := c shl 8 + c shr 24;
+    Td2[j] := c;
+    c := c shl 8 + c shr 24;
+    Td3[j] := c;
   end;
 end;
 
@@ -3120,6 +3132,21 @@ procedure TAES.DoBlocksOFB(const iv: TAESBlock; src, dst: pointer;
 var
   cv: TAESBlock;
 begin
+  {$ifdef USEAESNI64}
+  if cfAESNI in CpuFeatures then
+    case integer(TAESContext(Context).KeyBits) of
+      128:
+        begin
+          AesNiEncryptOFB_128(@iv, @Context, src, dst, blockcount);
+          exit;
+        end;
+      256:
+        begin
+          AesNiEncryptOFB_256(@iv, @Context, src, dst, blockcount);
+          exit;
+        end;
+    end;
+  {$endif USEAESNI64}
   cv := iv;
   if blockcount > 0 then
     repeat
@@ -3186,7 +3213,7 @@ end;
 { AES-GCM Support }
 
 const
-  // lookup table as used by mul_x/gf_mul/gf_mul_h
+  // 512 bytes lookup table as used by mul_x/gf_mul/gf_mul_h
   gft_le: array[byte] of word = (
      $0000, $c201, $8403, $4602, $0807, $ca06, $8c04, $4e05,
      $100e, $d20f, $940d, $560c, $1809, $da08, $9c0a, $5e0b,
@@ -3221,7 +3248,7 @@ const
      $e0b5, $22b4, $64b6, $a6b7, $e8b2, $2ab3, $6cb1, $aeb0,
      $f0bb, $32ba, $74b8, $b6b9, $f8bc, $3abd, $7cbf, $bebe);
 
-procedure mul_x(var a: TAESBlock; const b: TAESBlock);
+procedure mul_x(var a: THash128Rec; const b: THash128Rec);
 // {$ifdef HASINLINE}inline;{$endif} // inlining has no benefit here
 var
   t: cardinal;
@@ -3231,53 +3258,76 @@ const
   MASK_7F = cardinal($7f7f7f7f);
 begin
   t := gft_le[(y[3] shr 17) and MASK_80];
-  TWA4(a)[3] := ((y[3] shr 1) and MASK_7F) or
-                (((y[3] shl 15) or (y[2] shr 17)) and MASK_80);
-  TWA4(a)[2] := ((y[2] shr 1) and MASK_7F) or
+  a.c3 := ((y[3] shr 1) and MASK_7F) or
+          (((y[3] shl 15) or (y[2] shr 17)) and MASK_80);
+  a.c2 := ((y[2] shr 1) and MASK_7F) or
                 (((y[2] shl 15) or (y[1] shr 17)) and MASK_80);
-  TWA4(a)[1] := ((y[1] shr 1) and MASK_7F) or
-                (((y[1] shl 15) or (y[0] shr 17)) and MASK_80);
-  TWA4(a)[0] := (((y[0] shr 1) and MASK_7F) or
-                ((y[0] shl 15) and MASK_80)) xor t;
+  a.c1 := ((y[1] shr 1) and MASK_7F) or
+          (((y[1] shl 15) or (y[0] shr 17)) and MASK_80);
+  a.c0 := (((y[0] shr 1) and MASK_7F) or
+          ((y[0] shl 15) and MASK_80)) xor t;
 end;
 
-procedure gf_mul(var a: TAESBlock; const b: TAESBlock);
+procedure gf_mul_pas(var a: TAESBlock; const b: TAESBlock);
 var
-  p: array[0 .. 7] of TAESBlock;
-  x: TWA4;
+  p: array[0 .. 7] of THash128Rec;
+  x: THash128Rec;
   t: cardinal;
   i: PtrInt;
   j: integer;
   c: byte;
 begin
-  p[0] := b;
+  p[0].b := b;
   for i := 1 to 7 do
     mul_x(p[i], p[i - 1]);
-  FillZero(TAESBlock(x));
+  FillZero(x.b);
   for i := 0 to 15 do
   begin
     c := a[15 - i];
     if i > 0 then
     begin
       // inlined mul_x8()
-      t := gft_le[x[3] shr 24];
-      x[3] := ((x[3] shl 8) or  (x[2] shr 24));
-      x[2] := ((x[2] shl 8) or  (x[1] shr 24));
-      x[1] := ((x[1] shl 8) or  (x[0] shr 24));
-      x[0] := ((x[0] shl 8) xor t);
+      t := gft_le[x.c3 shr 24];
+      x.c3 := ((x.c3 shl 8) or  (x.c2 shr 24));
+      x.c2 := ((x.c2 shl 8) or  (x.c1 shr 24));
+      x.c1 := ((x.c1 shl 8) or  (x.c0 shr 24));
+      x.c0 := ((x.c0 shl 8) xor t);
     end;
     for j := 0 to 7 do
     begin
       if c and ($80 shr j) <> 0 then
       begin
-        x[3] := x[3] xor TWA4(p[j])[3];
-        x[2] := x[2] xor TWA4(p[j])[2];
-        x[1] := x[1] xor TWA4(p[j])[1];
-        x[0] := x[0] xor TWA4(p[j])[0];
+        x.c3 := x.c3 xor p[j].c3;
+        x.c2 := x.c2 xor p[j].c2;
+        x.c1 := x.c1 xor p[j].c1;
+        x.c0 := x.c0 xor p[j].c0;
       end;
     end;
   end;
-  a := TAESBlock(x);
+  a := x.b;
+end;
+
+procedure gf_mul(var a: TAESBlock; const b: TAESBlock);
+  {$ifdef HASINLINE} inline; {$endif}
+begin
+  {$ifdef USECLMUL}
+  if cfCLMUL in CpuFeatures then
+    gf_mul_pclmulqdq(@a, @b)
+  else
+  {$endif USECLMUL}
+    gf_mul_pas(a, b);
+end;
+
+procedure gf_mul_h(const eng: TAESGCMEngine; var a: TAESBlock);
+  {$ifdef HASINLINE} inline; {$endif}
+begin
+  {$ifdef USECLMUL}
+  if flagCLMUL in eng.flags then
+    gf_mul_pclmulqdq(@a, @eng.ghash_h)
+  else
+  {$endif USECLMUL}
+    // use pure pascal efficient code with 4KB pre-computed table
+    eng.gf_mul_h_pas(a);
 end;
 
 
@@ -3287,7 +3337,7 @@ procedure TAESGCMEngine.Make4K_Table;
 var
   j, k: PtrInt;
 begin
-  gf_t4k[128] := ghash_h;
+  gf_t4k[128].b := ghash_h;
   j := 64;
   while j > 0 do
   begin
@@ -3303,33 +3353,36 @@ begin
   end;
 end;
 
-procedure TAESGCMEngine.gf_mul_h(var a: TAESBlock);
+procedure TAESGCMEngine.gf_mul_h_pas(var a: TAESBlock);
 var
-  x: TWA4;
   i: PtrUInt;
-  t: cardinal;
+  x0, x1, x2, x3, t: cardinal; // will use registers on x86_64/arm
   p: PWA4;
-  {$ifdef CPUX86NOTPIC}
-  tab: TWordArray absolute gft_le;
-  {$else}
-  tab: PWordArray;
-  {$endif CPUX86NOTPIC}
 begin
-  {$ifndef CPUX86NOTPIC}
-  tab := @gft_le;
-  {$endif CPUX86NOTPIC}
-  x := TWA4(gf_t4k[a[15]]);
+  with gf_t4k[a[15]] do
+  begin
+    x0 := c0;
+    x1 := c1;
+    x2 := c2;
+    x3 := c3;
+  end;
   for i := 14 downto 0 do
   begin
     p := @gf_t4k[a[i]];
-    t := tab[x[3] shr 24];
+    t := gft_le[x3 shr 24];
     // efficient mul_x8 and xor using pre-computed table entries
-    x[3] := ((x[3] shl 8) or  (x[2] shr 24)) xor p^[3];
-    x[2] := ((x[2] shl 8) or  (x[1] shr 24)) xor p^[2];
-    x[1] := ((x[1] shl 8) or  (x[0] shr 24)) xor p^[1];
-    x[0] := ((x[0] shl 8) xor t) xor p^[0];
+    x3 := ((x3 shl 8) or  (x2 shr 24)) xor p^[3];
+    x2 := ((x2 shl 8) or  (x1 shr 24)) xor p^[2];
+    x1 := ((x1 shl 8) or  (x0 shr 24)) xor p^[1];
+    x0 := ((x0 shl 8) xor t) xor p^[0];
   end;
-  a := TAESBlock(x);
+  with PHash128Rec(@a)^ do
+  begin
+    c0 := x0;
+    c1 := x1;
+    c2 := x2;
+    c3 := x3;
+  end;
 end;
 
 procedure GCM_IncCtr(var x: TAESBlock);
@@ -3400,7 +3453,7 @@ begin
   inc(gcnt.V, ILen);
   if (b_pos = 0) and
      (gcnt.V <> 0) then
-    gf_mul_h(ghv);
+    gf_mul_h(self, ghv);
   while (ILen > 0) and
         (b_pos < SizeOf(TAESBlock)) do
   begin
@@ -3411,7 +3464,7 @@ begin
   end;
   while ILen >= SizeOf(TAESBlock) do
   begin
-    gf_mul_h(ghv);
+    gf_mul_h(self, ghv);
     XorBlock16(@ghv, pointer(ctp));
     inc(PAESBlock(ctp));
     dec(ILen, SizeOf(TAESBlock));
@@ -3420,7 +3473,7 @@ begin
   begin
     if b_pos = SizeOf(TAESBlock) then
     begin
-      gf_mul_h(ghv);
+      gf_mul_h(self, ghv);
       b_pos := 0;
     end;
     ghv[b_pos] := ghv[b_pos] xor ctp^;
@@ -3437,7 +3490,12 @@ begin
   if not result then
     exit;
   actx.Encrypt(ghash_h, ghash_h);
-  Make4K_Table;
+  {$ifdef USECLMUL}
+  if cfCLMUL in CpuFeatures then
+    include(flags, flagCLMUL)
+  else
+  {$endif USECLMUL}
+    Make4K_Table;
 end;
 
 const
@@ -3469,13 +3527,13 @@ begin
       XorBlock16(@TAESContext(actx).iv, pIV);
       inc(PAesBlock(pIV));
       dec(n_pos, SizeOf(TAESBlock));
-      gf_mul_h(TAESContext(actx).iv.b);
+      gf_mul_h(self, TAESContext(actx).iv.b);
     end;
     if n_pos > 0 then
     begin
       for i := 0 to n_pos - 1 do
         TAESContext(actx).iv.b[i] := TAESContext(actx).iv.b[i] xor PAESBlock(pIV)^[i];
-      gf_mul_h(TAESContext(actx).iv.b);
+      gf_mul_h(self, TAESContext(actx).iv.b);
     end;
     n_pos := IV_len shl 3;
     i := 15;
@@ -3485,7 +3543,7 @@ begin
       n_pos := n_pos shr 8;
       dec(i);
     end;
-    gf_mul_h(TAESContext(actx).iv.b);
+    gf_mul_h(self, TAESContext(actx).iv.b);
   end;
   // reset internal state and counters
   y0_val := TAESContext(actx).iv.c3;
@@ -3494,6 +3552,10 @@ begin
   aad_cnt.V := 0;
   atx_cnt.V := 0;
   flags := [];
+  {$ifdef USECLMUL}
+  if cfCLMUL in CpuFeatures then
+    include(flags, flagCLMUL);
+  {$endif USECLMUL}
   result := true;
 end;
 
@@ -3516,10 +3578,10 @@ begin
       repeat
         // single-pass loop optimized e.g. for PKCS7 padding
         {%H-}GCM_IncCtr(TAESContext(actx).iv.b);
-        TAESContext(actx.Context).DoBlock(actx.Context,
-          TAESContext(actx).iv, TAESContext(actx).buf); // maybe AES-NI
+        TAESContext(actx).DoBlock(actx, TAESContext(actx).iv,
+          TAESContext(actx).buf); // maybe AES-NI
         XorBlock16(ptp, ctp, @TAESContext(actx).buf);
-        gf_mul_h(txt_ghv);
+        gf_mul_h(self, txt_ghv);
         XorBlock16(@txt_ghv, ctp);
         inc(PAESBlock(ptp));
         inc(PAESBlock(ctp));
@@ -3555,7 +3617,7 @@ begin
       ILen := ILen shr AESBlockShift;
       repeat
         // single-pass loop optimized e.g. for PKCS7 padding
-        gf_mul_h(txt_ghv);
+        gf_mul_h(self, txt_ghv);
         XorBlock16(@txt_ghv, ctp);
         GCM_IncCtr(TAESContext(actx).iv.b);
         actx.Encrypt(TAESContext(actx).iv.b, TAESContext(actx).buf); // maybe AES-NI
@@ -3615,8 +3677,8 @@ begin
   begin
     include(flags, flagFinalComputed);
     // compute GHASH(H, AAD, ctp)
-    gf_mul_h(aad_ghv);
-    gf_mul_h(txt_ghv);
+    gf_mul_h(self, aad_ghv);
+    gf_mul_h(self, txt_ghv);
     // compute len(AAD) || len(ctp) with each len as 64-bit big-endian
     ln := (atx_cnt.V + AESBlockMod) shr AESBlockShift;
     if (aad_cnt.V > 0) and
@@ -3638,7 +3700,7 @@ begin
     TWA4(tbuf)[3] := bswap32((atx_cnt.L shl  3));
     XorBlock16(@tbuf, @txt_ghv);
     XorBlock16(@aad_ghv, @tbuf);
-    gf_mul_h(aad_ghv);
+    gf_mul_h(self, aad_ghv);
     // compute E(K,Y0)
     tbuf := TAESContext(actx).iv.b;
     TWA4(tbuf)[3] := y0_val;
@@ -3971,20 +4033,14 @@ function TAESAbstract.DecryptPKCS7Buffer(Input: pointer; InputLen: integer;
   IVAtBeginning, RaiseESynCryptoOnError: boolean): RawByteString;
 var
   ivsize, padding: integer;
-  tmp: array[0..1023] of AnsiChar;
   P: PAnsiChar;
 begin
   result := '';
   if not DecryptPKCS7Len(InputLen, ivsize, Input,
       IVAtBeginning, RaiseESynCryptoOnError) then
     exit;
-  if InputLen < SizeOf(tmp) then
-    P := @tmp
-  else
-  begin
-    SetString(result, nil, InputLen);
-    P := pointer(result);
-  end;
+  SetString(result, nil, InputLen);
+  P := pointer(result);
   Decrypt(@PByteArray(Input)^[ivsize], P, InputLen);
   padding := ord(P[InputLen - 1]); // result[1..len]
   if padding > SizeOf(TAESBlock) then
@@ -3992,10 +4048,15 @@ begin
       raise ESynCrypto.CreateUTF8('%.DecryptPKCS7: Invalid Input', [self])
     else
       result := ''
-  else if P = @tmp then
-    SetString(result, P, InputLen - padding)
   else
-    SetLength(result, InputLen - padding); // fast in-place resize
+  begin
+    // fast in-place set result length without any memory resize
+    dec(InputLen, padding);
+    if InputLen = 0 then
+      result := ''
+    else
+      PStrLen(P - _STRLEN)^ := InputLen;
+  end;
 end;
 
 function TAESAbstract.DecryptPKCS7(const Input: RawByteString;
@@ -4455,9 +4516,9 @@ begin
         pxor    xmm0, xmm7
         movaps  xmm7, xmm1              // fCV := fIn
         movups  dqword ptr[edi], xmm0  // fOut := fIn xor fCV
+        add     esi, 16
+        add     edi, 16
         dec     ecx
-        lea     esi, [esi + 16]
-        lea     edi, [edi + 16]
         jnz     @s
 @z:     pop     ecx
         and     ecx, 15
@@ -4508,9 +4569,9 @@ begin
         movups  xmm0, dqword ptr[esi]
         pxor    xmm7, xmm0
         movups  dqword ptr[edi], xmm7  // fOut := fIn xor fCV
+        add     esi, 16
+        add     edi, 16
         dec     ecx
-        lea     esi, [esi + 16]
-        lea     edi, [edi + 16]
         jnz     @s
 @z:     pop     ecx
         and     ecx, 15
@@ -4625,9 +4686,9 @@ begin
         lea     eax, [ebx].TAESCFBCRC.fMAC.plain
         mov     edx, edi
         call    crcblock
+        add     esi, 16
+        add     edi, 16
         sub     dword ptr[Count], 16
-        lea     esi, [esi + 16]
-        lea     edi, [edi + 16]
         ja      @s
 @z:     pop     edi
         pop     esi
@@ -4688,9 +4749,9 @@ begin
         lea     eax, [ebx].TAESCFBCRC.fMAC.encrypted
         mov     edx, edi
         call    crcblock
+        add     esi, 16
+        add     edi, 16
         sub     dword ptr[Count], 16
-        lea     esi, [esi + 16]
-        lea     edi, [edi + 16]
         ja      @s
         pop     edi
         pop     esi
@@ -4753,9 +4814,9 @@ begin
         lea     eax, [ebx].TAESOFBCRC.fMAC.plain
         mov     edx, edi
         call    crcblock
+        add     esi, 16
+        add     edi, 16
         sub     dword ptr[Count], 16
-        lea     esi, [esi + 16]
-        lea     edi, [edi + 16]
         ja      @s
         pop     edi
         pop     esi
@@ -4814,9 +4875,9 @@ begin
         lea     eax, [ebx].TAESOFBCRC.fMAC.encrypted
         mov     edx, edi
         call    crcblock
+        add     esi, 16
+        add     edi, 16
         sub     dword ptr[Count], 16
-        lea     esi, [esi + 16]
-        lea     edi, [edi + 16]
         ja      @s
         pop     edi
         pop     esi
@@ -4865,12 +4926,12 @@ begin
       case KeyBits of
         128:
           begin
-            AesNiEncryptOFB_128(self, BufIn, BufOut, Count shr AESBlockShift);
+            AesNiEncryptOFB_128(@fIV, @aes, BufIn, BufOut, Count shr AESBlockShift);
             exit;
           end;
         256:
           begin
-            AesNiEncryptOFB_256(self, BufIn, BufOut, Count shr AESBlockShift);
+            AesNiEncryptOFB_256(@fIV, @aes, BufIn, BufOut, Count shr AESBlockShift);
             exit;
           end;
       end;
@@ -4893,9 +4954,9 @@ begin
         movups  xmm0, dqword ptr[esi]
         pxor    xmm0, xmm7
         movups  dqword ptr[edi], xmm0  // fOut := fIn xor fCV
+        add     esi, 16
+        add     edi, 16
         dec     ecx
-        lea     esi, [esi + 16]
-        lea     edi, [edi + 16]
         jnz     @s
 @z:     pop     ecx
         and     ecx, 15
@@ -5771,18 +5832,22 @@ var
   __h: THash256;
   __hmac: THMAC_SHA256; // initialized from CryptProtectDataEntropy salt
 
-// don't use BinToBase64uri() to avoid linking mormot.core.data.pas
+// don't use BinToBase64uri() to avoid linking mormot.core.buffers.pas
 
-procedure RawBase64URI(rp, sp: PAnsiChar; len: integer);
 const
-  b64: array[0..63] of AnsiChar =
+  _b64: array[0..63] of AnsiChar =
     'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
-var i: integer;
-    c: cardinal;
+
+procedure RawBase64URI(rp, sp: PAnsiChar; lendiv, lenmod: integer);
+var
+  i: integer;
+  c: cardinal;
+  b64: PAnsiChar;
 begin
-  for i := 1 to len div 3 do
+  b64 := @_b64;
+  for i := 1 to lendiv do
   begin
-    c := ord(sp[0]) shl 16 + ord(sp[1]) shl 8 + ord(sp[2]);
+    c := cardinal(sp[0]) shl 16 + cardinal(sp[1]) shl 8 + cardinal(sp[2]);
     rp[0] := b64[(c shr 18) and $3f];
     rp[1] := b64[(c shr 12) and $3f];
     rp[2] := b64[(c shr 6) and $3f];
@@ -5790,34 +5855,38 @@ begin
     inc(rp, 4);
     inc(sp, 3);
   end;
-  case len mod 3 of
-    1: begin
-      c := ord(sp[0]) shl 16;
-      rp[0] := b64[(c shr 18) and $3f];
-      rp[1] := b64[(c shr 12) and $3f];
-    end;
-    2: begin
-      c := ord(sp[0]) shl 16 + ord(sp[1]) shl 8;
-      rp[0] := b64[(c shr 18) and $3f];
-      rp[1] := b64[(c shr 12) and $3f];
-      rp[2] := b64[(c shr 6) and $3f];
-    end;
+  case lenmod of
+    1:
+      begin
+        c := cardinal(sp[0]) shl 16;
+        rp[0] := b64[(c shr 18) and $3f];
+        rp[1] := b64[(c shr 12) and $3f];
+      end;
+    2:
+      begin
+        c := cardinal(sp[0]) shl 16 + cardinal(sp[1]) shl 8;
+        rp[0] := b64[(c shr 18) and $3f];
+        rp[1] := b64[(c shr 12) and $3f];
+        rp[2] := b64[(c shr 6) and $3f];
+      end;
   end;
 end;
 
 function Base64URI(P: pointer; len: integer): RawUTF8;
 var
-  blen: integer;
+  blen, bdiv, bmod: integer;
 begin
-  blen := (len div 3) * 4;
-  case len mod 3 of
+  bdiv := len div 3;
+  bmod := len mod 3;
+  blen := bdiv * 4;
+  case bmod of
     1:
       inc(blen, 2);
     2:
       inc(blen, 3);
   end;
   FastSetString(result, nil, blen);
-  RawBase64URI(pointer(result), P, len);
+  RawBase64URI(pointer(result), P, bdiv, bmod);
 end;
 
 procedure read__h__hmac;
@@ -9125,7 +9194,8 @@ begin
   {$ifdef ASMX64}
   {$ifdef CRC32C_X64}
   if (cfSSE42 in CpuFeatures) and
-     (cfAesNi in CpuFeatures) then
+     (cfAesNi in CpuFeatures) and
+     (cfCLMUL in CpuFeatures) then
   begin
     // use SSE4.2+pclmulqdq instructions
     crc32c := @crc32c_sse42_aesni;

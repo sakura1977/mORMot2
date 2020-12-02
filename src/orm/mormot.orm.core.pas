@@ -565,7 +565,7 @@ type
     /// contains the decoded field values
     FieldValues: array[0..MAX_SQLFIELDS - 1] of RawUTF8;
     /// Decode() will set each field type approximation
-    // - will recognize also JSON_BASE64_MAGIC/JSON_SQLDATE_MAGIC prefix
+    // - will recognize also JSON_BASE64_MAGIC_C/JSON_SQLDATE_MAGIC_C prefix
     FieldTypeApproximation: array[0..MAX_SQLFIELDS - 1] of TJSONObjectDecoderFieldType;
     /// number of fields decoded in FieldNames[] and FieldValues[]
     FieldCount: integer;
@@ -4072,6 +4072,9 @@ type
     // EOrmException: in this case, you should use a TID / T*ID kind of
     // published property, and not a TOrm, which is limited to the
     // pointer size
+    // - on FPC, if you get an Error: Incompatible types: got "Pointer" expected
+    // "T...", then you are missing a {$mode Delphi} conditional in your unit:
+    // the easiest is to include {$I mormot.define.inc} at the top of your unit
     property AsTOrm: pointer read GetIDAsPointer;
     /// this property is set to true, if any published property is a BLOB (RawBlob)
     property HasBlob: boolean read GetHasBlob;
@@ -6108,8 +6111,8 @@ type
   // TOrmMany) after registration for an external DB via a call to
   // VirtualTableExternalRegister() from mormot.orm.sql unit
   TOrmVirtualKind = (
-    rSQLite3, rFTS3, rFTS4, rFTS5, rRTree, rRTreeInteger,
-    rCustomForcedID, rCustomAutoID);
+    ovkSQLite3, ovkFTS3, ovkFTS4, ovkFTS5, ovkRTree, ovkRTreeInteger,
+    ovkCustomForcedID, ovkCustomAutoID);
 
   /// pre-computed SQL statements for ORM operations for a given
   // TOrmModelProperties instance
@@ -6449,13 +6452,13 @@ type
     /// the shared TOrmProperties information of this TOrm
     // - as retrieved from RTTI
     property Props: TOrmProperties read fProps;
-    /// define if is a normal table (rSQLite3), an FTS/R-Tree virtual
+    /// define if is a normal table ( ovkSQLite3), an FTS/R-Tree virtual
     // table or a custom TOrmVirtualTable*ID (rCustomForcedID/rCustomAutoID)
     // - when set, all internal SQL statements will be (re)created, depending of
     // the expected ID/RowID column name expected (i.e. SQLTableSimpleFields[]
     // and SQLSelectAll[] - SQLUpdateSet and SQLInsertSet do not include ID)
     property Kind: TOrmVirtualKind
-      read fKind write SetKind default rSQLite3;
+      read fKind write SetKind default ovkSQLite3;
   end;
 
   /// how a TOrmModel stores a foreign link to be cascaded
@@ -7378,16 +7381,16 @@ const
 
   /// if the TOrmVirtual table kind is a FTS virtual table
   IS_FTS =
-    [rFTS3, rFTS4, rFTS5];
+    [ovkFTS3, ovkFTS4, ovkFTS5];
 
   /// if the TOrmVirtual table kind is not an embedded type
   // - can be set for a TOrm after a VirtualTableExternalRegister call
   IS_CUSTOM_VIRTUAL =
-    [rCustomForcedID, rCustomAutoID];
+    [ovkCustomForcedID, ovkCustomAutoID];
 
   /// if the TOrmVirtual table kind expects the ID to be set on INSERT
   INSERT_WITH_ID =
-    [rFTS3, rFTS4, rFTS5, rRTree, rRTreeInteger, rCustomForcedID];
+    [ovkFTS3, ovkFTS4, ovkFTS5, ovkRTree, ovkRTreeInteger, ovkCustomForcedID];
 
   /// if a TOrmVirtualTablePreparedConstraint.Column is to be ignored
   VIRTUAL_TABLE_IGNORE_COLUMN = -2;
@@ -7833,7 +7836,7 @@ begin
       if mormot.core.text.HexToBin(@P[2], pointer(result), LenHex) then
         exit; // valid hexa data
     end
-    else if (PInteger(P)^ and $00ffffff = JSON_BASE64_MAGIC) and
+    else if (PInteger(P)^ and $00ffffff = JSON_BASE64_MAGIC_C) and
        Base64ToBinSafe(@P[3], Len - 3, RawByteString(result)) then
       exit; // safe decode Base-64 content ('\uFFF0base64encodedbinary')
   // TEXT format
@@ -7862,7 +7865,7 @@ begin
       if mormot.core.text.HexToBin(@P[2], pointer(result), LenHex) then
         exit; // valid hexa data
     end
-    else if (PInteger(P)^ and $00ffffff = JSON_BASE64_MAGIC) and
+    else if (PInteger(P)^ and $00ffffff = JSON_BASE64_MAGIC_C) and
         Base64ToBinSafe(@P[3], Len - 3, RawByteString(result)) then
       exit; // safe decode Base-64 content ('\uFFF0base64encodedbinary')
   // TEXT format
@@ -7893,7 +7896,7 @@ begin
       if mormot.core.text.HexToBin(@P[2], pointer(result), LenResult) then
         exit; // valid hexa data
     end
-    else if (PInteger(P)^ and $00ffffff = JSON_BASE64_MAGIC) and
+    else if (PInteger(P)^ and $00ffffff = JSON_BASE64_MAGIC_C) and
             IsBase64(@P[3], Len - 3) then
     begin
       // Base-64 encoded content ('\uFFF0base64encodedbinary')
@@ -8024,11 +8027,11 @@ begin
     else
     begin
       c := PInteger(P)^ and $00ffffff;
-      if (c = JSON_BASE64_MAGIC) or
+      if (c = JSON_BASE64_MAGIC_C) or
          ((P^ = '''') and
           isBlobHex(P)) then
         result := oftBlob
-      else if c = JSON_SQLDATE_MAGIC then
+      else if c = JSON_SQLDATE_MAGIC_C then
         result := oftDateTime
       else
         result := oftUTF8Text;
@@ -8335,7 +8338,7 @@ var
           if wasString then
           begin
             c := PInteger(res)^ and $00ffffff;
-            if c = JSON_BASE64_MAGIC then
+            if c = JSON_BASE64_MAGIC_C then
             begin
               FieldTypeApproximation[ndx] := ftaBlob;
               case Params of
@@ -8352,7 +8355,7 @@ var
             end
             else
             begin
-              if c = JSON_SQLDATE_MAGIC then
+              if c = JSON_SQLDATE_MAGIC_C then
               begin
                 FieldTypeApproximation[ndx] := ftaDate;
                 inc(res, 3); // ignore \uFFF1 magic marker
@@ -10234,7 +10237,7 @@ var
   curr: currency;
 begin
   fPropInfo.GetCurrencyProp(Instance, curr);
-  W.AddCurr64(curr);
+  W.AddCurr(curr);
 end;
 
 procedure TOrmPropInfoRTTICurrency.GetValueVar(Instance: TObject; ToSQL: boolean;
@@ -10467,7 +10470,7 @@ constructor TOrmPropInfoRTTIRecordReference.Create(aPropInfo: PRttiProp;
   aPropIndex: integer; aOrmFieldType: TOrmFieldType; aOptions: TOrmPropInfoListOptions);
 begin
   inherited Create(aPropInfo, aPropIndex, aOrmFieldType, aOptions);
-  fCascadeDelete := IdemPropName(fPropType^.Name^, 'TRecordReferenceToBeDeleted')
+  fCascadeDelete := IdemPropName(fPropType^.RawName, 'TRecordReferenceToBeDeleted')
 end;
 
 
@@ -11848,7 +11851,7 @@ begin
   if fTypeInfo = nil then
     result := inherited GetSQLFieldRTTITypeName
   else
-    result := ToUTF8(fTypeInfo^.Name^);
+    result := ToUTF8(fTypeInfo^.RawName);
 end;
 
 constructor TOrmPropInfoRecordRTTI.Create(aRecordInfo: PRttiInfo;
@@ -11968,7 +11971,7 @@ begin
   if fTypeInfo = nil then
     result := inherited GetSQLFieldRTTITypeName
   else
-    result := ToUTF8(fTypeInfo^.Name^);
+    result := ToUTF8(fTypeInfo^.RawName);
 end;
 
 constructor TOrmPropInfoRecordFixedSize.Create(aRecordSize: cardinal;
@@ -12133,7 +12136,7 @@ begin
   if fTypeInfo = nil then
     result := inherited GetSQLFieldRTTITypeName
   else
-    result := ToUTF8(fTypeInfo^.Name^);
+    result := ToUTF8(fTypeInfo^.RawName);
 end;
 
 procedure TOrmPropInfoCustomJSON.SetCustomParser(aCustomParser: TRttiJson);
@@ -17101,6 +17104,10 @@ begin
   end;
 end;
 
+{$ifdef ISDELPHI20062007} // circumvent a Delphi 2007 compiler paranoid warning
+  {$warnings off}
+{$endif ISDELPHI20062007}
+
 class function TOrm.GetSQLCreate(aModel: TOrmModel): RawUTF8;
 // not implemented in TOrmProperties since has been made virtual
 var
@@ -17114,27 +17121,27 @@ begin
   if aModel = nil then
     raise EModelException.CreateUTF8('Invalid %.GetSQLCreate(nil) call', [self]);
   Props := aModel.Props[self];
-  if Props.Kind <> rSQLite3 then
+  if Props.Kind <>  ovkSQLite3 then
   begin
     // create a FTS3/FTS4/RTREE virtual table
     result := 'CREATE VIRTUAL TABLE ' + SQLTableName + ' USING ';
     case Props.Kind of
-      rFTS3:
+      ovkFTS3:
         result := result + 'fts3(';
-      rFTS4:
+      ovkFTS4:
         result := result + 'fts4(';
-      rFTS5:
+      ovkFTS5:
         result := result + 'fts5(';
-      rRTree:
+      ovkRTree:
         result := result + 'rtree(RowID,';
-      rRTreeInteger:
+      ovkRTreeInteger:
         result := result + 'rtree_i32(RowID,';
-      rCustomForcedID, rCustomAutoID:
+      ovkCustomForcedID, ovkCustomAutoID:
         begin
           M := aModel.VirtualTableModule(self);
           if (M = nil) or
              not Assigned(GetVirtualTableModuleName) then
-            raise EModelException.CreateUTF8('No registered module for %', [self]);
+            raise EModelException.CreateUTF8('No ovkegistered module for %', [self]);
           mname := GetVirtualTableModuleName(M);
           if Props.Props.Fields.Count = 0 then
             raise EModelException.CreateUTF8(
@@ -17146,19 +17153,19 @@ begin
     end;
     fields := Props.Props.Fields;
     case Props.Kind of
-      rFTS3, rFTS4, rFTS5:
+      ovkFTS3, ovkFTS4, ovkFTS5:
         begin
           if (Props.fFTSWithoutContentFields <> '') and
              (Props.fFTSWithoutContentTableIndex >= 0) then
           begin
             result := FormatUTF8('%content="%",', [result,
               aModel.Tables[Props.fFTSWithoutContentTableIndex].SQLTableName]);
-            if Props.Kind = rFTS5 then
+            if Props.Kind = ovkFTS5 then
               result := FormatUTF8('%content_rowid="ID",', [result]);
           end;
           for i := 0 to fields.Count - 1 do
             result := result + fields.List[i].Name + ',';
-          if Props.Kind = rFTS5 then
+          if Props.Kind = ovkFTS5 then
             tokenizer := 'ascii'   // FTS5 knows ascii/porter/unicode61
           else
             tokenizer := 'simple'; // FTS3-4 know simple/porter/unicode61
@@ -17185,7 +17192,7 @@ begin
           until c = TOrm;
           result := FormatUTF8('% tokenize=%)', [result, tokenizer]);
         end;
-      rRTree, rRTreeInteger:
+      ovkRTree, ovkRTreeInteger:
         begin
           for i := 0 to fields.Count - 1 do
             with fields.List[i] do
@@ -17196,7 +17203,7 @@ begin
                 result := result + Name + ',';
           result[length(result)] := ')';
         end;
-      rCustomForcedID, rCustomAutoID:
+      ovkCustomForcedID, ovkCustomAutoID:
         result := result + GetVirtualTableSQLCreate(Props.Props);
     end;
   end
@@ -17221,6 +17228,10 @@ begin
     PWord(@result[length(result) - 1])^ := ord(')') + ord(';') shl 8;
   end;
 end;
+
+{$ifdef ISDELPHI20062007} // circumvent a Delphi 2007 compiler paranoid warning
+  {$warnings on}
+{$endif ISDELPHI20062007}
 
 function TOrm.GetSQLSet: RawUTF8;
 var
@@ -18655,7 +18666,7 @@ begin
   fts := p.Props.SQLTableName;
   ftsfields := p.Props.SQLTableSimpleFieldsNoRowID;
   // see http://www.sqlite.org/fts3.html#*fts4content
-  if p.Kind = rFTS5 then
+  if p.Kind = ovkFTS5 then
   begin
     // In fts 5 we can't use docid only rowid, also use insert() values('delete',) to delete record
     Server.ExecuteFmt('CREATE TRIGGER %_bu BEFORE UPDATE ON % ' +
@@ -19676,21 +19687,21 @@ begin
     raise EModelException.Create('TOrmModel.SetTableProps');
   Table := fTables[aIndex];
   if Table.InheritsFrom(TOrmFts5) then
-    Kind := rFTS5
+    Kind := ovkFTS5
   else if Table.InheritsFrom(TOrmFts4) then
-    Kind := rFTS4
+    Kind := ovkFTS4
   else if Table.InheritsFrom(TOrmFts3) then
-    Kind := rFTS3
+    Kind := ovkFTS3
   else if Table.InheritsFrom(TOrmVirtualTableForcedID) then
-    Kind := rCustomForcedID
+    Kind := ovkCustomForcedID
   else if Table.InheritsFrom(TOrmRTree) then
-    Kind := rRTree
+    Kind := ovkRTree
   else if Table.InheritsFrom(TOrmRTreeInteger) then
-    Kind := rRTreeInteger
+    Kind := ovkRTreeInteger
   else if Table.InheritsFrom(TOrmVirtual) then
-    Kind := rCustomAutoID
+    Kind := ovkCustomAutoID
   else
-    Kind := rSQLite3;
+    Kind :=  ovkSQLite3;
   Props := TOrmModelProperties.Create(self, Table, Kind);
   Props.Props.InternalRegisterModel(self, aIndex, Props);
   for t := low(t) to high(t) do
@@ -20447,8 +20458,8 @@ begin
   with TableProps[i] do
   begin
     if not (Kind in IS_CUSTOM_VIRTUAL) then
-      if Kind = rSQLite3 then
-        SetKind(rCustomAutoID) // SetKind() recompute all SQL
+      if Kind =  ovkSQLite3 then
+        SetKind(ovkCustomAutoID) // SetKind() recompute all SQL
       else
         raise EModelException.CreateUTF8('Invalid %.VirtualTableRegister(%) call: ' +
           'impossible to set class as virtual', [self, aClass]);
@@ -20560,7 +20571,7 @@ procedure TOrmModelProperties.SetKind(Value: TOrmVirtualKind);
   const
     IDComma: array[TOrmVirtualKind] of rawUTF8 = ('ID,', 'RowID,',
       'RowID,', 'RowID,', 'RowID,', 'RowID,', 'RowID,', 'RowID,');
- // rSQLite3,rFTS3,rFTS4,rFTS5,rRTree,rRTreeInteger,rCustomForcedID,rCustomAutoID
+ //  SQLite3,FTS3,FTS4,FTS5,RTree,RTreeInteger,CustomForcedID,CustomAutoID
   var
     TableName: RawUTF8;
     i: PtrInt;
@@ -20589,7 +20600,7 @@ var
   expected: TOrmFieldType;
 begin
   case Value of // validates virtual table fields expectations
-    rFTS3, rFTS4, rFTS5:
+    ovkFTS3, ovkFTS4, ovkFTS5:
       begin
         if Props.Fields.Count = 0 then
           raise EModelException.CreateUTF8(
@@ -20600,10 +20611,10 @@ begin
               raise EModelException.CreateUTF8('%.%: FTS field must be RawUTF8',
                 [Props.Table, Name])
       end;
-    rRTree, rRTreeInteger:
+    ovkRTree, ovkRTreeInteger:
       begin
         Props.RTreeCoordBoundaryFields := 0;
-        if Value = rRTree then
+        if Value = ovkRTree then
           expected := oftFloat
         else
           expected := oftInteger;
@@ -20650,7 +20661,7 @@ var
   i: PtrInt;
   field: RawUTF8;
 begin
-  if not (Kind in [rFTS4, rFTS5]) then
+  if not (Kind in [ovkFTS4, ovkFTS5]) then
     raise EModelException.CreateUTF8('FTS4WithoutContent: % is not a FTS4/5 table',
       [Props.Table]);
   fFTSWithoutContentTableIndex := fModel.GetTableIndexExisting(ContentTable);

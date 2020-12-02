@@ -2932,7 +2932,7 @@ begin
   if aVarType = VarType then
     CustomType := self
   else
-    CustomType := FindSynVariantTypeFromVType(VarType);
+    CustomType := FindSynVariantTypeFromVType(aVarType);
   result := CustomType <> nil;
 end;
 
@@ -6237,7 +6237,8 @@ end;
 
 function TLockedDocVariant.AddExistingPropOrLock(const Name: RawUTF8;
   var Obj: variant): boolean;
-var i: PtrInt;
+var
+  i: PtrInt;
 begin
   result := true;
   fLock.Enter;
@@ -6893,7 +6894,7 @@ end;
 function VariantLoad(const Bin: RawByteString;
   CustomVariantOptions: PDocVariantOptions): variant;
 begin
-  result := BinaryLoad(@result, Bin, TypeInfo(Variant),
+  BinaryLoad(@result, Bin, TypeInfo(Variant),
     [rkVariant], CustomVariantOptions);
 end;
 

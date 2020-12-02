@@ -80,9 +80,10 @@ type
   // implemented e.g. in the mormot.core.zip / mormot.lib.lizard units
   TTestCompression = class(TSynTestCase)
   protected
-    Data: RawByteString;
+    Data: RawByteString; // contains the first 1MB of mormot2tests executable
+    DataFile: TFileName; // (may be truncated) mormot2tests executable copy
     M: TMemoryStream;
-    crc0, crc1: cardinal;
+    crc0, crc1: cardinal; // crc0=plain crc1=deflated
   public
     procedure Setup; override;
     procedure CleanUp; override;
@@ -168,7 +169,7 @@ begin
   test.Check(i <> 0);
   test.CheckUtf8(ID = i, 'id=%=%', [ID, i]);
   test.Check(Int = i);
-  test.Check(self.Test = Int32ToUtf8(i));
+  test.Check(GetInteger(pointer(self.Test)) = i);
   test.Check(Ansi = WinAnsiString(self.Test));
   test.Check(Unicode = WinAnsiToRawUnicode(Ansi));
   test.Check(ValFloat = i * 2.5);
@@ -526,7 +527,8 @@ begin
   mustache := TSynMustache.Parse(
     '{{newguid}}');
   html := mustache.RenderJSON('{}', nil, TSynMustache.HelpersGetStandardList);
-  check((html <> '') and (TextToGUID(@html[2], @guid) <> nil));
+  check((html <> '') and
+        (TextToGUID(@html[2], @guid) <> nil));
   mustache := TSynMustache.Parse(
     '<h1>{{header}}</h1>'#$D#$A'{{#items}}'#$D#$A'{{#first}}'#$D#$A +
     '<li><strong>{{name}}</strong></li>'#$D#$A'{{/first}}'#$D#$A +
@@ -537,7 +539,7 @@ begin
     '{"header":"Colors","items":[{"name":"red","first":true,"url":"#Red"},' +
     '{"name":"green","link":true,"url":"#Green"},{"name":"blue","first":true,' +
     '"link":true,"url":"#Blue"}],"empty":true}');
-  Check(trim(html) =
+  Check(TrimU(html) =
     '<h1>Colors</h1>'#$D#$A'<li><strong>red</strong></li>'#$D#$A +
     '<li><a href="#Green">green</a></li>'#$D#$A'<li><strong>blue</strong></li>'#$D#$A +
     '<li><a href="#Blue">blue</a></li>'#$D#$A#$D#$A'<p>The list is empty.</p>');
@@ -641,7 +643,7 @@ type
     fColl: TCollTests;
     fTCollTest: TCollTest;
     fStr: TStringList;
-    procedure SetColl(const Value: TCollTests);
+    procedure SetColl(const Value: TCollTests); // validate Setter
   public
     constructor Create;
     destructor Destroy; override;
@@ -662,8 +664,9 @@ type
     class procedure FVReader2(var Context: TJsonParserContext; Data: pointer);
     class procedure FVWriter2(W: TTextWriter; Data: pointer;
       Options: TTextWriterWriteObjectOptions);
-    class procedure FVClassReader(var Context: TJsonParserContext; Data: pointer);
-    class procedure FVClassWriter(W: TTextWriter; Data: pointer;
+    class procedure FVClassReader(var Context: TJsonParserContext;
+       Data: TObject);
+    class procedure FVClassWriter(W: TTextWriter; Data: TObject;
       Options: TTextWriterWriteObjectOptions);
   published
     property Ints: TIntegerDynArray read fInts write fInts;
@@ -710,9 +713,9 @@ var
   Values: array[0..5] of TValuePUTF8Char;
 begin
   // '{"Major":1,"Minor":2001,"Release":3001,"Build":4001,"Main":"1","Detailed":"1001"},..
-  if not Context.ParseObject(['Major', 'Minor', 'Release', 'Build', 'Main',
-    'Detailed'], @Values) then
-    exit; // result^ = ',' or ']' for last item of array
+  if not Context.ParseObject([
+     'Major', 'Minor', 'Release', 'Build', 'Main', 'Detailed'], @Values) then
+    exit;
   PFV(Data)^.Major := Values[0].ToInteger;
   PFV(Data)^.Minor := Values[1].ToInteger;
   PFV(Data)^.Release := Values[2].ToInteger;
@@ -730,27 +733,29 @@ begin
 end;
 
 class procedure TCollTstDynArray.FVClassReader(var Context: TJsonParserContext;
-  Data: pointer);
+  Data: TObject);
 var
   Values: array[0..5] of TValuePUTF8Char;
 begin
   // '{"Major":2,"Minor":2002,"Release":3002,"Build":4002,"Main":"2","BuildDateTime":"1911-03-15"}'
-  if not Context.ParseObject(['Major', 'Minor', 'Release', 'Build', 'Main',
-    'BuildDateTime'], @Values) then
-    exit;
-  PFV(Data)^.Major := Values[0].ToInteger;
-  PFV(Data)^.Minor := Values[1].ToInteger;
-  PFV(Data)^.Release := Values[2].ToInteger;
-  PFV(Data)^.Build := Values[3].ToInteger;
-  PFV(Data)^.Main := Values[4].ToString;
-  PFV(Data)^.BuildDateTime := Iso8601ToDateTimePUTF8Char(Values[5].Value, Values
-    [5].ValueLen);
+  if Context.ParseObject([
+     'Major', 'Minor', 'Release', 'Build', 'Main', 'BuildDateTime'], @Values) then
+    with TFileVersion(Data) do
+    begin
+      Major := Values[0].ToInteger;
+      Minor := Values[1].ToInteger;
+      Release := Values[2].ToInteger;
+      Build := Values[3].ToInteger;
+      Main := Values[4].ToString;
+      BuildDateTime :=
+        Iso8601ToDateTimePUTF8Char(Values[5].Value, Values[5].ValueLen);
+    end;
 end;
 
-class procedure TCollTstDynArray.FVClassWriter(W: TTextWriter; Data: pointer;
+class procedure TCollTstDynArray.FVClassWriter(W: TTextWriter; Data: TObject;
   Options: TTextWriterWriteObjectOptions);
 begin
-  with PFV(Data)^ do
+  with TFileVersion(Data) do
     W.AddJSONEscape(['Major', Major, 'Minor', Minor, 'Release', Release, 'Build',
       Build, 'Main', Main, 'BuildDateTime', DateTimeToIso8601Text(BuildDateTime)]);
 end;
@@ -1048,7 +1053,7 @@ procedure TTestLowLevelTypes.EncodeDecodeJSON;
 var
   J, U, U2: RawUTF8;
   P: PUTF8Char;
-  binary, zendframeworkJson, discogsJson: RawByteString;
+  b, binary, zendframeworkJson, discogsJson: RawByteString;
   V: array[0..4] of TValuePUTF8Char;
   i, a, err: integer;
   r: Double;
@@ -1099,7 +1104,7 @@ var
     try
       CA.Str := TStringList.Create;
       tmp := J;
-      Check(JSONToObject(CA, UniqueRawUTF8(RawUTF8(tmp)), Valid) = nil);
+      Check(JSONToObject(CA, UniqueRawUTF8(RawUTF8(tmp)), Valid)^ = #0);
       Check(Valid);
       Check(CA.One.Color = 2);
       Check(CA.One.Name = 'test2');
@@ -1108,7 +1113,7 @@ var
       Check(CA.One.Length = 10);
       Check(CA.Str.Count = 10000);
       for i := 1 to CA.Str.Count do
-        Check(CA.Str[i - 1] = IntToStr(i));
+        Check(StrToInt(CA.Str[i - 1]) = i);
       SetLength(CA.fInts, 20000);
       for i := 0 to high(CA.Ints) do
         CA.Ints[i] := i;
@@ -1120,11 +1125,11 @@ var
     CA := TCollTstDynArray.Create;
     try
       CA.Str := TStringList.Create;
-      Check(JSONToObject(CA, pointer(U), Valid) = nil);
+      Check(JSONToObject(CA, pointer(U), Valid)^ = #0);
       Check(Valid);
       Check(CA.Str.Count = 10000);
       for i := 1 to CA.Str.Count do
-        Check(CA.Str[i - 1] = IntToStr(i));
+        Check(StrToInt(CA.Str[i - 1]) = i);
       Check(length(CA.Ints) = 20000);
       for i := 0 to high(CA.Ints) do
         CA.Ints[i] := i;
@@ -1135,7 +1140,7 @@ var
       U := ObjectToJSON(CA);
       SetLength(CA.fInts, 2);
       SetLength(CA.fTimeLog, 2);
-      Check(JSONToObject(CA, pointer(U), Valid) = nil);
+      Check(JSONToObject(CA, pointer(U), Valid)^ = #0);
       Check(Valid);
       Check(Length(CA.Ints) = 20000);
       Check(Length(CA.TimeLog) = CA.Str.Count);
@@ -1159,7 +1164,8 @@ var
       DA.Clear;
       Check(Length(CA.FileVersion) = 0);
       pu := JSONToObject(CA, pointer(U), Valid);
-      Check(pu = nil);
+      Check((pu <> nil) and
+            (pu^ = #0));
       Check(Valid);
       Check(Length(CA.Ints) = 20000);
       Check(Length(CA.TimeLog) = CA.Str.Count);
@@ -1171,8 +1177,8 @@ var
           Check(Minor = i + 2000);
           Check(Release = i + 3000);
           Check(Build = i + 4000);
-          Check(Main = IntToStr(i));
-          Check(Detailed = IntToStr(i + 1000));
+          Check(StrToInt(Main) = i);
+          Check(StrToInt(Detailed) = i + 1000);
         end;
     finally
       CA.Free;
@@ -1234,18 +1240,23 @@ var
   end;
 
   procedure ABCDE(pt: TRttiParserType);
+  var
+    p: PRttiCustomProp;
+    v: TRttiCustom;
   begin
     ABCD;
-    with Parser.Props.List[4] do
-    begin
-      Check(Name^ = 'E');
-      Check(Value.Parser = pt);
-      Check(Value.Props.Count = 2);
-      Check(Value.Props.List[0].Name^ = 'E1');
-      Check(Value.Props.List[0].Value.Parser = ptDouble);
-      Check(Value.Props.List[1].Name^ = 'E2');
-      Check(Value.Props.List[1].Value.Parser = ptDouble);
-    end;
+    p := @Parser.Props.List[4];
+    Check(p^.Name^ = 'E');
+    Check(p^.Value.Parser = pt);
+    if pt = ptDynArray then
+      v := p^.Value.ArrayRtti
+    else
+      v := p^.Value;
+    Check(v.Props.Count = 2);
+    Check(v.Props.List[0].Name^ = 'E1');
+    Check(v.Props.List[0].Value.Parser = ptDouble);
+    Check(v.Props.List[1].Name^ = 'E2');
+    Check(v.Props.List[1].Value.Parser = ptDouble);
   end;
 
   procedure TestGit(ro: TJsonParserOptions; wo: TTextWriterWriteObjectOptions);
@@ -1264,8 +1275,8 @@ var
     FillCharFast(git2, sizeof(git2), 0);
     U := zendframeworkJson; // need unique string for procedure re-entrance
     check(IsValidJSON(U));
-    Check(DynArrayLoadJSON(git, UniqueRawUTF8(U), TypeInfo(TTestCustomJSONGitHubs))
-      <> nil);
+    Check(DynArrayLoadJSON(
+      git, UniqueRawUTF8(U), TypeInfo(TTestCustomJSONGitHubs)) <> nil);
     U := DynArraySaveJSON(git, TypeInfo(TTestCustomJSONGitHubs));
     check(IsValidJSON(U));
     if woHumanReadable in wo then
@@ -1288,7 +1299,7 @@ var
         check(value <> nil);
         GetJSONItemAsRawJSON(value, s);
         check(IsValidJSON(s));
-        check(trim(s) = '"' + name + '"');
+        check(TrimU(s) = '"' + name + '"');
         check(GetInteger(JsonObjectByPath(item, 'owner.id')) = owner.id);
         check(GetInteger(JsonObjectByPath(item, 'owner.i*')) = owner.id);
         check(JsonObjectByPath(item, 'owner.name') = '');
@@ -1310,7 +1321,8 @@ var
         check(JSONReformat(s, jsonCompact) =
           FormatUTF8('{"login":"%","id":%}', [owner.login, owner.id]));
       end;
-    Check(DynArrayLoadJSON(git2, pointer(U), TypeInfo(TTestCustomJSONGitHubs)) <> nil);
+    Check(DynArrayLoadJSON(
+      git2, pointer(U), TypeInfo(TTestCustomJSONGitHubs)) <> nil);
     if not CheckFailed(length(git) = Length(git2)) then
       for i := 0 to high(git) do
       begin
@@ -1443,7 +1455,8 @@ var
       end;
     end;
     binary := DynArraySave(AA, TypeInfo(TRawUTF8DynArrayDynArray));
-    Check(DynArrayLoad(AB, pointer(binary), TypeInfo(TRawUTF8DynArrayDynArray)) <> nil);
+    Check(DynArrayLoad(
+      AB, pointer(binary), TypeInfo(TRawUTF8DynArrayDynArray)) <> nil);
     Check(length(AA) = length(AB));
     for i := 0 to high(AA) do
     begin
@@ -1454,7 +1467,8 @@ var
     J := DynArraySaveJSON(AA, TypeInfo(TRawUTF8DynArrayDynArray));
     check(IsValidJSON(J));
     Finalize(AB);
-    Check(DynArrayLoadJSON(AB, pointer(J), TypeInfo(TRawUTF8DynArrayDynArray)) <> nil);
+    Check(DynArrayLoadJSON(
+      AB, pointer(J), TypeInfo(TRawUTF8DynArrayDynArray)) <> nil);
     Check(length(AA) = length(AB));
     for i := 0 to high(AA) do
     begin
@@ -1679,7 +1693,7 @@ begin
   TestGetJsonField('"true",false', 'true', true, false, ',', 'f');
   TestGetJsonField('"",false', '', true, false, ',', 'f');
   TestGetJsonField('12,false', '12', false, false, ',', 'f');
-  TestGetJsonField('12]', '12', false, true, ']', #0);
+  TestGetJsonField('12]', '12', false, false, ']', #0);
   TestGetJsonField('12],', '12', false, false, ']', ',');
   TestGetJsonField('1.2],', '1.2', false, false, ']', ',');
   TestGetJsonField('1.2  ],', '1.2', false, false, ']', ',');
@@ -1882,22 +1896,22 @@ begin
     J := ObjectToJSON(peop);
     check(IsValidJSON(J));
     CheckEqual(J, '{"ID":1234,"FirstName":"FN","LastName":"LN",' +
-      '"Data":"","YearOfBirth":1000,"YearOfDeath":0}');
+      '"Data":null,"YearOfBirth":1000,"YearOfDeath":0}');
     ClearObject(peop);
     J := ObjectToJSON(peop);
     check(IsValidJSON(J));
-    CheckEqual(J, '{"ID":1234,"FirstName":"","LastName":"",' +
-      '"Data":"","YearOfBirth":0,"YearOfDeath":0}');
+    CheckEqual(J, '{"ID":0,"FirstName":"","LastName":"",' +
+      '"Data":null,"YearOfBirth":0,"YearOfDeath":0}');
     peop.IDValue := -1234;
     J := ObjectToJSON(peop);
     check(IsValidJSON(J));
     CheckEqual(J, '{"ID":-1234,"FirstName":"","LastName":"",' +
-      '"Data":"","YearOfBirth":0,"YearOfDeath":0}');
+      '"Data":null,"YearOfBirth":0,"YearOfDeath":0}');
     peop.YearOfDeath := 10;
     peop.LastName := 'john';
     J := ObjectToJSON(peop);
     check(IsValidJSON(J));
-    CheckEqual(J, '{"ID":-1234,"FirstName":"","LastName":"john","Data":"",' +
+    CheckEqual(J, '{"ID":-1234,"FirstName":"","LastName":"john","Data":null,' +
       '"YearOfBirth":0,"YearOfDeath":10}');
   finally
     peop.Free;
@@ -1918,7 +1932,7 @@ begin
     Check(V[2].ToInteger = a);
     Check(V[3].Value = nil);
     J := BinToBase64WithMagic(U);
-    check(PInteger(J)^ and $00ffffff = JSON_BASE64_MAGIC);
+    check(PInteger(J)^ and $00ffffff = JSON_BASE64_MAGIC_C);
     RB := BlobToRawBlob(pointer(J));
     check(length(RB) = length(U)); // RB=U is buggy under FPC :(
     check(CompareMem(pointer(RB), pointer(U), length(U)));
@@ -1952,9 +1966,11 @@ begin
       Check(P <> nil);
       Check(Va = c);
       P := VariantLoadJSON(Va, P);
-      Check((P <> nil) and (P^ = #0));
+      Check((P <> nil) and
+            (P^ = #0));
       Check(Va = U);
-      Vb := VariantLoad(VariantSave(Va), @JSON_OPTIONS[true]);
+      binary := VariantSave(Va);
+      Vb := VariantLoad(binary, @JSON_OPTIONS[true]);
       Check(Vb = U);
     finally
       Free;
@@ -2009,7 +2025,7 @@ begin
     J := ObjectToJSON(O, [woHumanReadable]);
     check(IsValidJSON(J));
     CheckEqual(J,
-      '{'#$D#$A#9'"Name": "",'#$D#$A#9'"Enum": "flagIdle",'#$D#$A#9'"Sets": []'#$D#$A'}');
+      #13#10'{'#$D#$A#9'"Name": "",'#$D#$A#9'"Enum": "flagIdle",'#$D#$A#9'"Sets": []'#$D#$A'}');
     with PRttiInfo(TypeInfo(TSynBackgroundThreadProcessStep))^.EnumBaseType^ do
       for E := low(E) to high(E) do
       begin
@@ -2018,8 +2034,8 @@ begin
         include(O.fSets, E);
         J := ObjectToJSON(O, []);
         check(IsValidJSON(J));
-        CheckEqual(J, FormatUTF8('{"Name":"%","Enum":%,"Sets":%}', [ord(E), ord(E),
-          byte(O.fSets)]));
+        CheckEqual(J, FormatUTF8('{"Name":"%","Enum":%,"Sets":%}',
+          [ord(E), ord(E), byte(O.fSets)]));
         JSONToObject(O2, pointer(J), Valid);
         Check(Valid);
         Check(O.Name = O2.Name);
@@ -2028,7 +2044,7 @@ begin
         J := ObjectToJSON(O, [woHumanReadable]);
         check(IsValidJSON(J));
         U := FormatUTF8(
-          '{'#$D#$A#9'"NAME": "%",'#$D#$A#9'"ENUM": "%",'#$D#$A#9'"SETS": ["FLAGIDLE"',
+          #13#10'{'#$D#$A#9'"NAME": "%",'#$D#$A#9'"ENUM": "%",'#$D#$A#9'"SETS": ["FLAGIDLE"',
           [ord(E), UpperCaseU(RawUTF8(GetEnumName(E)^))]);
         Check(IdemPChar(pointer(J), pointer(U)));
         JSONToObject(O2, pointer(J), Valid);
@@ -2043,12 +2059,15 @@ begin
     J := ObjectToJSON(O, [woHumanReadable, woHumanReadableFullSetsAsStar]);
     check(IsValidJSON(J));
     CheckEqual(J,
-      '{'#$D#$A#9'"Name": "3",'#$D#$A#9'"Enum": "flagDestroying",'#$D#$A#9'"Sets": ["*"]'#$D#$A'}');
+      #13#10'{'#$D#$A#9'"Name": "3",'#$D#$A#9'"Enum": "flagDestroying",' +
+      #$D#$A#9'"Sets": ["*"]'#$D#$A'}');
     J := ObjectToJSON(O, [woHumanReadable, woHumanReadableFullSetsAsStar,
       woHumanReadableEnumSetAsComment]);
     CheckEqual(J,
-      '{'#$D#$A#9'"Name": "3",'#$D#$A#9'"Enum": "flagDestroying", // "flagIdle","flagStarted","flagFinished","flagDestroying"' +
-      #$D#$A#9'"Sets": ["*"] // "*" or a set of "flagIdle","flagStarted","flagFinished","flagDestroying"'#$D#$A'}');
+      #13#10'{'#$D#$A#9'"Name": "3",'#$D#$A#9'"Enum": "flagDestroying", ' +
+      '// "flagIdle","flagStarted","flagFinished","flagDestroying"' +
+      #$D#$A#9'"Sets": ["*"] // "*" or a set of "flagIdle","flagStarted",' +
+      '"flagFinished","flagDestroying"'#$D#$A'}');
     O2.fName := '';
     O2.fEnum := low(E);
     O2.fSets := [];
@@ -2071,11 +2090,13 @@ begin
   check(IsValidJSON('{' + U));
   P := UniqueRawUTF8(U);
   Check(GetJSONPropName(P) = 'filters');
-  Check((P <> nil) and (P^ = '['));
+  Check((P <> nil) and
+        (P^ = '['));
   P := GotoNextJSONItem(P, 1, @EndOfObject);
   Check(EndOfObject = ',');
   Check(GetJSONPropName(P) = 'Limit');
-  Check((P <> nil) and (P^ = '1'));
+  Check((P <> nil) and
+        (P^ = '1'));
   P := GotoNextJSONItem(P, 1, @EndOfObject);
   Check(P <> nil);
   Check(EndOfObject = '}');
@@ -2095,33 +2116,38 @@ begin
   try
     U := ObjectToJSON(Coll);
     check(IsValidJSON(U));
-    Check(Hash32(U) = $95B54414);
+    CheckEqual(U,
+      '{"One":{"Color":0,"Length":0,"Name":""},"Coll":[],"Str":null}');
     Check(ObjectToJSON(C2) = U);
     Coll.One.Name := 'test"\2';
     Coll.One.Color := 1;
     U := ObjectToJSON(Coll);
     check(IsValidJSON(U));
-    Check(Hash32(U) = $CE2C2DED);
-    Check(JSONToObject(C2, pointer(U), Valid) = nil);
+    CheckEqual(U,
+      '{"One":{"Color":1,"Length":0,"Name":"test\"\\2"},"Coll":[],"Str":null}');
+    Check(JSONToObject(C2, pointer(U), Valid)^ = #0);
     Check(Valid);
     U := ObjectToJSON(C2);
     check(IsValidJSON(U));
-    Check(Hash32(U) = $CE2C2DED);
+    CheckEqual(U,
+      '{"One":{"Color":1,"Length":0,"Name":"test\"\\2"},"Coll":[],"Str":null}');
     Coll.Coll.Add.Color := 10;
     Coll.Coll.Add.Name := 'name';
     Check(Coll.Coll.Count = 2);
     U := ObjectToJSON(Coll);
     check(IsValidJSON(U));
-    Check(Hash32(U) = $36B02F0E);
-    Check(JSONToObject(C2, pointer(U), Valid) = nil);
+    CheckEqual(U, '{"One":{"Color":1,"Length":0,"Name":"test\"\\2"},"Coll":' +
+      '[{"Color":10,"Length":0,"Name":""},{"Color":0,"Length":0,"Name":"name"}],"Str":null}');
+    Check(JSONToObject(C2, pointer(U), Valid)^ = #0);
     Check(Valid);
     Check(C2.Coll.Count = 2);
     U := ObjectToJSON(C2);
     check(IsValidJSON(U));
-    Check(Hash32(U) = $36B02F0E);
+    CheckEqual(U, '{"One":{"Color":1,"Length":0,"Name":"test\"\\2"},"Coll":' +
+      '[{"Color":10,"Length":0,"Name":""},{"Color":0,"Length":0,"Name":"name"}],"Str":null}');
     J := ObjectToJSON(Coll, [woHumanReadable]);
     check(IsValidJSON(U));
-    Check(Hash32(J) = $9FAFF11F);
+    Check(Hash32(J) = $7694E4C1);
     Check(JSONReformat(J, jsonCompact) = U);
     Check(JSONReformat('{ "empty": {} }') =
       '{'#$D#$A#9'"empty": {'#$D#$A#9#9'}'#$D#$A'}');
@@ -2130,16 +2156,18 @@ begin
     CheckEqual(U,
       '{"ClassName":"TCollTst","One":{"ClassName":"TCollTest","Color":1,' +
       '"Length":0,"Name":"test\"\\2"},"Coll":[{"ClassName":"TCollTest","Color":10,' +
-      '"Length":0,"Name":""},{"ClassName":"TCollTest","Color":0,"Length":0,"Name":"name"}]}');
+      '"Length":0,"Name":""},{"ClassName":"TCollTest","Color":0,"Length":0,"Name":"name"}],"Str":null}');
     C2.Coll.Clear;
-    Check(JSONToObject(C2, pointer(U), Valid) = nil);
+    Check(C2.Coll.Count = 0);
+    Check(JSONToObject(C2, pointer(U), Valid)^ = #0);
     Check(Valid);
     Check(C2.Coll.Count = 2);
     U := ObjectToJSON(C2);
-    Check(Hash32(U) = $36B02F0E);
+    CheckEqual(U, '{"One":{"Color":1,"Length":0,"Name":"test\"\\2"},"Coll":' +
+      '[{"Color":10,"Length":0,"Name":""},{"Color":0,"Length":0,"Name":"name"}],"Str":null}');
     Rtti.RegisterClasses([TComplexNumber, TCollTst]);
     J := '{"ClassName":"TComplexNumber", "Real": 10.3, "Imaginary": 7.92 }';
-    P := UniqueRawUTF8(J); // make local copy of constant
+    P := UniqueRawUTF8(J); // make local copy of source constant
     Comp := TComplexNumber(JSONToNewObject(P, Valid));
     if not CheckFailed(Comp <> nil) then
     begin
@@ -2158,7 +2186,8 @@ begin
     C2.Coll.Clear;
     U := ObjectToJSON(C2);
     check(IsValidJSON(U));
-    Check(Hash32(U) = $CE2C2DED);
+    CheckEqual(U,
+      '{"One":{"Color":1,"Length":0,"Name":"test\"\\2"},"Coll":[],"Str":null}');
     Coll.Coll.BeginUpdate;
     for i := 1 to 10000 do
       with Coll.Coll.Add do
@@ -2172,7 +2201,7 @@ begin
     check(IsValidJSON(U));
     Check(Hash32(U) = $DB782098);
     C2.Coll.Clear;
-    Check(JSONToObject(C2.fColl, pointer(U), Valid) = nil);
+    Check(JSONToObject(C2.fColl, pointer(U), Valid)^ = #0);
     Check(Valid);
     Check(C2.Coll.Count = Coll.Coll.Count);
     for i := 1 to C2.Coll.Count - 2 do
@@ -2180,27 +2209,27 @@ begin
       begin
         Check(Color = i * 3);
         Check(Length = i * 5);
-        Check(Name = Int32ToUtf8(i));
+        Check(GetInteger(pointer(Name)) = i);
       end;
     U := ObjectToJSON(Coll);
     check(IsValidJSON(U));
-    Check(length(U) = 443103);
-    Check(Hash32(U) = $7EACF12A);
+    Check(length(U) = 443114);
+    Check(Hash32(U) = $B1BD5123);
     C2.One.Name := '';
     C2.Coll.Clear;
-    Check(JSONToObject(C2, pointer(U), Valid) = nil);
+    Check(JSONToObject(C2, pointer(U), Valid)^ = #0);
     Check(Valid);
     Check(C2.Coll.Count = Coll.Coll.Count);
     U := ObjectToJSON(C2);
     check(IsValidJSON(U));
-    Check(length(U) = 443103);
-    Check(Hash32(U) = $7EACF12A);
+    Check(length(U) = 443114);
+    Check(Hash32(U) = $B1BD5123);
     for i := 1 to C2.Coll.Count - 2 do
       with C2.Coll[i + 1] do
       begin
         Check(Color = i * 3);
         Check(Length = i * 5);
-        Check(Name = Int32ToUtf8(i));
+        Check(GetInteger(pointer(Name)) = i);
       end;
     Coll.Coll.Clear;
     Coll.Str := TStringList.Create;
@@ -2217,45 +2246,47 @@ begin
     check(IsValidJSON(U2));
     Check(U2 = U);
     C2.Str := TStringList.Create;
-    Check(JSONToObject(C2, pointer(U), Valid) = nil);
+    Check(JSONToObject(C2, pointer(U), Valid)^ = #0);
     Check(Valid);
     Check(C2.Str.Count = Coll.Str.Count);
     for i := 1 to C2.Str.Count do
-      Check(C2.Str[i - 1] = IntToStr(i));
+      Check(StrToInt(C2.Str[i - 1]) = i);
     J := ObjectToJSON(C2);
     check(IsValidJSON(J));
     Check(Hash32(J) = $85926050);
     C2.One.Color := 0;
     C2.One.Name := '';
     U := '{"One":{"Color":1,"Length":0,"Name":"test","Unknown":123},"Coll":[]}';
-    Check(JSONToObject(C2, UniqueRawUTF8(U), Valid, nil, [jpoIgnoreUnknownProperty])
-      = nil, 'Ignore unknown');
+    Check(JSONToObject(C2, UniqueRawUTF8(U),       
+      Valid, nil, [jpoIgnoreUnknownProperty])^ = #0, 'Ignore unknown');
     Check(Valid);
     Check(C2.One.Color = 1);
     Check(C2.One.Name = 'test');
     C2.One.Color := 0;
     C2.One.Name := '';
-    U :=
-      '{"One":{"Color":1,"Length":0,"wtf":{"one":1},"Name":"test","Unknown":123},"dummy":null,"Coll":[]}';
+    U := '{"One":{"Color":1,"Length":0,"wtf":{"one":1},"Name":"test",' +
+      '"Unknown":123},"dummy":null,"Coll":[]}';
     check(IsValidJSON(U));
-    Check(JSONToObject(C2, UniqueRawUTF8(U), Valid, nil, [jpoIgnoreUnknownProperty])
-      = nil, 'Ignore unknown');
+    Check(JSONToObject(C2, UniqueRawUTF8(U), Valid, nil,
+      [jpoIgnoreUnknownProperty])^ = #0, 'Ignore unknown');
     Check(Valid);
     Check(C2.One.Color = 1);
     Check(C2.One.Name = 'test');
     U := '{"One":{"Color":1,"Length":0,"Name":"test\"\\2},"Coll":[]}';
-    Check(IdemPChar(JSONToObject(C2, UniqueRawUTF8(U), Valid), '"TEST'), 'invalid JSON');
+    P := JSONToObject(C2, UniqueRawUTF8(U), Valid);
+    Check(IdemPChar(P, '}'), 'invalid JSON');
     Check(not Valid);
     U := '{"One":{"Color":1,"Length":0,"Name":"test\"\\2"},"Coll":[]';
-    Check(JSONToObject(C2, UniqueRawUTF8(U), Valid) <> nil);
+    P := JSONToObject(C2, UniqueRawUTF8(U), Valid);
+    Check(P = nil);
     Check(not Valid);
     U := '{"One":{"Color":,"Length":0,"Name":"test\"\\2"},"Coll":[]';
-    Check(JSONToObject(C2, UniqueRawUTF8(U), Valid) <> nil, 'invalid JSON');
+    Check(JSONToObject(C2, UniqueRawUTF8(U), Valid) = nil, 'invalid JSON');
     Check(not Valid);
     U := '{"Coll":[{"Color":1,"Length":0,"Name":"test"}],' +
       '"One":{"Color":2,"Length":0,"Name":"test2"}}';
-    Check(JSONToObject(C2, UniqueRawUTF8(U), Valid, nil, [jpoIgnoreUnknownProperty])
-      = nil, 'Ignore unknown');
+    Check(JSONToObject(C2, UniqueRawUTF8(U), Valid, nil,
+      [jpoIgnoreUnknownProperty])^ = #0, 'Ignore unknown');
     Check(Valid);
     Check(C2.One.Color = 2);
     Check(C2.One.Name = 'test2');
@@ -2267,16 +2298,16 @@ begin
     Check(Hash32(J) = $41281936);
     // (custom) dynamic array serialization
     TCollTstDynArrayTest;
-    TRttiJson.RegisterCustomSerializer(TypeInfo(TFVs), TCollTstDynArray.FVReader,
-      TCollTstDynArray.FVWriter);
+    TRttiJson.RegisterCustomSerializer(TypeInfo(TFVs),
+      TCollTstDynArray.FVReader, TCollTstDynArray.FVWriter);
     TCollTstDynArrayTest;
-    TRttiJson.RegisterCustomSerializer(TypeInfo(TFVs), TCollTstDynArray.FVReader2,
-      TCollTstDynArray.FVWriter2);
+    TRttiJson.RegisterCustomSerializer(TypeInfo(TFVs),
+      TCollTstDynArray.FVReader2, TCollTstDynArray.FVWriter2);
     TCollTstDynArrayTest;
     // (custom) class serialization
     TFileVersionTest(false);
-    TRttiJson.RegisterCustomSerializer(TFileVersion, TCollTstDynArray.FVClassReader,
-      TCollTstDynArray.FVClassWriter);
+    TRttiJson.RegisterCustomSerializer(TFileVersion,
+      TCollTstDynArray.FVClassReader, TCollTstDynArray.FVClassWriter);
     TFileVersionTest(true);
     TRttiJson.UnRegisterCustomSerializer(TFileVersion);
     TFileVersionTest(false);
@@ -2310,7 +2341,7 @@ begin
       Rtti.ByClass[TCollTest].Props.NameChanges([], []);
       J := ObjectToJSON(MyItem);
       Check(IsValidJSON(J));
-      CheckEqual(J, '{"Color":20,"Length":10,"Name":"ABC"}');
+      CheckEqual(J, '{"Color":20,"Length":10,"Name":"ABC"}', 'back to default');
     finally
       MyItem.Free;
     end;
@@ -2318,61 +2349,70 @@ begin
     C2.Free;
     Coll.Free;
   end;
-  // test TJSONRecordTextDefinition parsing
-  Parser := Rtti.RegisterFromTextOnly('Int: double');
+  // test RTTI definition from text
+  Parser := TRttiCustom.CreateFromText('Int: double');
   Check(Parser.Props.Count = 1);
   Check(Parser.Props.List[0].Name^ = 'Int');
   Check(Parser.Props.List[0].Value.Parser = ptDouble);
-  Parser := Rtti.RegisterFromTextOnly(
+  Parser.Free; // should be released by caller (not registered in Rtti list)
+  Parser := TRttiCustom.CreateFromText(
     'A , B,C  : integer; D: RawUTF8');
   Check(Parser.Props.Count = 4);
   ABCD;
-  Parser := Rtti.RegisterFromTextOnly(
+  Parser.Free;
+  Parser := TRttiCustom.CreateFromText(
     'A,B,C: integer; D: RawUTF8; E: record E1,E2: double; end;');
   Check(Parser.Props.Count = 5);
   ABCDE(ptRecord);
-  Parser := Rtti.RegisterFromTextOnly(
+  Parser.Free;
+  Parser := TRttiCustom.CreateFromText(
     'A,B: integer; C: integer; D: RawUTF8; E: array of record E1,E2: double; end;');
   Check(Parser.Props.Count = 5);
-  ABCDE(ptArray);
-  Parser := Rtti.RegisterFromTextOnly(
+  ABCDE(ptDynArray);
+  Parser.Free;
+  Parser := TRttiCustom.CreateFromText(
     'A,B,C integer D RawUTF8 E{E1,E2 double}');
   Check(Parser.Props.Count = 5);
   ABCDE(ptRecord);
-  Parser := Rtti.RegisterFromTextOnly(
-    'A,B,C integer D RawUTF8 E{E1,E2 double}');
-  Check(Parser.Props.Count = 5, 'from cache');
-  ABCDE(ptRecord);
-  Parser := Rtti.RegisterFromTextOnly(
-    'A,B,C integer D RawUTF8 E[E1,E2 double]');
+  Parser.Free;
+  Parser := TRttiCustom.CreateFromText(
+    'A,B,C: integer, D: RawUTF8, E{E1: double, E2: double}');
   Check(Parser.Props.Count = 5);
-  ABCDE(ptArray);
-  Parser := Rtti.RegisterFromTextOnly(
+  ABCDE(ptRecord);
+  Parser.Free;
+  Parser := TRttiCustom.CreateFromText(
+    'A,B,C integer D:RawUTF8 E[E1,E2:double]');
+  Check(Parser.Props.Count = 5);
+  ABCDE(ptDynArray);
+  Parser.Free;
+  Parser := TRttiCustom.CreateFromText(
     'A,B,C integer D RawUTF8 E[E1,E2 double] F: string');
   Check(Parser.Props.Count = 6);
-  ABCDE(ptArray);
+  ABCDE(ptDynArray);
   Check(Parser.Props.List[5].Name^ = 'F');
   Check(Parser.Props.List[5].Value.Parser = ptString);
-  Parser := Rtti.RegisterFromTextOnly(
+  Parser.Free;
+  Parser := TRttiCustom.CreateFromText(
     'A,B,C integer D RawUTF8 E[E1,E2 double] F: array of string');
   Check(Parser.Props.Count = 6);
-  ABCDE(ptArray);
+  ABCDE(ptDynArray);
   Check(Parser.Props.List[5].Name^ = 'F');
-  Check(Parser.Props.List[5].Value.Parser = ptArray);
-  Check(Parser.Props.List[5].Value.Props.Count = 1);
-  Check(Parser.Props.List[5].Value.Props.List[0].Value.Parser = ptString);
-  Parser := Rtti.RegisterFromTextOnly(
-    'A,B,C integer D RawUTF8 E[E1:{E1A:integer E1B:tdatetime E1C TDatetimeMS}E2 double]');
+  Check(Parser.Props.List[5].Value.Parser = ptDynArray);
+  Check(Parser.Props.List[5].Value.ArrayRtti.Props.Count = 0);
+  Check(Parser.Props.List[5].Value.ArrayRtti.Parser = ptString);
+  Parser.Free;
+  Parser := TRttiCustom.CreateFromText('A,B,C integer D RawUTF8 ' +
+    'E[E1:{E1A:integer E1B:tdatetime E1C TDatetimeMS}E2 double]');
   Check(Parser.Props.Count = 5);
   ABCD;
   with Parser.Props.List[4] do
   begin
     Check(Name^ = 'E');
-    Check(Value.Parser = ptArray);
-    Check(Value.Props.Count = 2);
-    Check(Value.Props.List[0].Name^ = 'E1');
-    Check(Value.Props.List[0].Value.Parser = ptRecord);
-    with Value.Props.List[0].Value.Props do
+    Check(Value.Parser = ptDynArray);
+    Check(Value.ArrayRtti.Props.Count = 2);
+    Check(Value.ArrayRtti.Props.List[0].Name^ = 'E1');
+    Check(Value.ArrayRtti.Props.List[0].Value.Parser = ptRecord);
+    with Value.ArrayRtti.Props.List[0].Value.Props do
     begin
       Check(Count = 3);
       Check(List[0].Name^ = 'E1A');
@@ -2382,12 +2422,13 @@ begin
       Check(List[2].Name^ = 'E1C');
       Check(List[2].Value.Parser = ptDateTimeMS);
     end;
-    Check(Value.Props.List[1].Name^ = 'E2');
-    Check(Value.Props.List[1].Value.Parser = ptDouble);
+    Check(Value.ArrayRtti.Props.List[1].Name^ = 'E2');
+    Check(Value.ArrayRtti.Props.List[1].Value.Parser = ptDouble);
   end;
+  Parser.Free;
 
   {$ifdef ISDELPHI2010}
-  // test JSON serialization defined by Enhanced RTTI
+  // test JSON serialization defined by Enhanced RTTI available since Delphi 2010
   TestJSONSerialization;
   {$endif ISDELPHI2010}
   // test TJSONRecordTextDefinition JSON serialization
@@ -2492,7 +2533,7 @@ begin
   FillCharFast(Trans, sizeof(Trans), 0);
   U := RecordSaveJSON(Trans, TypeInfo(TTestCustomJSON2));
   Check(IsValidJSON(U));
-  CheckEqual(U, '{'#$D#$A#9'"Transactions": []'#$D#$A'}');
+  CheckEqual(U,  #13#10'{'#13#10#9'"Transactions": '#13#10#9'['#13#10#9']'#13#10'}');
   for i := 1 to 10 do
   begin
     U :=
@@ -2509,11 +2550,19 @@ begin
     Check(Trans.Transactions[0].TRACID.TIDEL = 'false');
     Check(Trans.Transactions[0].TRRMK = 'Remark');
     U := RecordSaveJSON(Trans, TypeInfo(TTestCustomJSON2));
-    Check(Hash32(U) = $CC7167FC);
+    RecordZero(@Trans, TypeInfo(TTestCustomJSON2));
+    Check(length(Trans.Transactions) = 0);
+    RecordLoadJSON(Trans, UniqueRawUTF8(U), TypeInfo(TTestCustomJSON2));
+    Check(length(Trans.Transactions) = 1);
+    Check(Trans.Transactions[0].TRTYPE = 'INCOME');
+    Check(Trans.Transactions[0].TRACID.TIDEL = 'false');
+    Check(Trans.Transactions[0].TRRMK = 'Remark');
   end;
+  U := RecordSaveJSON(Trans, TypeInfo(TTestCustomJSON2));
   FileFromString(U, 'transactions.json');
   Rtti.RegisterFromText(TypeInfo(TTestCustomJSON2Title), '');
   Rtti.RegisterFromText(TypeInfo(TTestCustomJSON2), '');
+  U := RecordSaveJSON(Trans, TypeInfo(TTestCustomJSON2));
 
   Parser := TRttiJson.RegisterFromText(TypeInfo(TTestCustomDiscogs),
     __TTestCustomDiscogs, [jpoIgnoreUnknownProperty], []);
@@ -2575,7 +2624,8 @@ begin
   Rtti.RegisterFromText(TypeInfo(TTestCustomDiscogs), '');
   SetString(U, PAnsiChar('true'#0'footer,'), 12);
   Check(IdemPChar(GetJSONField(pointer(U), P), 'TRUE'));
-  Check(P = nil);
+  Check((P <> nil) and
+        (P^ = #0));
   CheckEqual(U, 'true'#0'footer,', '3cce80e8df');
   // validates RawJSON (custom) serialization
   Enemy := TEnemy.Create;
@@ -2718,7 +2768,8 @@ procedure TTestLowLevelTypes._TDecimal128;
   begin
     Check(v.FromText(fromvalue) = dsvValue);
     Check(v.ToText = expected);
-    if (h = 0) and (l = 0) then
+    if (h = 0) and
+       (l = 0) then
       exit;
     Check(v.Bits.lo = l);
     Check(v.Bits.hi = h);
@@ -2815,7 +2866,7 @@ begin // see https://github.com/mongodb/libbson/blob/master/tests/test-decimal12
     else
       v.Bits.c[0] := i;
     str := v.ToText;
-    Check(str = UInt32ToUTF8(v.Bits.c[0]));
+    Check(GetCardinal(pointer(str)) = v.Bits.c[0]);
     if i = 0 then
       continue;
     Check(v2.FromText(str) = dsvValue);
@@ -2825,7 +2876,7 @@ begin // see https://github.com/mongodb/libbson/blob/master/tests/test-decimal12
   begin
     v.FromInt32(i);
     str := v.ToText;
-    Check(str = Int32ToUTF8(i));
+    Check(GetInteger(pointer(str)) = i);
     if i = 0 then
       continue;
     Check(v2.FromText(str) = dsvValue);
@@ -2877,7 +2928,6 @@ const
 
 var
   o, od, o2, value: variant;
-  c: currency;
   d, d2: TDateTime;
   oid, oid2: TBSONObjectID;
   oids: array of TBSONObjectID;
@@ -3680,7 +3730,10 @@ begin
   {$else}
   j := V.Database;
   {$endif}
-  Check((j <> '') and (j[1] = #$E2) and (j[2] = #$80) and (j[3] = #$9D));
+  Check((j <> '') and
+        (j[1] = #$E2) and
+        (j[2] = #$80) and
+        (j[3] = #$9D));
   V1 := _Arr([]);
   vs := 1.5;
   _Safe(V1)^.AddItem(vs);
@@ -3904,7 +3957,7 @@ begin
     Check(not InheritsFrom(TOrmPeople));
   end;
   Check(GetDisplayNameFromClass(nil) = '');
-  Check(GetDisplayNameFromClass(TOrm) = 'Record');
+  Check(GetDisplayNameFromClass(TOrm) = 'Orm');
   Check(GetDisplayNameFromClass(TOrmPeople) = 'People');
   Check(GetDisplayNameFromClass(TObject) = 'Object');
   Check(GetDisplayNameFromClass(TOrmTable) = 'Table');
@@ -4090,8 +4143,9 @@ begin
   Check(Stmt.Where[1].Operation = opIsNotNull);
   Check(Stmt.Limit = 20);
   Check(Stmt.Offset = 10);
-  Check((length(Stmt.Select) = 2) and (Stmt.Select[1].Field = 0) and (Props.Fields.List
-    [Stmt.Select[0].Field - 1].name = 'Data'));
+  Check((length(Stmt.Select) = 2) and
+        (Stmt.Select[1].Field = 0) and
+        (Props.Fields.List[Stmt.Select[0].Field - 1].name = 'Data'));
   Check(Stmt.OrderByField = nil);
   NewStmt('select data,iD from tab where firstname like "monet" or data is null limit 20 offset 10');
   Check(Stmt.TableName = 'tab');
@@ -4111,14 +4165,18 @@ begin
   NewStmt('select count(*) from tab');
   Check(Stmt.TableName = 'tab');
   Check(Stmt.Where = nil);
-  Check((length(Stmt.Select) = 1) and (Stmt.Select[0].Field = 0));
-  Check((length(Stmt.Select) = 1) and (Stmt.Select[0].FunctionName = 'count'));
+  Check((length(Stmt.Select) = 1) and
+        (Stmt.Select[0].Field = 0));
+  Check((length(Stmt.Select) = 1) and
+        (Stmt.Select[0].FunctionName = 'count'));
   Check(Stmt.Limit = 0);
   NewStmt('select count(*) from tab limit 10');
   Check(Stmt.TableName = 'tab');
   Check(Stmt.Where = nil);
-  Check((length(Stmt.Select) = 1) and (Stmt.Select[0].Field = 0));
-  Check((length(Stmt.Select) = 1) and (Stmt.Select[0].FunctionName = 'count'));
+  Check((length(Stmt.Select) = 1) and
+        (Stmt.Select[0].Field = 0));
+  Check((length(Stmt.Select) = 1) and
+        (Stmt.Select[0].FunctionName = 'count'));
   Check(Stmt.Limit = 10);
   NewStmt('select count(*) from tab where yearofbirth>1000 limit 10');
   Check(Stmt.TableName = 'tab');
@@ -4126,8 +4184,10 @@ begin
   Check(Props.Fields.List[Stmt.Where[0].Field - 1].name = 'YearOfBirth');
   Check(Stmt.Where[0].Operation = opGreaterThan);
   Check(Stmt.Where[0].ValueInteger = 1000);
-  Check((length(Stmt.Select) = 1) and (Stmt.Select[0].Field = 0));
-  Check((length(Stmt.Select) = 1) and (Stmt.Select[0].FunctionName = 'count'));
+  Check((length(Stmt.Select) = 1) and
+        (Stmt.Select[0].Field = 0));
+  Check((length(Stmt.Select) = 1) and
+        (Stmt.Select[0].FunctionName = 'count'));
   Check(Stmt.Limit = 10);
   NewStmt('select distinct ( yearofdeath )  from  tab where yearofbirth > :(1000): limit 20');
   Check(Stmt.TableName = 'tab');
@@ -4171,7 +4231,8 @@ begin
   Check(Stmt.Where[0].ValueInteger = 1000);
   Check((length(Stmt.Select) = 1) and
         (Props.Fields.List[Stmt.Select[0].Field - 1].name = 'YearOfDeath'));
-  Check((length(Stmt.Select) = 1) and (Stmt.Select[0].FunctionName = 'max'));
+  Check((length(Stmt.Select) = 1) and
+        (Stmt.Select[0].FunctionName = 'max'));
   Check(Stmt.Limit = 0);
   NewStmt('select max(yearofdeath)+115 as maxYOD from tab where yearofbirth > :(1000):');
   Check(Stmt.TableName = 'tab');
@@ -4236,11 +4297,16 @@ end;
 procedure TTestCompression.Setup;
 begin
   Data := StringFromFile(ExeVersion.ProgramFileName);
+  if length(Data) > 1 shl 20 then
+    SetLength(Data, 1 shl 20); // no need to compress more than 1MB
+  DataFile := ChangeFileExt(ExeVersion.ProgramFileName, '.1mb');
+  FileFromString(Data, DataFile);
 end;
 
 procedure TTestCompression.CleanUp;
 begin
   FreeAndNil(M);
+  DeleteFile(DataFile);
 end;
 
 const
@@ -4284,7 +4350,7 @@ const
     $B3667A2E, $C4614AB8, $5D681B02, $2A6F2B94, $B40BBE37, $C30C8EA1, $5A05DF1B,
     $2D02EF8D);
 
-function UpdateCrc32(aCRC32: cardinal; inBuf: pointer; inLen: integer): cardinal;
+function ReferenceCrc32(aCRC32: cardinal; inBuf: pointer; inLen: integer): cardinal;
 var
   i: integer;
 begin // slowest reference version
@@ -4308,15 +4374,15 @@ var
   gzr: TGZRead;
 begin
   Check(crc32(0, @crc32tab, 5) = $DF4EC16C, 'crc32');
-  Check(UpdateCrc32(0, @crc32tab, 5) = $DF4EC16C, 'crc32');
+  Check(ReferenceCrc32(0, @crc32tab, 5) = $DF4EC16C, 'crc32');
   Check(crc32(0, @crc32tab, 1024) = $6FCF9E13, 'crc32');
-  Check(UpdateCrc32(0, @crc32tab, 1024) = $6FCF9E13);
+  Check(ReferenceCrc32(0, @crc32tab, 1024) = $6FCF9E13);
   Check(crc32(0, @crc32tab, 1024 - 5) = $70965738, 'crc32');
-  Check(UpdateCrc32(0, @crc32tab, 1024 - 5) = $70965738);
+  Check(ReferenceCrc32(0, @crc32tab, 1024 - 5) = $70965738);
   Check(crc32(0, pointer(PtrInt(@crc32tab) + 1), 2) = $41D912FF, 'crc32');
-  Check(UpdateCrc32(0, pointer(PtrInt(@crc32tab) + 1), 2) = $41D912FF);
+  Check(ReferenceCrc32(0, pointer(PtrInt(@crc32tab) + 1), 2) = $41D912FF);
   Check(crc32(0, pointer(PtrInt(@crc32tab) + 3), 1024 - 5) = $E5FAEC6C, 'crc32');
-  Check(UpdateCrc32(0, pointer(PtrInt(@crc32tab) + 3), 1024 - 5) = $E5FAEC6C, 'crc32');
+  Check(ReferenceCrc32(0, pointer(PtrInt(@crc32tab) + 3), 1024 - 5) = $E5FAEC6C, 'crc32');
   M := TMemoryStream.Create;
   Z := TSynZipCompressor.Create(M, 6, szcfGZ);
   L := length(Data);
@@ -4331,10 +4397,11 @@ begin
       n := L;
     Z.Write(P^, n); // compress by little chunks to test streaming
     crc0 := crc32(crc0, P, n);
-    crc2 := UpdateCrc32(crc2, P, n);
+    crc2 := ReferenceCrc32(crc2, P, n);
     inc(P, n);
     dec(L, n);
   end;
+  Check(crc0 = ReferenceCrc32(0, Pointer(Data), length(Data)));
   Check(crc0 = Z.CRC, 'crc32');
   Check(crc2 = crc0, 'crc32');
   Z.Free;
@@ -4376,22 +4443,26 @@ end;
 
 procedure TTestCompression.InMemoryCompression;
 var
-  comp: Integer;
   tmp: RawByteString;
   hash: cardinal;
+  len, i: Integer;
 begin
   Check(CRC32string('TestCRC32') = $2CB8CDF3);
-  tmp := RandomTextParagraph(100);
-  hash := Hash32(tmp);
-  CompressZLib(tmp, true);
-  CompressZLib(tmp, false);
-  CheckEqual(Hash32(tmp), hash);
+  for i := 1 to 10 do
+  begin
+    tmp := RandomTextParagraph(1000 * i * i * i);
+    len := length(tmp);
+    hash := Hash32(tmp);
+    CompressZLib(tmp, true);
+    Check(len div length(tmp) > 2, 'compressible');
+    CompressZLib(tmp, false);
+    CheckEqual(Hash32(tmp), hash);
+  end;
 end;
 
 procedure TTestCompression.ZipFormat;
 var
   FN, FN2: TFileName;
-  ExeName: string;
   S: TRawByteStringStream;
 
   procedure test(Z: TZipRead; aCount: integer);
@@ -4417,7 +4488,7 @@ var
       tmp := UnZip(i);
       Check(tmp <> '', 'unzip3');
       Check(crc32(0, pointer(tmp), length(tmp)) = crc1, 'crc1b');
-      i := NameToIndex(ExeName);
+      i := NameToIndex(ExtractFileName(DataFile));
       Check(i = 2, 'unzip4');
       Check(UnZip(i) = Data, 'unzip6');
       Check(Entry[i].infoLocal^.zcrc32 = info.zcrc32, 'crc32');
@@ -4431,8 +4502,8 @@ var
         Exit;
       i := NameToIndex('REP1\twO.exe');
       Check(i = 4, 'unzip8');
-      Check(UnZip(i) = Data, 'unzip9');
-      tmpFN := 'TestSQL3zipformat.tmp';
+      Check(UnZip(i) = Data, 'unzip6');
+      tmpFN := 'mormot2zipformat.tmp';
       Check(UnZip('REP1\one.exe', tmpFN, true), 'unzipa');
       Check(StringFromFile(tmpFN) = Data, 'unzipb');
       Check(DeleteFile(tmpFN), 'unzipc');
@@ -4450,9 +4521,9 @@ var
       AddDeflated('rep2\ident.gz', M.Memory, M.Position);
       Check(Count = 2, 'cnt2');
       if Z is TZipWrite then
-        TZipWrite(Z).AddDeflated(ExeVersion.ProgramFileName)
+        TZipWrite(Z).AddDeflated(DataFile)
       else
-        Z.AddDeflated(ExeName, pointer(Data), length(Data));
+        Z.AddDeflated(ExtractFileName(DataFile), pointer(Data), length(Data));
       Check(Count = 3, 'cnt3');
       AddStored('rep2\ident2.gz', M.Memory, M.Position);
       Check(Count = 4, 'cnt4');
@@ -4464,7 +4535,6 @@ var
 var
   i: integer;
 begin
-  ExeName := ExtractFileName(ExeVersion.ProgramFileName);
   FN := ChangeFileExt(ExeVersion.ProgramFileName, '.zip');
   Prepare(TZipWrite.Create(FN));
   test(TZipRead.Create(FN), 4);
@@ -4624,7 +4694,8 @@ procedure TTestCompression._TAlgoCompress;
       s2 := algo.Decompress(t, aclNoCrcFast);
       inc(timedecomp, timer.StopInMicroSec);
       Check(s2 = s, algo.ClassName);
-      if (log <> '') and (s2 <> s) then
+      if (log <> '') and
+         (s2 <> s) then
         FileFromString(s2, 'bigTest' + algo.ClassName + '.log');
       inc(plain, length(s));
       inc(comp, length(t));
@@ -4639,7 +4710,8 @@ procedure TTestCompression._TAlgoCompress;
        ((plain * Int64(1000 * 1000)) div timedecomp) shr 20]));
     s2 := algo.Decompress(algo.Compress(s), aclNoCrcFast);
     Check(s2 = s, algo.ClassName);
-    if (log <> '') and (s2 <> s) then
+    if (log <> '') and
+       (s2 <> s) then
       FileFromString(s2, 'bigTestPartial' + algo.ClassName + '.log');
   end;
 
