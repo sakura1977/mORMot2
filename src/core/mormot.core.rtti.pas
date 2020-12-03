@@ -1851,6 +1851,10 @@ type
     /// compare two properties values
     function CompareValue(Data, Other: pointer; const OtherRtti: TRttiCustomProp;
       CaseInsensitive: boolean): integer;
+    /// append the field value as JSON with proper support
+    // - wrap GetValue() + AddVariant() over a temp TRttiVarData
+    procedure AddValueJson(W: TBaseWriter; Data: pointer;
+      Options: TTextWriterWriteObjectOptions);
   end;
   PRttiCustomProp = ^TRttiCustomProp;
 
@@ -1963,6 +1967,7 @@ type
     fCopy: TRttiCopier;
     fName: RawUTF8;
     fProps: TRttiCustomProps;
+    fOwnedRtti: array of TRttiCustom;
     fArrayFirstField: TRttiParserType;
     // used by mormot.core.json.pas
     fBinarySize: integer;
@@ -2003,7 +2008,7 @@ type
     constructor Create(aInfo: PRttiInfo); virtual;
     /// initialize abstract custom serialization for a given record
     // - not registered in the main TRttiCustomList: caller should free it
-    // - in practice, is used only during regression tests
+    // - in practice, is used only by test.core.data.pas regression tests
     constructor CreateFromText(const RttiDefinition: RawUTF8);
     /// finalize this instance
     destructor Destroy; override;
@@ -2981,8 +2986,9 @@ begin
     result := CODEPAGE_US
   else if @self = TypeInfo(RawUnicode) then
     result := CP_UTF16
-  else if @self = TypeInfo(RawByteString) then
-    result := CP_RAWBYTESTRING
+  else if (@self = TypeInfo(RawByteString)) or
+          (@self = TypeInfo(RawBlob)) then
+    result := CP_RAWBYTESTRING // RawBlob has same internal code page
   else if @self = TypeInfo(AnsiString) then
     result := CP_ACP
   else
@@ -5789,6 +5795,22 @@ begin
     raise ERttiException.Create('TRttiCustomProp.SetValue: with Prop=nil');
 end;
 
+procedure TRttiCustomProp.AddValueJson(W: TBaseWriter; Data: pointer;
+  Options: TTextWriterWriteObjectOptions);
+var
+  rvd: TRttiVarData;
+  tw: TTextWriterKind;
+begin
+  GetValue(Data, rvd);
+  if Value.Parser = ptRawJSON then
+    tw := twNone
+  else
+    tw := twJSONEscape;
+  W.AddVariant(variant(rvd), tw, Options);
+  if rvd.NeedsClear then
+    VarClearProc(rvd.Data);
+end;
+
 function TRttiCustomProp.ValueIsDefault(Data: pointer): boolean;
 begin
   if rcfGetOrdProp in Value.Cache.Flags then
@@ -5920,9 +5942,10 @@ begin
     if (p^.Prop <> nil) and
        (p^.Name <> p^.Prop^.Name) then
     begin
-      if p^.Name <> nil then
-        // unregister from local copy
-        PtrArrayDelete(fFromTextPropNames, p^.Name);
+      if (p^.Name <> nil) and
+         (PtrArrayDelete(fFromTextPropNames, p^.Name) >= 0) then
+        // unregistered from local copy - free the temp RawUTF8
+        RawUTF8(pointer(p^.Name)) := '';
       p^.Name := p^.Prop^.Name;
     end;
     inc(p);
@@ -6350,6 +6373,7 @@ end;
 destructor TRttiCustom.Destroy;
 begin
   inherited Destroy;
+  ObjArrayClear(fOwnedRtti);
   fPrivate.Free;
 end;
 
@@ -6732,6 +6756,8 @@ begin
       nested := Rtti.GlobalClass.Create(nil);
       nested.SetPropsFromText(P, ee, NoRegister);
       nested.NoRttiSetAndRegister(ptRecord, '', nil, NoRegister);
+      if NoRegister then
+        ObjArrayAdd(fOwnedRtti, nested);
       if pt = ptRecord then
         // rec: record .. end  or  rec: { ... }
         c := nested
@@ -6747,6 +6773,8 @@ begin
           'Unexpected array % %', [c, ToText(pt)^]);
       c := Rtti.GlobalClass.Create(nil);
       c.NoRttiSetAndRegister(ptDynArray, typname, ac, NoRegister);
+      if NoRegister then
+        ObjArrayAdd(fOwnedRtti, c);
     end;
     // set type for all prop[]
     for i := 0 to propcount - 1 do

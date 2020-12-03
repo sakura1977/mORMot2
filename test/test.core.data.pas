@@ -46,7 +46,7 @@ uses
 type
   /// this test case will test most high-level functions, classes and types
   // defined and implemented in the mormot.core.*.pas units
-  TTestLowLevelTypes = class(TSynTestCase)
+  TTestCoreProcess = class(TSynTestCase)
   protected
     procedure MustacheTranslate(var English: string);
     procedure MustacheHelper(const Value: variant; out result: variant);
@@ -78,7 +78,7 @@ type
 
   /// this test case will test most functions, classes and types defined and
   // implemented e.g. in the mormot.core.zip / mormot.lib.lizard units
-  TTestCompression = class(TSynTestCase)
+  TTestCoreCompress = class(TSynTestCase)
   protected
     Data: RawByteString; // contains the first 1MB of mormot2tests executable
     DataFile: TFileName; // (may be truncated) mormot2tests executable copy
@@ -184,9 +184,9 @@ begin
 end;
 
 
-{ TTestLowLevelTypes }
+{ TTestCoreProcess }
 
-procedure TTestLowLevelTypes.Variants;
+procedure TTestCoreProcess.Variants;
 var
   v: Variant;
   vd: TVarData absolute v;
@@ -217,6 +217,17 @@ begin
   GetVariantFromJSON('-123', False, v, nil);
   Check(vd.VType = varInteger);
   Check(v = -123);
+  GetVariantFromJSON('123456789', False, v, nil);
+  Check(vd.VType = varInteger);
+  Check(v = 123456789);
+  GetVariantFromJSON('9876543210', False, v, nil);
+  Check(vd.VType = varInt64);
+  Check(v = 9876543210);
+  GetVariantFromJSON('12345678901', False, v, nil);
+  Check(vd.VType = varInt64);
+  Check(v = 12345678901);
+  GetVariantFromJSON('12345678901234567', False, v, nil);
+  Check(vd.VType = varInt64);
   GetVariantFromJSON('123456789012345678', False, v, nil);
   Check(vd.VType = varInt64);
   Check(v = 123456789012345678);
@@ -323,6 +334,9 @@ begin
   v := JSONToVariant('[]');
   Check(v._kind = ord(dvArray));
   Check(v._count = 0);
+  v := JSONToVariant('[ ]');
+  Check(v._kind = ord(dvArray));
+  Check(v._count = 0);
   v := JSONToVariant('{  }');
   Check(v._kind = ord(dvObject));
   Check(v._count = 0);
@@ -356,7 +370,7 @@ const
   MUSTACHE_SPECS: array[0..4] of TFileName = ('interpolation', 'comments',
     'sections', 'inverted', 'partials');
 
-procedure TTestLowLevelTypes.MustacheRenderer;
+procedure TTestCoreProcess.MustacheRenderer;
 var
   mustacheJson: RawByteString;
   mus: TMustacheTests;
@@ -590,7 +604,7 @@ begin
   Rtti.RegisterFromText(TypeInfo(TMustacheTests), '');
 end;
 
-procedure TTestLowLevelTypes.MustacheTranslate(var English: string);
+procedure TTestCoreProcess.MustacheTranslate(var English: string);
 begin
   if English = 'Hello' then
     English := 'Bonjour'
@@ -598,7 +612,7 @@ begin
     English := 'Vous venez de gagner';
 end;
 
-procedure TTestLowLevelTypes.MustacheHelper(const Value: variant; out result: variant);
+procedure TTestCoreProcess.MustacheHelper(const Value: variant; out result: variant);
 begin
   with _Safe(Value)^ do
     result := RawUTF8ToVariant(FormatUTF8('a=%,b=%', [U['a'], i['b']]));
@@ -1049,7 +1063,7 @@ const
   discogsFileName = 'discogs.json';
 
 
-procedure TTestLowLevelTypes.EncodeDecodeJSON;
+procedure TTestCoreProcess.EncodeDecodeJSON;
 var
   J, U, U2: RawUTF8;
   P: PUTF8Char;
@@ -1334,6 +1348,18 @@ var
         Check(git[i].owner.id = git2[i].owner.id);
       end;
     Rtti.RegisterFromText(TypeInfo(TTestCustomJSONGitHub), '');
+  end;
+
+  procedure TestTrans;
+  begin
+    Check(IsValidJSON(U));
+    RecordZero(@Trans, TypeInfo(TTestCustomJSON2));
+    Check(length(Trans.Transactions) = 0);
+    RecordLoadJSON(Trans, UniqueRawUTF8(U), TypeInfo(TTestCustomJSON2));
+    Check(length(Trans.Transactions) = 1);
+    Check(Trans.Transactions[0].TRTYPE = 'INCOME');
+    Check(Trans.Transactions[0].TRACID.TIDEL = 'false');
+    Check(Trans.Transactions[0].TRRMK = 'Remark');
   end;
 
   function uct(const s: RawUTF8): TOrmFieldType;
@@ -1872,8 +1898,7 @@ begin
   J := JSONEncode('{name:"John",field:{ "$regex": "acme.*corp", $options: "i" }}',
     [], []);
   CheckEqual(J, '{"name":"John","field":{"$regex":"acme.*corp","$options":"i"}}');
-  // the below only works if unit mormot.db.nosql.bson is included in the uses
-  // list of the project for virtual function TryJSONToVariant
+  // below only works if unit mormot.db.nosql.bson is included in uses
   CheckEqual(JSONEncode('{name:?,field:/%/i}', ['acme.*corp'], ['John']), J);
   peop := TOrmPeople.Create;
   try
@@ -2297,13 +2322,13 @@ begin
     check(IsValidJSON(J));
     Check(Hash32(J) = $41281936);
     // (custom) dynamic array serialization
-    TCollTstDynArrayTest;
+    TCollTstDynArrayTest; // first TFVs prop is serialized as binary+base64
     TRttiJson.RegisterCustomSerializer(TypeInfo(TFVs),
       TCollTstDynArray.FVReader, TCollTstDynArray.FVWriter);
-    TCollTstDynArrayTest;
+    TCollTstDynArrayTest; // TFVs serialized with FVReader/FVWriter
     TRttiJson.RegisterCustomSerializer(TypeInfo(TFVs),
       TCollTstDynArray.FVReader2, TCollTstDynArray.FVWriter2);
-    TCollTstDynArrayTest;
+    TCollTstDynArrayTest; // TFVs serialized with FVReader2/FVWriter2
     // (custom) class serialization
     TFileVersionTest(false);
     TRttiJson.RegisterCustomSerializer(TFileVersion,
@@ -2526,6 +2551,9 @@ begin
   Check(IsValidJSON(zendframeworkJson));
   TestGit([jpoIgnoreUnknownProperty], []);
   TestGit([jpoIgnoreUnknownProperty], [woHumanReadable]);
+
+  U := RecordSaveJSON(Trans, TypeInfo(TTestCustomJSON2));
+  Check(IsStringJSON(pointer(U)), 'bin rec1');
   TRttiJson.RegisterFromText(TypeInfo(TTestCustomJSON2Title),
     __TTestCustomJSON2Title, [], [woHumanReadable]);
   TRttiJson.RegisterFromText(TypeInfo(TTestCustomJSON2), __TTestCustomJSON2, [],
@@ -2543,26 +2571,17 @@ begin
       '"TRCAT3":{"TITYPE":"C3","TIID":"3","TICID":"","TIDSC30":"description3","TIORDER":"0","TIDEL":"false"},' +
       '"TRRMK":"Remark",' +
       '"TRACID":{"TITYPE":"AC","TIID":"4","TICID":"","TIDSC30":"account1","TIORDER":"0","TIDEL":"false"}}]}';
-    Check(IsValidJSON(U));
-    RecordLoadJSON(Trans, UniqueRawUTF8(U), TypeInfo(TTestCustomJSON2));
-    Check(length(Trans.Transactions) = 1);
-    Check(Trans.Transactions[0].TRTYPE = 'INCOME');
-    Check(Trans.Transactions[0].TRACID.TIDEL = 'false');
-    Check(Trans.Transactions[0].TRRMK = 'Remark');
+    TestTrans;
     U := RecordSaveJSON(Trans, TypeInfo(TTestCustomJSON2));
-    RecordZero(@Trans, TypeInfo(TTestCustomJSON2));
-    Check(length(Trans.Transactions) = 0);
-    RecordLoadJSON(Trans, UniqueRawUTF8(U), TypeInfo(TTestCustomJSON2));
-    Check(length(Trans.Transactions) = 1);
-    Check(Trans.Transactions[0].TRTYPE = 'INCOME');
-    Check(Trans.Transactions[0].TRACID.TIDEL = 'false');
-    Check(Trans.Transactions[0].TRRMK = 'Remark');
+    TestTrans;
   end;
   U := RecordSaveJSON(Trans, TypeInfo(TTestCustomJSON2));
   FileFromString(U, 'transactions.json');
   Rtti.RegisterFromText(TypeInfo(TTestCustomJSON2Title), '');
   Rtti.RegisterFromText(TypeInfo(TTestCustomJSON2), '');
   U := RecordSaveJSON(Trans, TypeInfo(TTestCustomJSON2));
+  Check(IsStringJSON(pointer(U)), 'bin rec2');
+  TestTrans;
 
   Parser := TRttiJson.RegisterFromText(TypeInfo(TTestCustomDiscogs),
     __TTestCustomDiscogs, [jpoIgnoreUnknownProperty], []);
@@ -2634,7 +2653,7 @@ begin
     Check(IsValidJSON(U));
     CheckEqual(U,
       '{"Enabled":false,"Name":"","Offense":{"damage":{"min":0,"max":0},' +
-      '"attackspeed":{"min":0,"max":0}}}');
+      '"attackspeed":{"min":0,"max":0}}}', 'RawJson');
     Enemy.Off.Damage.Min := 10;
     Enemy.Off.AttackSpeed.Max := 100;
     U := ObjectToJSON(Enemy);
@@ -2654,7 +2673,7 @@ begin
   end;
 end;
 
-procedure TTestLowLevelTypes.WikiMarkdownToHtml;
+procedure TTestCoreProcess.WikiMarkdownToHtml;
 begin
   // wiki
   CheckEqual(HtmlEscapeWiki('test'), '<p>test</p>');
@@ -2737,7 +2756,7 @@ begin
   CheckEqual(HtmlEscapeMarkdown(':test: (:)'), '<p>:test: (:)</p>');
 end;
 
-procedure TTestLowLevelTypes._TDecimal128;
+procedure TTestCoreProcess._TDecimal128;
 
   procedure test(const hi, lo: QWord; const expected: RawUTF8;
     special: TDecimal128SpecialValue = dsvValue);
@@ -2903,7 +2922,7 @@ begin // see https://github.com/mongodb/libbson/blob/master/tests/test-decimal12
   end;
 end;
 
-procedure TTestLowLevelTypes._BSON;
+procedure TTestCoreProcess._BSON;
 const
   BSONAWESOME = '{"BSON":["awesome",5.05,1986]}';
   BSONAWESOMEBIN = #$31#0#0#0#4'BSON'#0#$26#0#0#0#2'0'#0#8#0#0#0'awesome'#0 +
@@ -3201,23 +3220,25 @@ begin
   u2 := FormatUTF8('{"id":"%","name":"John","date":"%"}', [BSONID, st]);
   CheckEqual(u, u2);
   u3 := VariantSaveJson(BSONVariant(u));
-  Check(u3 = FormatUTF8('{"id":"%","name":"John","date":{"$date":"%"}}', [BSONID, st]));
+  Check(u3 = FormatUTF8('{"id":"%","name":"John","date":{"$date":"%"}}',
+    [BSONID, st]));
   u3 := VariantSaveMongoJSON(BSONVariant(u), modNoMongo);
   Check(u3 = u);
   u := VariantSaveMongoJSON(o, modMongoShell);
-  CheckEqual(u, FormatUTF8('{id:ObjectId("%"),name:"John",date:ISODate("%")}', [BSONID,
-    st]));
+  CheckEqual(u, FormatUTF8('{id:ObjectId("%"),name:"John",date:ISODate("%")}',
+    [BSONID, st]));
   u3 := VariantSaveJson(BSONVariant(u));
   u := VariantSaveJSON(o);
-  CheckEqual(u, FormatUTF8('{"id":{"$oid":"%"},"name":"John","date":"%"}', [BSONID, st]));
+  CheckEqual(u, FormatUTF8('{"id":{"$oid":"%"},"name":"John","date":"%"}',
+    [BSONID, st]));
   u := VariantSaveMongoJSON(o, modMongoStrict);
   CheckEqual(u, FormatUTF8('{"id":{"$oid":"%"},"name":"John","date":{"$date":"%"}}',
     [BSONID, st]));
   Check(u3 = u);
   _Json(u, o2);
   u := VariantSaveMongoJSON(o2, modMongoShell);
-  CheckEqual(u, FormatUTF8('{id:ObjectId("%"),name:"John",date:ISODate("%")}', [BSONID,
-    st]));
+  CheckEqual(u, FormatUTF8('{id:ObjectId("%"),name:"John",date:ISODate("%")}',
+    [BSONID, st]));
   _Json(u, o2);
   u := VariantSaveMongoJSON(o2, modNoMongo);
   CheckEqual(u, u2);
@@ -3225,12 +3246,13 @@ begin
     [BSONID, st], []);
   u := VariantSaveMongoJSON(o2, modNoMongo);
   CheckEqual(u, u2);
-  o2 := _JsonFmt('{id:objectID(?),name:?,date:ISODate(?)}', [], [BSONID, 'John', st]);
+  o2 := _JsonFmt('{id:objectID(?),name:?,date:ISODate(?)}', [],
+    [BSONID, 'John', st]);
   u := VariantSaveMongoJSON(o2, modNoMongo);
   CheckEqual(u, u2);
   u := VariantSaveMongoJSON(o2, modMongoShell);
-  CheckEqual(u, FormatUTF8('{id:ObjectId("%"),name:"John",date:ISODate("%")}', [BSONID,
-    st]));
+  CheckEqual(u, FormatUTF8('{id:ObjectId("%"),name:"John",date:ISODate("%")}',
+    [BSONID, st]));
   _Json(u, o2);
   u := VariantSaveMongoJSON(o2, modNoMongo);
   CheckEqual(u, u2);
@@ -3254,9 +3276,11 @@ begin
   check(string(o) = '{"hello":null}');
   o := _JSON('{"hello": world}');
   Check(TVarData(o).VType = varEmpty, 'invalid JSON content');
-  CheckRegEx(_Json('{name:"John",field:{ "$regex": "acme.*corp", $options: "i" }}'));
+  CheckRegEx(_Json(
+    '{name:"John",field:{ "$regex": "acme.*corp", $options: "i" }}'));
   CheckRegEx(_Json(REGEX2));
-  CheckRegEx(_JsonFast('{"name":"John",field:{ "$regex": "acme.*corp", $options: "i" }}'));
+  CheckRegEx(_JsonFast(
+    '{"name":"John",field:{ "$regex": "acme.*corp", $options: "i" }}'));
   CheckRegEx(_JsonFast(REGEX2));
   temp := BSON(REGEX2);
   b := pointer(temp);
@@ -3269,10 +3293,10 @@ begin
   b := pointer(temp);
   u2 := BSONToJSON(b, betDoc, 0, modMongoStrict);
   CheckEqual(u, u2);
-  u := VariantSaveMongoJSON(_Json('{name:"John",date: new date() , field: /acme.*corp/i}'),
-    modMongoStrict);
-  u2 := VariantSaveMongoJSON(_Json('{name:"John",date:new date(),field:/acme.*corp/i}'),
-    modMongoStrict);
+  u := VariantSaveMongoJSON(_Json(
+    '{name:"John",date: new date() , field: /acme.*corp/i}'), modMongoStrict);
+  u2 := VariantSaveMongoJSON(_Json(
+    '{name:"John",date:new date(),field:/acme.*corp/i}'), modMongoStrict);
   o := _JSON(u);
   o2 := _JSON(u2);
   Check(o.name = o2.name);
@@ -3308,7 +3332,8 @@ begin
   CheckEqual(u, u2);
   u2 := BSONToJSON(b, betDoc, 0, modMongoShell);
   CheckEqual(u, u2);
-  temp := BSON('{id:ObjectId(),doc:{name:?,date:ISODate(?)}}', [], ['John', NowUTC]);
+  temp := BSON('{id:ObjectId(),doc:{name:?,date:ISODate(?)}}', [],
+    ['John', NowUTC]);
   b := pointer(temp);
   u := BSONToJSON(b, betDoc, 0, modMongoShell);
   Check(IdemPChar(pointer(u), '{ID:OBJECTID("'));
@@ -3362,7 +3387,7 @@ begin
   CheckEqual(u, '{"$numberDecimal":"123.5600"}');
 end;
 
-procedure TTestLowLevelTypes._TDocVariant;
+procedure TTestCoreProcess._TDocVariant;
 
   procedure CheckDoc(var Doc: TDocVariantData; ExpectedYear: integer = 1972);
   var
@@ -3847,7 +3872,7 @@ begin
 end;
 
 
-procedure TTestLowLevelTypes._RTTI;
+procedure TTestCoreProcess._RTTI;
 var
   i: Integer;
   tmp: RawUTF8;
@@ -3980,7 +4005,7 @@ begin
   end;
 end;
 
-procedure TTestLowLevelTypes.UrlEncoding;
+procedure TTestCoreProcess.UrlEncoding;
 var
   i: integer;
   s, t: RawUTF8;
@@ -3996,7 +4021,7 @@ begin
   end;
 end;
 
-procedure TTestLowLevelTypes._TSelectStatement;
+procedure TTestCoreProcess._TSelectStatement;
 var
   Stmt: TSelectStatement;
   Props: TOrmProperties;
@@ -4252,7 +4277,7 @@ begin
   Stmt.Free;
 end;
 
-procedure TTestLowLevelTypes._TSynMonitorUsage;
+procedure TTestCoreProcess._TSynMonitorUsage;
 var
   id: TSynMonitorUsageID;
   now, id2: TTimelog;
@@ -4292,9 +4317,9 @@ begin
 end;
 
 
-{ TTestCompression }
+{ TTestCoreCompress }
 
-procedure TTestCompression.Setup;
+procedure TTestCoreCompress.Setup;
 begin
   Data := StringFromFile(ExeVersion.ProgramFileName);
   if length(Data) > 1 shl 20 then
@@ -4303,7 +4328,7 @@ begin
   FileFromString(Data, DataFile);
 end;
 
-procedure TTestCompression.CleanUp;
+procedure TTestCoreCompress.CleanUp;
 begin
   FreeAndNil(M);
   DeleteFile(DataFile);
@@ -4363,7 +4388,7 @@ begin // slowest reference version
   result := not result;
 end;
 
-procedure TTestCompression.GZipFormat;
+procedure TTestCoreCompress.GZipFormat;
 var
   Z: TSynZipCompressor;
   L, n: integer;
@@ -4441,7 +4466,7 @@ begin
   Check(s = Data, 'CompressDeflate');
 end;
 
-procedure TTestCompression.InMemoryCompression;
+procedure TTestCoreCompress.InMemoryCompression;
 var
   tmp: RawByteString;
   hash: cardinal;
@@ -4460,7 +4485,7 @@ begin
   end;
 end;
 
-procedure TTestCompression.ZipFormat;
+procedure TTestCoreCompress.ZipFormat;
 var
   FN, FN2: TFileName;
   S: TRawByteStringStream;
@@ -4589,7 +4614,7 @@ begin
     PIntegerArray(result)[i] := pattern;
 end;
 
-procedure TTestCompression._SynLZ;
+procedure TTestCoreCompress._SynLZ;
 var
   s, t, rle: RawByteString;
   i, j, complen2: integer;
@@ -4659,11 +4684,11 @@ begin
   Check(s = Data);
 end;
 
-procedure TTestCompression._TAlgoCompress;
+procedure TTestCoreCompress._TAlgoCompress;
 
   procedure TestAlgo(algo: TAlgoCompress);
   var
-    s, t, s2, log: RawByteString;
+    log, s, t, s2: RawByteString;
     i, plain, comp: integer;
     timer: TPrecisionTimer;
     timecomp, timedecomp: Int64;
@@ -4683,10 +4708,10 @@ procedure TTestCompression._TAlgoCompress;
     log := StringFromFile('bigTest.log');
     for i := 0 to 100 do
     begin
-      if log <> '' then
-        s := log
+      if log = '' then
+        s := copy(Data, 1, i * 800) // first 80KB from executable
       else
-        s := RandomTextParagraph(i * 8);
+        s := log;
       timer.Start;
       t := algo.Compress(s);
       inc(timecomp, timer.StopInMicroSec);
@@ -4710,9 +4735,6 @@ procedure TTestCompression._TAlgoCompress;
        ((plain * Int64(1000 * 1000)) div timedecomp) shr 20]));
     s2 := algo.Decompress(algo.Compress(s), aclNoCrcFast);
     Check(s2 = s, algo.ClassName);
-    if (log <> '') and
-       (s2 <> s) then
-      FileFromString(s2, 'bigTestPartial' + algo.ClassName + '.log');
   end;
 
 begin
@@ -4745,6 +4767,10 @@ end;
      TAlgoDeflate 53 MB->4.8 MB: comp 25:2MB/s decomp 19:214MB/s
      TAlgoDeflateFast 53 MB->7 MB: comp 52:6MB/s decomp 23:176MB/s
   speed difference may come from the FPC/Delphi heap manager, and/or the Linux VM
+
+  From realistic tests, SynLZ may focus on small buffers, or very compressible
+  log files like above. But Lizard/LizardFast seem a better candidate for
+  fast decompression of any kind of data, especially large JSON/binary buffers.
 }
 
 end.

@@ -1720,6 +1720,7 @@ procedure VariantToUTF8(const V: Variant; var result: RawUTF8;
 // - empty and null variants will be stored as 'null' text - as expected by JSON
 // - custom variant types (e.g. TDocVariant) will be stored as JSON
 function VariantToUTF8(const V: Variant; var Text: RawUTF8): boolean; overload;
+  {$ifdef HASINLINE}inline;{$endif}
 
 /// save a variant value into a JSON content
 // - is properly implemented by mormot.core.json.pas: if this unit is not
@@ -5723,7 +5724,7 @@ begin
     if AlwaysDateAndTime or
        (trunc(Value^) <> 0) then
     begin
-      T.FromDate(Date);
+      T.FromDate(Value^);
       B := DateToIso8601PChar(B, true, T.Year, T.Month, T.Day);
     end;
     if AlwaysDateAndTime or
