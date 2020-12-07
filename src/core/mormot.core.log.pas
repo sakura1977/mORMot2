@@ -861,17 +861,10 @@ type
     fCurrentLevel: TSynLogInfo;
     fInternalFlags: set of (logHeaderWritten, logInitDone);
     fDisableRemoteLog: boolean;
-    {$ifdef FPC}
-    function QueryInterface(
-      {$ifdef FPC_HAS_CONSTREF}constref{$else}const{$endif} IID: TGUID; out Obj): longint;
-      {$ifndef WINDOWS}cdecl{$else}stdcall{$endif};
-    function _AddRef:  longint; {$ifndef WINDOWS} cdecl {$else} stdcall {$endif};
-    function _Release: longint; {$ifndef WINDOWS} cdecl {$else} stdcall {$endif};
-    {$else}
-    function QueryInterface(const IID: TGUID; out Obj): HResult; stdcall;
-    function _AddRef:  integer; stdcall;
-    function _Release: integer; stdcall;
-    {$endif FPC}
+    function QueryInterface({$ifdef FPC_HAS_CONSTREF}constref{$else}const{$endif}
+      iid: TGUID; out obj): TIntQry; {$ifdef MSWINDOWS}stdcall{$else}cdecl{$endif};
+    function _AddRef: TIntCnt;       {$ifdef MSWINDOWS}stdcall{$else}cdecl{$endif};
+    function _Release: TIntCnt;      {$ifdef MSWINDOWS}stdcall{$else}cdecl{$endif};
     class function FamilyCreate: TSynLogFamily;
     procedure CreateLogWriter; virtual;
     procedure LogInternalFmt(Level: TSynLogInfo; const TextFmt: RawUTF8;
@@ -2996,11 +2989,11 @@ begin
   result := pointer(Self);
   if result <> nil then
   begin
-    // faster than ClassPropertiesGet: we know it is the first slot
+    // inlined ClassPropertiesGet
     result := PPointer(PAnsiChar(result) + vmtAutoTable)^;
     if result <> nil then
-      // we know TRttiCustom is the first slot, and Private is TSynLogFamily
-      result := TSynLogFamily(PRttiCustom(result)^.Private)
+      // we know TRttiCustom is in the slot, and Private is TSynLogFamily
+      result := TSynLogFamily(TRttiCustom(pointer(result)).Private)
     else
       result := FamilyCreate;
   end;
@@ -3019,8 +3012,8 @@ begin
     P := PPointer(PAnsiChar(result) + vmtAutoTable)^;
     if P <> nil then
     begin
-      // we know TRttiCustom is the first slot, and Private is TSynLogFamily
-      P := PRttiCustom(P)^.Private;
+      // we know TRttiCustom is in the slot, and Private is TSynLogFamily
+      P := TRttiCustom(P).Private;
       result := TSynLogFamily(P).fGlobalLog;
       // <>nil for ptMergedInOneFile and ptIdentifiedInOnFile (most common case)
       if result = nil then
@@ -3044,7 +3037,7 @@ begin
      InheritsFrom(TSynLog) then // paranoid
   begin
     rtticustom := Rtti.RegisterClass(self);
-    vmt := PPPointer(PAnsiChar(self) + vmtAutoTable)^^;
+    vmt := PPointer(PAnsiChar(self) + vmtAutoTable)^;
     if (rtticustom = nil) or
        (vmt <> rtticustom) then
       // TSynLog.Family / TSynLog.Add expect TRttiCustom in the first slot
@@ -3242,11 +3235,7 @@ begin
   end;
 end;
 
-{$ifdef FPC}
-function TSynLog._AddRef: longint;
-{$else}
-function TSynLog._AddRef: integer;
-{$endif}
+function TSynLog._AddRef: TIntCnt;
 begin
   if fFamily.Level * [sllEnter, sllLeave] <> [] then
   begin
@@ -3288,11 +3277,7 @@ end;
   {$endif MSWINDOWS}
 {$endif FPC}
 
-{$ifdef FPC}
-function TSynLog._Release: longint;
-{$else}
-function TSynLog._Release: integer;
-{$endif FPC}
+function TSynLog._Release: TIntCnt;
 var
   addr: PtrUInt;
 begin
@@ -3414,12 +3399,9 @@ begin
   end;
 end;
 
-{$ifdef FPC}
-function TSynLog.QueryInterface({$ifdef FPC_HAS_CONSTREF}constref
-  {$else}const{$endif} IID: TGUID; out Obj): longint;
-{$else}
-function TSynLog.QueryInterface(const IID: TGUID; out Obj): HResult;
-{$endif FPC}
+function TSynLog.QueryInterface(
+  {$ifdef FPC_HAS_CONSTREF}constref{$else}const{$endif} iid: TGUID;
+  out obj): TIntQry;
 begin
   result := E_NOINTERFACE;
 end;

@@ -689,6 +689,9 @@ type
     fInternalJSONWriter: TTextWriter;
     procedure InternalAddFixedAnsi(Source: PAnsiChar; SourceChars: cardinal;
       AnsiToWide: PWordArray; Escape: TTextWriterKind);
+    // called after TRttiCustomProp.GetValueDirect/GetValueGetter
+    procedure AddRttiVarData(const Value: TRttiVarData;
+      WriteOptions: TTextWriterWriteObjectOptions);
   public
     /// release all internal structures
     destructor Destroy; override;
@@ -706,8 +709,13 @@ type
     procedure BlockEnd(Stopper: AnsiChar; Options: TTextWriterWriteObjectOptions);
     /// used internally by WriteObject() when serializing a published property
     // - will call AddCRAndIndent then append "PropName":
-    procedure WriteObjectPropName(const PropName: ShortString;
+    procedure WriteObjectPropName(PropName: PUTF8Char; PropNameLen: PtrInt;
       Options: TTextWriterWriteObjectOptions);
+    /// used internally by WriteObject() when serializing a published property
+    // - will call AddCRAndIndent then append "PropName":
+    procedure WriteObjectPropNameShort(const PropName: shortstring;
+      Options: TTextWriterWriteObjectOptions);
+      {$ifdef HASINLINE}inline;{$endif}
     /// same as WriteObject(), but will double all internal " and bound with "
     // - this implementation will avoid most memory allocations
     procedure WriteObjectAsString(Value: TObject;
@@ -1784,34 +1792,31 @@ const
 { ********** Custom JSON Serialization }
 
 type
-  /// the callback signature used by TRttiJson for serializing JSON
+  /// the callback signature used by TRttiJson for serializing JSON data
+  // - Data^ should be written into W, with the supplied Options
   TOnRttiJsonWrite = procedure(W: TTextWriter; Data: pointer;
     Options: TTextWriterWriteObjectOptions) of object;
 
-  /// the callback signature used by TRttiJson for unserializing JSON
+  /// the callback signature used by TRttiJson for unserializing JSON data
   // - set Context.Valid=true if Context.JSON has been parsed into Data^
   TOnRttiJsonRead = procedure(var Context: TJsonParserContext;
     Data: pointer) of object;
 
-  /// the callback signature used by TRttiJson for serializing JSON
+  /// the callback signature used by TRttiJson for serializing JSON classes
+  // - Instance should be written into W, with the supplied Options
   // - is in fact a convenient alias to the TOnRttiJsonWrite callback
-  TOnClassJsonWrite = procedure(W: TTextWriter; Data: TObject;
+  TOnClassJsonWrite = procedure(W: TTextWriter; Instance: TObject;
     Options: TTextWriterWriteObjectOptions) of object;
 
-  /// the callback signature used by TRttiJson for unserializing JSON
-  // - set Context.Valid=true if Context.JSON has been parsed into Data^
+  /// the callback signature used by TRttiJson for unserializing JSON classes
+  // - set Context.Valid=true if Context.JSON has been parsed into Instance
   // - is in fact a convenient alias to the TOnRttiJsonRead callback
   TOnClassJsonRead = procedure(var Context: TJsonParserContext;
-    Data: TObject) of object;
-
-  /// used internally by TRttiJson for fast allocation of a rkClass instance
-  TRttiJsonNewInstance = function(Rtti: TRttiCustom): pointer;
+    Instance: TObject) of object;
 
   /// JSON-aware TRttiCustom class - used for global RttiCustom: TRttiCustomList
   TRttiJson = class(TRttiCustom)
   protected
-    // mormot.core.rtti has no dependency on TSynPersistent and such
-    fClassNewInstance: TRttiJsonNewInstance;
     fCompare: array[boolean] of TRttiCompare;
     fIncludeReadOptions: TJsonParserOptions;
     fIncludeWriteOptions: TTextWriterWriteObjectOptions;
@@ -1819,9 +1824,6 @@ type
     function SetParserType(aParser: TRttiParserType;
       aParserComplex: TRttiParserComplexType): TRttiCustom; override;
   public
-    /// create a new TObject instance of this rkClass
-    // - ensure the proper virtual constructor is called (if any)
-    function ClassNewInstance: pointer; override;
     /// simple wrapper around TRttiJsonSave(fJsonSave)
     procedure RawSaveJson(Data: pointer; const Ctxt: TJsonSaveContext);
       {$ifdef HASINLINE}inline;{$endif}
@@ -2199,7 +2201,7 @@ type
   // class published properties: any class defined as a published property will
   // be owned by this instance - i.e. with strong reference
   // - will also release any T*ObjArray dynamic array storage of persistents,
-  // previously registered via Rtti.RegisterObjArray()
+  // previously registered via Rtti.RegisterObjArray() for Delphi 7-2009
   // - nested published classes (or T*ObjArray) don't need to inherit from
   // TSynAutoCreateFields: they may be from any TPersistent/TSynPersistent type
   // - note that non published (e.g. public) properties won't be instantiated,
@@ -2260,8 +2262,8 @@ type
   // Domain objects in DDD, especially for list of value objects
   // - consider using T*ObjArray dynamic array published properties in your
   // value types instead of TCollection storage: T*ObjArray have a lower overhead
-  // and are easier to work with, once Rtti.RegisterObjArray
-  // is called to register the T*ObjArray type
+  // and are easier to work with, once Rtti.RegisterObjArray is called on Delphi
+  // 7-2009 to register the T*ObjArray type (not needed on FPC and Delphi 2010+)
   // - note that non published (e.g. public) properties won't be instantiated,
   // serialized, nor released - but may contain weak references to other classes
   // - please take care that you will not create any endless recursion: you should
@@ -2612,13 +2614,35 @@ begin
   jsonset := @JSON_CHARS;
   {$endif CPUX86NOTPIC}
   case JSON_TOKENS[P^] of
+    jtFirstDigit: // '-', '0'..'9'
+      begin
+        // numerical value
+        result := P;
+        if P^ = '0' then
+          if (P[1] >= '0') and
+             (P[1] <= '9') then
+            // 0123 excluded by JSON!
+            exit;
+        repeat // loop all '-', '+', '0'..'9', '.', 'E', 'e'
+          inc(P);
+        until not (jcDigitFloatChar in jsonset[P^]);
+        if P^ = #0 then
+          exit; // a JSON number value should be followed by , } or ]
+        if Len <> nil then
+          Len^ := P - result;
+        if P^ <= ' ' then
+        begin
+          P^ := #0; // force numerical field with no trailing ' '
+          inc(P);
+        end;
+      end;
     jtDoubleQuote: // '"'
       begin
         // " -> unescape P^ into D^
+       inc(P);
+       result := P; // result points to the unescaped JSON string
         if WasString <> nil then
           WasString^ := true;
-        inc(P);
-        result := P;
         while not (jcJSONStringMarker in jsonset[P^]) do
           // not [#0, '"', '\']
           inc(P); // very fast parsing of most UTF-8 chars within "string"
@@ -2632,14 +2656,14 @@ begin
 lit:        inc(P);
             D^ := c;
             inc(D);
-            continue; // very fast parsing of most UTF-8 chars within "string"
+            continue; // very fast parsing of most UTF-8 chars within "str\bing"
           end;
           // P^ is either #0, '"' or '\'
           if c = '"' then
             // end of string
             break;
           if c = #0 then
-            // premature ending
+            // premature ending (PDest=nil)
             exit;
           // unescape JSON text: get char after \
           inc(P); // P^ was '\' here
@@ -2748,31 +2772,6 @@ lit:        inc(P);
         D^ := #0; // make zero-terminated
         if Len <> nil then
           Len^ := D - result;
-      end;
-    jtFirstDigit: // '-', '+', '0'..'9'
-      begin
-        // numerical field: all chars before end of field
-        if P^ = '0' then
-          if (P[1] >= '0') and
-             (P[1] <= '9') then
-            // 0123 excluded by JSON!
-            exit;
-        result := P;
-        repeat
-          if not (jcDigitFloatChar in jsonset[P^]) then
-            // not ['-', '+', '0'..'9', '.', 'E', 'e']
-            break;
-          inc(P);
-        until false;
-        if P^ = #0 then
-          exit;
-        if Len <> nil then
-          Len^ := P - result;
-        if P^ <= ' ' then
-        begin
-          P^ := #0; // force numerical field with no trailing ' '
-          inc(P);
-        end;
       end;
     jtNullFirstChar: // 'n'
       if (PInteger(P)^ = NULL_LOW) and
@@ -3510,7 +3509,7 @@ begin // should match GetJSONPropName()
             exit;
           inc(P);
         end;
-      jtFirstDigit: // '-', '+', '0'..'9'
+      jtFirstDigit: // '-', '0'..'9'
         begin // '0123' excluded by JSON, but not here
           {$ifndef CPUX86NOTPIC}
           jsonset := @JSON_CHARS;
@@ -3682,7 +3681,7 @@ ok:     while (P^ <= ' ') and
         inc(P, 4);
         goto ok;
       end;
-    jtFirstDigit: // '-', '+', '0'..'9'
+    jtFirstDigit: // '-', '0'..'9'
       begin
         repeat
           inc(P)
@@ -5035,13 +5034,13 @@ begin
   begin
     Ctxt.W.BlockAfterItem(Ctxt.Options);
     if (Ctxt.Prop <> nil) and
-       (Ctxt.Prop^.Name <> nil) then
+       (Ctxt.Prop^.Name <> '') then
     begin
-      FormatShort('%_str', [Ctxt.Prop^.Name^], _str);
-      Ctxt.W.WriteObjectPropName(_str, Ctxt.Options);
+      FormatShort('%_str', [Ctxt.Prop^.Name], _str);
+      Ctxt.W.WriteObjectPropNameShort(_str, Ctxt.Options);
     end
     else
-      Ctxt.W.WriteObjectPropName('ID_str', Ctxt.Options);
+      Ctxt.W.WriteObjectPropNameShort('ID_str', Ctxt.Options);
     Ctxt.W.Add('"');
     Ctxt.W.Add(Data^);
     Ctxt.W.Add('"');
@@ -5246,7 +5245,7 @@ begin
       end;
       if woStoreClassName in c.Options then
       begin
-        c.W.WriteObjectPropName('ClassName', c.Options);
+        c.W.WriteObjectPropNameShort('ClassName', c.Options);
         c.W.Add('"');
         c.W.AddShort(ClassNameShort(PClass(Data)^)^);
         c.W.Add('"');
@@ -5256,7 +5255,7 @@ begin
       end;
       if woStorePointer in c.Options then
       begin
-        c.W.WriteObjectPropName('Address', c.Options);
+        c.W.WriteObjectPropNameShort('Address', c.Options);
         c.W.AddPointer(PtrUInt(Data), '"');
         if c.Prop <> nil then
           c.W.BlockAfterItem(c.Options);
@@ -5277,7 +5276,7 @@ begin
       repeat
         p := c.Prop;
         if // handle Props.NameChange() set to New='' to ignore this field
-           (p^.Name <> nil) and
+           (p^.Name <> '') and
            // handle woStoreStoredFalse flag and "stored" attribute in code
            ((woStoreStoredFalse in c.Options) or
             (p^.Prop = nil) or
@@ -5285,7 +5284,7 @@ begin
            // handle woDontStoreDefault flag over "default" attribute in code
            (not (woDontStoreDefault in c.Options) or
             (p^.Prop = nil) or
-            (p.PropDefault = NO_DEFAULT) or
+            (p.OrdinalDefault = NO_DEFAULT) or
             not p.ValueIsDefault(Data)) and
            // detect 0 numeric values and empty strings
            (not (woDontStoreVoid in c.Options) or
@@ -5296,7 +5295,7 @@ begin
             // append ',' and proper indentation if a field was just appended
             c.W.BlockAfterItem(c.Options);
           done := true;
-          c.W.WriteObjectPropName(p^.Name^, c.Options);
+          c.W.WriteObjectPropName(pointer(p^.Name), length(p^.Name), c.Options);
           if not (rcfSynPersistentHook in Ctxt.Info.Flags) or
              not TSPHook(Data).RttiWritePropertyValue(c.W, p, c.Options) then
             if (woHideSensitivePersonalInformation in c.Options) and
@@ -5497,14 +5496,20 @@ end;
 
 { TTextWriter }
 
-procedure TTextWriter.WriteObjectPropName(const PropName: ShortString;
-  Options: TTextWriterWriteObjectOptions);
+procedure TTextWriter.WriteObjectPropName(PropName: PUTF8Char;
+  PropNameLen: PtrInt; Options: TTextWriterWriteObjectOptions);
 begin
   if woHumanReadable in Options then
     AddCRAndIndent; // won't do anything if has already been done
-  AddProp(@PropName[1], ord(PropName[0])); // handle twoForceJSONExtended
+  AddProp(PropName, PropNameLen); // handle twoForceJSONExtended
   if woHumanReadable in Options then
     Add(' ');
+end;
+
+procedure TTextWriter.WriteObjectPropNameShort(const PropName: shortstring;
+  Options: TTextWriterWriteObjectOptions);
+begin
+  WriteObjectPropName(@PropName[1], ord(PropName[0]), Options);
 end;
 
 procedure TTextWriter.WriteObjectAsString(Value: TObject;
@@ -6061,15 +6066,16 @@ begin
     varOleStr {$ifdef HASVARUSTRING}, varUString{$endif}:
       AddTextW(v.VAny, Escape);
     varAny:
-      // Value is a TRttiVarData from TRttiProp.GetValue: V.VAny = GetFieldAddr
-      AddRttiCustomJSON(V.VAny, TRttiVarData(V).RttiCustom, WriteOptions);
+      // rkEnumeration,rkSet,rkDynArray,rkClass,rkInterface,rkRecord,rkObject
+      // from TRttiCustomProp.GetValueDirect/GetValueGetter
+      AddRttiVarData(TRttiVarData(V), WriteOptions);
   else
     if vt = varVariant or varByRef then
       AddVariant(PVariant(v.VPointer)^, Escape, WriteOptions)
     else if vt = varByRef or varString then
       AddText(PRawByteString(v.VAny)^, Escape)
-    else if (vt = varByRef or varOleStr)
-      {$ifdef HASVARUSTRING} or (vt = varByRef or varUString) {$endif} then
+    else if {$ifdef HASVARUSTRING} (vt = varByRef or varUString) or {$endif}
+            (vt = varByRef or varOleStr) then
       AddTextW(PPointer(v.VAny)^, Escape)
     else if vt >= varArray then // complex types are always < varArray
       AddNull
@@ -6131,6 +6137,30 @@ begin
     save(Value, ctxt)
   else
     AddNull;
+end;
+
+procedure TTextWriter.AddRttiVarData(const Value: TRttiVarData;
+  WriteOptions: TTextWriterWriteObjectOptions);
+var
+  V64: Int64;
+begin
+  if Value.PropValueIsInstance then
+  begin
+    // from TRttiCustomProp.GetValueGetter
+    if rcfGetOrdProp in Value.Prop.Value.Cache.Flags then
+    begin
+      // rkEnumeration,rkSet,rkDynArray,rkClass,rkInterface
+      V64 := Value.Prop.Prop.GetOrdProp(Value.PropValue);
+      AddRttiCustomJSON(@V64, Value.Prop.Value, WriteOptions);
+    end
+    else
+      // rkRecord,rkObject have no getter methods
+      raise EJSONException.CreateUTF8('%.AddRttiVarData: unsupported % (%)',
+        [self, Value.Prop.Value.Name, ToText(Value.Prop.Value.Kind)^]);
+  end
+  else
+    // from TRttiCustomProp.GetValueDirect
+    AddRttiCustomJSON(Value.PropValue, Value.Prop.Value, WriteOptions);
 end;
 
 procedure TTextWriter.AddText(const Text: RawByteString; Escape: TTextWriterKind);
@@ -7460,8 +7490,8 @@ nxt:    propname := GetJSONPropName(Ctxt.JSON, @propnamelen);
         if not Ctxt.Valid then
           break;
         // O(1) optimistic process of the property name, following RTTI order
-        if (prop^.Name <> nil) and
-           IdemPropName(prop^.Name^, propname, propnamelen) then
+        if (prop^.Name <> '') and
+           IdemPropNameU(prop^.Name, propname, propnamelen) then
           if JsonLoadProp(Data, prop^, Ctxt) then
             if Ctxt.EndOfObject = '}' then
               break
@@ -9429,11 +9459,6 @@ begin
   result := self;
 end;
 
-function TRttiJson.ClassNewInstance: pointer;
-begin
-  result := fClassNewInstance(self);
-end;
-
 function TRttiJson.ParseNewInstance(var Context: TJsonParserContext): TObject;
 begin
   result := fClassNewInstance(self);
@@ -9920,8 +9945,8 @@ end;
 
 function DoRegisterAutoCreateFields(ObjectInstance: TObject): TRttiJson;
 begin
-  result := Rtti.RegisterType(ObjectInstance.ClassInfo) as TRttiJson;
-  if PPPointer(PPAnsiChar(ObjectInstance)^ + vmtAutoTable)^^ <> result then
+  result := Rtti.RegisterClass(PClass(ObjectInstance)^) as TRttiJson;
+  if PPointer(PPAnsiChar(ObjectInstance)^ + vmtAutoTable)^ <> result then
     raise ERttiException.CreateUTF8( // paranoid check
       'AutoCreateFields(%): unexpected vmtAutoTable', [ObjectInstance]);
   result.SetAutoCreateFields;
@@ -9933,10 +9958,8 @@ var
   n: integer;
   p: ^PRttiCustomProp;
 begin
-  // faster than ClassPropertiesGet: we know it is the first slot
+  // inlined ClassPropertiesGet: we know it is the first slot
   rtti := PPointer(PPAnsiChar(ObjectInstance)^ + vmtAutoTable)^;
-  if rtti <> nil then
-    rtti := PPointer(rtti)^;
   if (rtti = nil) or
      not (rcfAutoCreateFields in rtti.Flags) then
     rtti := DoRegisterAutoCreateFields(ObjectInstance);
@@ -9962,7 +9985,7 @@ var
   arr: PPAnsiChar;
   o: TObject;
 begin
-  rtti := PPPointer(PPAnsiChar(ObjectInstance)^ + vmtAutoTable)^^;
+  rtti := PPointer(PPAnsiChar(ObjectInstance)^ + vmtAutoTable)^;
   // free all published class fields
   p := pointer(rtti.fAutoCreateClasses);
   if p <> nil then

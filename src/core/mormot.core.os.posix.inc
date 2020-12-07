@@ -35,8 +35,8 @@ uses
 
 { ****************** Unicode, Time, File process }
 var
-  /// contains the curent system code page (default WinAnsi)
-  GetACP: integer = CODEPAGE_US;
+  /// contains the curent system code page (default UTF-8 on POSIX systems)
+  GetACP: integer = CP_UTF8;
 
   /// contains the current Linux kernel revision, as one 24-bit integer
   // - e.g. $030d02 for 3.13.2, or $020620 for 2.6.32
@@ -48,8 +48,8 @@ const
   NORM_IGNORECASE = 1 shl ord(coIgnoreCase); // [widestringmanager.coIgnoreCase]
 
 function CompareStringW(GetThreadLocale: DWORD; dwCmpFlags: DWORD;
-  lpString1: PWideChar; cchCount1: longint;
-  lpString2: PWideChar; cchCount2: longint): longint;
+  lpString1: PWideChar; cchCount1: integer;
+  lpString2: PWideChar; cchCount2: integer): PtrInt;
 var
   U1, U2: UnicodeString; // faster than WideString on Windows
 begin
@@ -320,7 +320,7 @@ end;
 var
   {%H-}pthread: pointer;
   {$ifdef LINUXNOTBSD} // see https://stackoverflow.com/a/7989973
-  pthread_setname_np: function(thread: pointer; name: PAnsiChar): LongInt; cdecl;
+  pthread_setname_np: function(thread: pointer; name: PAnsiChar): integer; cdecl;
   {$endif LINUXNOTBSD}
 
 procedure SetUnixThreadName(ThreadID: TThreadID; const Name: RawByteString);
@@ -576,17 +576,17 @@ begin
   FpFsync(F);
 end;
 
-function GetLastError: longint;
+function GetLastError: integer;
 begin
   result := fpgeterrno;
 end;
 
-procedure SetLastError(error: longint);
+procedure SetLastError(error: integer);
 begin
   fpseterrno(error);
 end;
 
-function GetErrorText(error: longint): RawUTF8;
+function GetErrorText(error: integer): RawUTF8;
 begin
   result := StrError(error);
 end;
@@ -1387,7 +1387,7 @@ function mprotect(Addr: Pointer; Len: size_t; Prot: integer): integer;
   {$else} cdecl external 'libc.so' name 'mprotect'; {$endif}
 {$endif BSD}
 
-function SynMProtect(addr: pointer; size: size_t; prot: integer): longint;
+function SynMProtect(addr: pointer; size: size_t; prot: integer): integer;
 begin
   result := -1;
   {$ifdef UNIX}
@@ -1505,7 +1505,7 @@ var
   SynDaemonIntercepted: boolean;
   SynDaemonInterceptLog: TOnDaemonLog;
 
-procedure DoShutDown(Sig: Longint; Info: PSigInfo; Context: PSigContext); cdecl;
+procedure DoShutDown(Sig: integer; Info: PSigInfo; Context: PSigContext); cdecl;
 var
   level: TSynLogInfo;
   si_code: integer;

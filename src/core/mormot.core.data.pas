@@ -74,6 +74,7 @@ type
   end;
   {$M-}
 
+
   /// an abstract ancestor, for implementing a custom TInterfacedObject like class
   // - by default, will do nothing: no instance would be retrieved by
   // QueryInterface unless the VirtualQueryInterface protected method is
@@ -82,26 +83,23 @@ type
   // - using this class will leverage the signature difference between Delphi
   // and FPC, among all supported platforms
   // - the class includes a RefCount integer field
-  TSynInterfacedObject = class(TObject,IUnknown)
+  TSynInterfacedObject = class(TObject, IUnknown)
   protected
     fRefCount: integer;
-    // returns E_NOINTERFACE
-    function VirtualQueryInterface(const IID: TGUID; out Obj): HResult; virtual;
+    // returns E_NOINTERFACE by default
+    function VirtualQueryInterface(IID: PGUID; out Obj): TIntQry; virtual;
     // always return 1 for a "non allocated" instance (0 triggers release)
-    function VirtualAddRef: integer; virtual; abstract;
+    function VirtualAddRef: integer;  virtual; abstract;
     function VirtualRelease: integer; virtual; abstract;
-    {$ifdef FPC}
-    function QueryInterface(
-      {$ifdef FPC_HAS_CONSTREF}constref{$else}const{$endif} IID: TGUID;
-      out Obj): longint; {$ifndef WINDOWS}cdecl{$else}stdcall{$endif};
-    function _AddRef: longint; {$ifndef WINDOWS}cdecl{$else}stdcall{$endif};
-    function _Release: longint; {$ifndef WINDOWS}cdecl{$else}stdcall{$endif};
-    {$else}
-    function QueryInterface(const IID: TGUID; out Obj): HResult; stdcall;
-    function _AddRef: integer; stdcall;
-    function _Release: integer; stdcall;
-    {$endif FPC}
+    function QueryInterface({$ifdef FPC_HAS_CONSTREF}constref{$else}const{$endif}
+      IID: TGUID; out Obj): TIntQry; {$ifdef MSWINDOWS}stdcall{$else}cdecl{$endif};
+    function _AddRef: TIntCnt;       {$ifdef MSWINDOWS}stdcall{$else}cdecl{$endif};
+    function _Release: TIntCnt;      {$ifdef MSWINDOWS}stdcall{$else}cdecl{$endif};
   public
+    /// this virtual constructor will be called at instance creation
+    // - this constructor does nothing, but is declared as virtual so that
+    // inherited classes may safely override this default void implementation
+    constructor Create; virtual;
     /// the associated reference count
     property RefCount: integer
       read fRefCount write fRefCount;
@@ -2720,28 +2718,28 @@ end;
 
 { TSynInterfacedObject }
 
-function TSynInterfacedObject._AddRef: {$ifdef FPC}longint{$else}integer{$endif};
+constructor TSynInterfacedObject.Create;
+begin // do-nothing virtual constructor
+end;
+
+function TSynInterfacedObject._AddRef: TIntCnt;
 begin
   result := VirtualAddRef;
 end;
 
-function TSynInterfacedObject._Release: {$ifdef FPC}longint{$else}integer{$endif};
+function TSynInterfacedObject._Release: TIntCnt;
 begin
   result := VirtualRelease;
 end;
 
-{$ifdef FPC}
 function TSynInterfacedObject.QueryInterface(
   {$ifdef FPC_HAS_CONSTREF}constref{$else}const{$endif} IID: TGUID;
-  out Obj): longint; {$ifndef WINDOWS}cdecl{$else}stdcall{$endif};
-{$else}
-function TSynInterfacedObject.QueryInterface(const IID: TGUID; out Obj): HResult;
-{$endif FPC}
+  out Obj): TIntQry;
 begin
-  result := VirtualQueryInterface(IID, Obj);
+  result := VirtualQueryInterface(@IID, Obj);
 end;
 
-function TSynInterfacedObject.VirtualQueryInterface(const IID: TGUID; out Obj): HResult;
+function TSynInterfacedObject.VirtualQueryInterface(IID: PGUID; out Obj): TIntQry;
 begin
   result := E_NOINTERFACE;
 end;
@@ -2776,6 +2774,12 @@ begin
   n := n shr 1;
   if n = 0 then
     exit;
+  if n = 1 then
+  begin
+    fObject := varObjPairs[1];
+    PPointer(varObjPairs[0])^ := fObject;
+    exit;
+  end;
   SetLength(fObjectList, n);
   for i := 0 to n - 1 do
   begin
@@ -2846,15 +2850,14 @@ end;
 
 constructor TSynPersistent.Create;
 begin
-  // quick check if this class type is already registered
   if PPointer(PPAnsiChar(self)^ + vmtAutoTable)^ = nil then
-    // use RegisterClasses() since we don't need to inline RegisterClass()
-    Rtti.RegisterClasses([PClass(self)^]);
+    Rtti.RegisterClass(PClass(self)^); // ensure TRttiCustom is set
 end;
 
 class function TSynPersistent.RttiCustom: TRttiCustom;
-begin // faster than ClassPropertiesGet: we know it is the first slot
-  result := PPPointer(PAnsiChar(self) + vmtAutoTable)^^;
+begin
+  // inlined ClassPropertiesGet: we know it is the first slot
+  result := PPointer(PAnsiChar(self) + vmtAutoTable)^;
   // assert(result.InheritsFrom(TRttiCustom));
 end;
 
@@ -5558,9 +5561,9 @@ begin
     rB := Rtti.RegisterClass(PPointer(B)^);
     for i := 1 to rA.Props.Count do
     begin
-      if pA^.Name <> nil then
+      if pA^.Name <> '' then
       begin
-        pB := rB.Props.Find(pA^.Name^);
+        pB := rB.Props.Find(pA^.Name);
         if pB <> nil then
         begin
           result := pA^.CompareValue(A, B, pB^, CaseInSensitive);
@@ -6046,7 +6049,7 @@ end;
 procedure TDynArray.ItemCopy(Source, Dest: pointer);
 begin
   if fInfo.ArrayRtti <> nil then
-    fInfo.ArrayRtti.ValueCopy(Dest, Source)
+    fInfo.ArrayRtti.ValueCopy(Dest, Source) // also for T*ObjArray
   else
     MoveFast(Source^, Dest^, fInfo.Cache.ItemSize);
 end;
@@ -6056,7 +6059,7 @@ begin
   if Item = nil then
     exit;
   if fInfo.ArrayRtti <> nil then
-    fInfo.ArrayRtti.ValueFinalize(Item);
+    fInfo.ArrayRtti.ValueFinalize(Item); // also for T*ObjArray
   FillCharFast(Item^, fInfo.Cache.ItemSize, 0); // always
 end;
 
@@ -6206,8 +6209,8 @@ begin
   dec(n);
   s := fInfo.Cache.ItemSize;
   P := PAnsiChar(fValue^) + PtrUInt(aIndex) * s;
-  if fInfo.ArrayRtti <> nil then
-    fInfo.ArrayRtti.ValueFinalize(P);
+  if fInfo.Cache.ItemInfo <> nil then
+    fInfo.ArrayRtti.ValueFinalize(P); // also for T*ObjArray
   if n > aIndex then
   begin
     len := PtrUInt(n - aIndex) * s;
@@ -6268,7 +6271,7 @@ begin
   if (p = nil) or
      (Dest = nil) then
     exit;
-  if fInfo.ArrayRtti <> nil then
+  if fInfo.Cache.ItemInfo <> nil then
     fInfo.ArrayRtti.ValueFinalize(Dest); // also handle T*ObjArray
   MoveFast(p^, Dest^, fInfo.Cache.ItemSize);
   FillCharFast(p^, fInfo.Cache.ItemSize, 0);
@@ -7283,14 +7286,18 @@ var
   cmp: TRttiCompare;
   comp: integer;
   P: PAnsiChar;
+label
+  bin;
 begin
   if (fValue <> nil) and
      (@Item <> nil) then
     if not(rcfArrayItemManaged in fInfo.Flags) then
-      result := AnyScanIndex(fValue^, @Item, GetCount, fInfo.Cache.ItemSize)
+bin:  result := AnyScanIndex(fValue^, @Item, GetCount, fInfo.Cache.ItemSize)
     else
     begin
       rtti := fInfo.Cache.ItemInfo;
+      if rtti = nil then
+        goto bin;
       cmp := RTTI_COMPARE[CaseInSensitive, rtti.Kind];
       if Assigned(cmp) then
       begin
@@ -7301,7 +7308,9 @@ begin
           if comp = 0 then
             exit;
         end;
-      end;
+      end
+      else
+        goto bin;
       result := -1;
     end
   else
@@ -7356,8 +7365,8 @@ begin
   {$ifndef CPU64}
   if NeededSize > 1 shl 30 then
     // in practice, consider that max workable memory block is 1 GB on 32-bit
-    raise EDynArray.CreateFmt('TDynArray SetLength(%s,%d) size concern',
-      [fInfo.ArrayRtti.Name, NewLength]);
+    raise EDynArray.CreateFmt('TDynArray.InternalSetLength(%s,%d) size concern',
+      [fInfo.Name, NewLength]);
   {$endif CPU64}
   // if not shared (refCnt=1), resize; if shared, create copy (not thread safe)
   if p = nil then

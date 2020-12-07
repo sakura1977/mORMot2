@@ -473,6 +473,13 @@ type
   /// pointer to cross-compiler type used for dynamic array length
   PDALen = ^TDALen;
 
+  /// cross-compiler return type of IUnknown._AddRef/_Release methods
+  // - used to reduce the $ifdef when implementing interfaces in Delphi and FPC
+  TIntCnt = {$ifdef FPC} longint {$else} integer {$endif};
+  /// cross-compiler return type of IUnknown.QueryInterface method
+  // - used to reduce the $ifdef when implementing interfaces in Delphi and FPC
+  TIntQry = {$ifdef FPC} longint {$else} HRESULT {$endif};
+
   type
     {$ifdef FPC}
 
@@ -504,7 +511,7 @@ type
     {$ifdef HASCODEPAGE}
       {$ifdef CPU64}
       /// padding bytes for 16 byte alignment of the header
-      _Padding: LongInt;
+      _Padding: cardinal;
       {$endif CPU64}
       /// the string code page - e.g. CP_UTF8 for RawUTF8
       codePage: Word;
@@ -521,7 +528,7 @@ type
     TDynArrayRec = packed record
       {$ifdef CPUX64}
       /// padding bytes for 16 byte alignment of the header
-      _Padding: LongInt;
+      _Padding: cardinal;
       {$endif}
       /// dynamic array reference count (basic garbage memory mechanism)
       refCnt: TRefCnt;
@@ -3071,25 +3078,19 @@ procedure VariantStringToUTF8(const V: Variant; var result: RawUTF8); overload;
 // null) will be returned as ''
 function VariantStringToUTF8(const V: Variant): RawUTF8; overload;
 
-/// compare two "array of variant" elements, with case sensitivity
-// - just a wrapper around SortDynArrayVariantComp(A,B,false)
-function SortDynArrayVariant(const A, B): integer;
-
-/// compare two "array of variant" elements, with no case sensitivity
-// - just a wrapper around SortDynArrayVariantComp(A,B,true)
-function SortDynArrayVariantI(const A, B): integer;
-
 var
   /// efficient initialization of successive variant items from a (dynamic) array
   // - this unit will include a basic version calling VarClear()
   // - mormot.core.variants will assign a more efficient implementation
   VariantClearSeveral: procedure(V: PVarData; n: integer);
 
-  /// compare two "array of variant" elements, with or without case sensitivity
-  // - this unit registers a basic case-sensitive version calling VarCompareValue()
-  // - mormot.core.variants will assign a (much) more efficient implementation,
-  // also properly handling case insensitive comparison in text
-  SortDynArrayVariantComp: function(const A, B: TVarData; caseInsensitive: boolean): integer;
+  /// compare two variant/TVarData values, with or without case sensitivity
+  // - this unit registers a basic case-sensitive version calling the RTL
+  // VarCompareValue(), but mormot.core.variants will assign a (much) more
+  // efficient implementation, also properly handling caseInsensitive parameter
+  // - called e.g. by SortDynArrayVariant/SortDynArrayVariantI functions
+  SortDynArrayVariantComp: function(
+    const A, B: TVarData; caseInsensitive: boolean): integer;
 
 
 { ************ Sorting/Comparison Functions }
@@ -3183,6 +3184,14 @@ function SortDynArrayString(const A, B): integer;
 // - the expected string type is the generic RTL string, i.e. TFileName
 // - calls internally GetFileNameWithoutExt() and AnsiCompareFileName()
 function SortDynArrayFileName(const A, B): integer;
+
+/// compare two "array of variant" elements, with case sensitivity
+// - just a wrapper around SortDynArrayVariantComp(A,B,false)
+function SortDynArrayVariant(const A, B): integer;
+
+/// compare two "array of variant" elements, with no case sensitivity
+// - just a wrapper around SortDynArrayVariantComp(A,B,true)
+function SortDynArrayVariantI(const A, B): integer;
 
 /// low-level inlined function for exchanging two pointers
 // - used e.g. during sorting process
@@ -10403,7 +10412,7 @@ begin
       if v >= varOleStr then // bypass for most obvious types
         VarClearProc(TVarData(Value));
       TVarData(Value).VType := varString;
-      TVarData(Value).VAny := nil; // to avoid GPF when assigned to a RawByteString
+      TVarData(Value).VAny := nil; // to avoid GPF when assigning the value
     end;
 end;
 

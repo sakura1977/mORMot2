@@ -735,6 +735,15 @@ type
     fOrmOptions: TJSONSerializerOrmOptions;
     procedure SetOrmOptions(Value: TJSONSerializerOrmOptions);
   public
+    {$ifndef PUREMORMOT2}
+    // backward compatibility methods - use Rtti global instead
+    class procedure RegisterClassForJSON(aItemClass: TClass); overload;
+    class procedure RegisterClassForJSON(const aItemClass: array of TClass); overload;
+    class procedure RegisterCollectionForJSON(aCollection: TCollectionClass;
+      aItem: TCollectionItemClass);
+    class procedure RegisterObjArrayForJSON(aDynArray: PRttiInfo; aItem: TClass); overload;
+    class procedure RegisterObjArrayForJSON(const aDynArrayClassPairs: array of const); overload;
+    {$endif PUREMORMOT2}
     /// customize TOrm.GetJSONValues serialization process
     // - jwoAsJsonNotAsString will force TOrm.GetJSONValues to serialize
     // nested property instances as a JSON object/array, not a JSON string:
@@ -9003,6 +9012,39 @@ begin
       ColNames[0] := '"ID":'; // as expected by AJAX
 end;
 
+{$ifndef PUREMORMOT2}
+// backward compatibility methods - use Rtti global instead
+
+class procedure TJSONSerializer.RegisterClassForJSON(aItemClass: TClass);
+begin
+  Rtti.RegisterClass(aItemClass);
+end;
+
+class procedure TJSONSerializer.RegisterClassForJSON(
+  const aItemClass: array of TClass);
+begin
+  Rtti.RegisterClasses(aItemClass);
+end;
+
+class procedure TJSONSerializer.RegisterCollectionForJSON(
+  aCollection: TCollectionClass; aItem: TCollectionItemClass);
+begin
+  Rtti.RegisterCollection(aCollection, aItem);
+end;
+
+class procedure TJSONSerializer.RegisterObjArrayForJSON(
+  aDynArray: PRttiInfo; aItem: TClass);
+begin
+  Rtti.RegisterObjArray(aDynArray, aItem);
+end;
+
+class procedure TJSONSerializer.RegisterObjArrayForJSON(
+  const aDynArrayClassPairs: array of const);
+begin
+  Rtti.RegisterObjArrays(aDynArrayClassPairs);
+end;
+
+{$endif PUREMORMOT2}
 
 
 { ************ TOrmPropInfo Classes for Efficient ORM Processing }
@@ -16049,8 +16091,8 @@ class function TOrm.RecordProps: TOrmProperties;
 begin
   result := PPointer(PAnsiChar(self) + vmtAutoTable)^;
   if result <> nil then
-    // we know TRttiCustom is the first slot, and Private is TOrmProperties
-    result := TOrmProperties(PRttiCustom(result)^.Private)
+    // we know TRttiCustom is in the slot, and Private is TOrmProperties
+    result := TOrmProperties(TRttiCustom(pointer(result)).Private)
   else
     // first time we use this TOrm: generate information from RTTI
     result := PropsCreate;
@@ -16286,7 +16328,7 @@ var
 begin
   // private sub function for proper TOrm.RecordProps method inlining
   rtticustom := Rtti.RegisterClass(self);
-  vmt := PPPointer(PAnsiChar(self) + vmtAutoTable)^^;
+  vmt := PPointer(PAnsiChar(self) + vmtAutoTable)^;
   if (rtticustom = nil) or (vmt <> rtticustom) then
     // TOrm.RecordProps expects TRttiCustom in the first slot
     raise EModelException.CreateUTF8('%.RecordProps: vmtAutoTable=% not %',
@@ -17386,7 +17428,7 @@ end;
 function TOrm.ClassProp: TRttiJson;
 begin
   if self <> nil then
-    result := ClassPropertiesGet(PClass(self)^, TRttiJson)
+    result := PPointer(PPAnsiChar(self)^ + vmtAutoTable)^
   else
     result := nil; // avoid GPF
 end;
@@ -22163,11 +22205,13 @@ end;
 procedure InitializeUnit;
 begin
   InitializeCriticalSection(vmtAutoTableLock);
+  {$ifndef HASDYNARRAYTYPE}
   Rtti.RegisterObjArray(
     TypeInfo(TOrmModelPropertiesObjArray), TOrmModelProperties);
   // ensure TOrmObjArray is recognized as a T*ObjArray
   // - needed e.g. by TRestStorageInMemory.Create
   Rtti.RegisterObjArray(TypeInfo(TOrmObjArray), TOrm);
+  {$endif HASDYNARRAYTYPE}
   // manual setting of OrmFieldTypeComp[] values which are not TUTF8Compare
   pointer(@OrmFieldTypeComp[oftAnsiText]) := @AnsiIComp;
   pointer(@OrmFieldTypeComp[oftUTF8Custom]) := @AnsiIComp;

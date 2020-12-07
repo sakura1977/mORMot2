@@ -2,13 +2,14 @@
   This file is a part of the Open Source Synopse mORMot framework 2,
   licensed under a MPL/GPL/LGPL three license - see LICENSE.md
 
-  Implements WinSock2 API calls, as used by mormot.net.sock.pas
+  Implements WinSock2 API calls, as used by mormot.net.sock.pas on Windows.
 }
 
 uses
   Windows;
   
 function NetLastError(AnotherNonFatal: integer = 0{NO_ERROR}): TNetResult; forward;
+
 
 { ******** WinSock2 Type Definitions }
 
@@ -40,8 +41,8 @@ const
 type
   PTimeVal = ^TTimeVal;
   TTimeVal = record
-    tv_sec: Longint;
-    tv_usec: Longint;
+    tv_sec: integer;
+    tv_usec: integer;
   end;
 
 const

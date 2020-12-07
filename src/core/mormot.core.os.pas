@@ -194,7 +194,7 @@ var
   // - also always appended to OSVersionText high-level description
   OSVersionInfoEx: RawUTF8;
   /// the current Operating System version, as retrieved for the current process
-  // and computed as ToTextOS(OSVersionInt32)
+  // and computed by ToTextOS(OSVersionInt32)
   // - returns e.g. 'Windows Vista' or 'Ubuntu 5.4.0'
   OSVersionShort: RawUTF8;
 
@@ -213,7 +213,7 @@ var
 function ToText(const osv: TOperatingSystemVersion): RawUTF8; overload;
 
 /// convert a 32-bit Operating System type into its full text representation
-// including the kernel revision on POSIX systems
+// including the kernel revision (not the distribution version) on POSIX systems
 // - returns e.g. 'Windows Vista' or 'Ubuntu 5.4.0'
 function ToTextOS(osint32: integer): RawUTF8;
 
@@ -256,7 +256,7 @@ const
       {$elseif defined(VER320)} + ' 10.2 Tokyo'
       {$elseif defined(VER330)} + ' 10.3 Rio'
       {$elseif defined(VER340)} + ' 10.4 Sydney'
-      {$elseif defined(VER350)} + ' 10.4 Next'
+      {$elseif defined(VER350)} + ' 10.5 Next'
       {$ifend}
     {$endif CONDITIONALEXPRESSIONS}
   {$endif FPC}
@@ -274,11 +274,13 @@ function GetDelphiCompilerVersion: RawUTF8; deprecated;
 {$ifdef UNICODE}
 
 const
+  /// a global constant to be appended for Windows Ansi or wide API names
   _AW = 'W';
 
 {$else}
 
 const
+  /// a global constant to be appended for Windows Ansi or wide API names
   _AW = 'A';
 
 type
@@ -657,8 +659,8 @@ type
     SessionID: cardinal;
     PEBBaseAddress: Pointer;
     AffinityMask: cardinal;
-    BasePriority: LongInt;
-    ExitStatus: LongInt;
+    BasePriority: integer;
+    ExitStatus: integer;
     BeingDebugged: byte;
     ImagePath: SynUnicode;
     CommandLine: SynUnicode;
@@ -919,22 +921,22 @@ type
     is_socket_unix: function(fd, typr, listening: integer;
       var path: TFileName; pathLength: PtrUInt): integer; cdecl;
     /// systemd: submit simple, plain text log entries to the system journal
-    // - priority value can be obtained using longint(LOG_TO_SYSLOG[logLevel])
-    journal_print: function(priority: longint; args: array of const): longint; cdecl;
+    // - priority value can be obtained using integer(LOG_TO_SYSLOG[logLevel])
+    journal_print: function(priority: integer; args: array of const): integer; cdecl;
     /// systemd: submit array of iov structures instead of the format string to the system journal.
     //  - each structure should reference one field of the entry to submit.
     //  - the second argument specifies the number of structures in the array.
-    journal_sendv: function(var iov: TIoVec; n: longint): longint; cdecl;
+    journal_sendv: function(var iov: TIoVec; n: integer): integer; cdecl;
     /// sends notification to systemd
     // - see https://www.freedesktop.org/software/systemd/man/notify.html
     // status notification sample: sd.notify(0, 'READY=1');
     // watchdog notification: sd.notify(0, 'WATCHDOG=1');
-    notify: function(unset_environment: longint; state: PUTF8Char): longint; cdecl;
+    notify: function(unset_environment: integer; state: PUTF8Char): integer; cdecl;
     /// check whether the service manager expects watchdog keep-alive
     // notifications from a service
     // - if result > 0 then usec contains the notification interval (app should
     // notify every usec/2)
-    watchdog_enabled: function(unset_environment: longint; usec: Puint64): longint; cdecl;
+    watchdog_enabled: function(unset_environment: integer; usec: Puint64): integer; cdecl;
     /// returns true in case process is started by systemd
     // - For systemd v232+
     function ProcessIsStartedBySystemd: boolean;
@@ -1029,16 +1031,16 @@ procedure FlushFileBuffers(F: THandle);
   {$ifdef MSWINDOWS} stdcall; {$else} inline; {$endif}
 
 /// compatibility function, wrapping Win32 API last error code
-function GetLastError: longint;
+function GetLastError: integer;
   {$ifdef MSWINDOWS} stdcall; {$else} inline; {$endif}
 
 /// compatibility function, wrapping Win32 API last error code
-procedure SetLastError(error: longint);
+procedure SetLastError(error: integer);
   {$ifdef MSWINDOWS} stdcall; {$else} inline; {$endif}
 
 /// returns a given error code as plain text
 // - calls FormatMessageW on Windows, or StrError() on POSIX
-function GetErrorText(error: longint): RawUTF8;
+function GetErrorText(error: integer): RawUTF8;
 
 /// retrieve the text corresponding to an error message for a given Windows module
 // - use RTL SysErrorMessage() as fallback
@@ -1047,14 +1049,14 @@ function SysErrorMessagePerModule(Code: cardinal; ModuleName: PChar): string;
 /// raise an Exception from the last system error
 procedure RaiseLastModuleError(ModuleName: PChar; ModuleException: ExceptClass);
 
-/// compatibility function, wrapping GetACP() Win32 API function
-// - returns the curent system code page (default WinAnsi)
-function Unicode_CodePage: integer;
-
 /// compatibility function, wrapping Win32 API function
 // - returns the current main Window handle on Windows, or 0 on POSIX/Linux
 function GetDesktopWindow: PtrInt;
   {$ifdef MSWINDOWS} stdcall; {$else} inline; {$endif}
+
+/// compatibility function, wrapping GetACP() Win32 API function
+// - returns the curent system code page (default WinAnsi)
+function Unicode_CodePage: integer;
 
 /// compatibility function, wrapping CompareStringW() Win32 API text comparison
 // - returns 1 if PW1>PW2, 2 if PW1=PW2, 3 if PW1<PW2 - so substract 2 to have
@@ -1066,13 +1068,16 @@ function Unicode_CompareString(PW1, PW2: PWideChar; L1, L2: PtrInt; IgnoreCase: 
 
 /// compatibility function, wrapping MultiByteToWideChar() Win32 API call
 // - returns the number of WideChar written into W^ destination buffer
+// - on POSIX, use FPC RTL widestringmanager with a temporary variable
 function Unicode_AnsiToWide(A: PAnsiChar; W: PWideChar; LA, LW, CodePage: PtrInt): integer;
 
 /// compatibility function, wrapping WideCharToMultiByte() Win32 API call
 // - returns the number of AnsiChar written into A^ destination buffer
+// - on POSIX, use FPC RTL widestringmanager with a temporary variable
 function Unicode_WideToAnsi(W: PWideChar; A: PAnsiChar; LW, LA, CodePage: PtrInt): integer;
 
 /// conversion of some UTF-16 buffer into a temporary shortstring
+// - used when mormot.core.unicode is an overkill, e.g. TCrtSocket.SockSend()
 procedure Unicode_WideToShort(W: PWideChar; LW, CodePage: PtrInt; var res: shortstring);
 
 /// returns a system-wide current monotonic timestamp as milliseconds
@@ -1303,6 +1308,25 @@ function FileFromString(const Content: RawByteString; const FileName: TFileName;
 /// compute an unique temporary file name
 // - following 'exename_123.tmp' pattern, in the system temporary folder
 function TemporaryFileName: TFileName;
+
+/// delete the content of a specified directory
+// - only one level of file is deleted within the folder: no recursive deletion
+// is processed by this function (for safety)
+// - if DeleteOnlyFilesNotDirectory is TRUE, it won't remove the folder itself,
+// but just the files found in it
+function DirectoryDelete(const Directory: TFileName;
+  const Mask: TFileName = FILES_ALL; DeleteOnlyFilesNotDirectory: boolean = false;
+  DeletedCount: PInteger = nil): boolean;
+
+/// delete the files older than a given age in a specified directory
+// - for instance, to delete all files older than one day:
+// ! DirectoryDeleteOlderFiles(FolderName, 1);
+// - only one level of file is deleted within the folder: no recursive deletion
+// is processed by this function, unless Recursive is TRUE
+// - if Recursive=true, caller should set TotalSize^=0 to have an accurate value
+function DirectoryDeleteOlderFiles(const Directory: TFileName;
+  TimePeriod: TDateTime; const Mask: TFileName = FILES_ALL;
+  Recursive: boolean = false; TotalSize: PInt64 = nil): boolean;
 
 /// check if the directory is writable for the current user
 // - try to write a small file with a random name
@@ -1652,7 +1676,7 @@ procedure PatchCodePtrUInt(Code: PPtrUInt; Value: PtrUInt;
 // - quickly returns the PropertiesClass instance for this class on success
 // - returns nil if no Properties was registered for this class; caller should
 // call ClassPropertiesAdd() to initialize
-function ClassPropertiesGet(ObjectClass, PropertiesClass: TClass): pointer;
+function ClassPropertiesGet(ObjectClass: TClass): pointer;
   {$ifdef HASINLINE}inline;{$endif}
 
 /// try to register a given Properties instance for a given class
@@ -2539,7 +2563,7 @@ const
 // should be considered as indicative only with posix=false
 function ParseCommandArgs(const cmd: RawUTF8; argv: PParseCommandsArgs = nil;
   argc: PInteger = nil; temp: PRawUTF8 = nil;
-  posix: boolean = {$ifdef MSWINDOWS}false{$else}true{$endif}): TParseCommands;
+  posix: boolean = {$ifdef MSWINDOWS} false {$else} true {$endif}): TParseCommands;
 
 /// like SysUtils.ExecuteProcess, but allowing not to wait for the process to finish
 // - optional env value follows 'n1=v1'#0'n2=v2'#0'n3=v3'#0#0 Windows layout
@@ -2555,6 +2579,7 @@ function RunProcess(const path, arg1: TFileName; waitfor: boolean;
 function RunCommand(const cmd: TFileName; waitfor: boolean;
   const env: TFileName = ''; envaddexisting: boolean = false;
   parsed: PParseCommands = nil): integer;
+
 
 
 
@@ -2590,6 +2615,7 @@ begin
   result := ToText(osv);
   if (osv.os >= osLinux) and
      (osv.utsrelease[2] <> 0) then
+    // include the kernel number to the distribution name, e.g. 'Ubuntu 5.4.0'
     result := RawUTF8(Format('%s %d.%d.%d', [result, osv.utsrelease[2],
       osv.utsrelease[1], osv.utsrelease[0]]));
 end;
@@ -2597,84 +2623,45 @@ end;
 
 { *************** Per Class Properties O(1) Lookup via vmtAutoTable Slot }
 
-const
-  MAX_AUTOSLOT = 7;
-
-type
-  TAutoSlots = array[0..MAX_AUTOSLOT] of TObject; // always end with last=nil
-  PAutoSlots = ^TAutoSlots;
-
 var
   AutoSlotsLock: TRTLCriticalSection;
-  AutoSlots: array of PAutoSlots; // not "of TAutoSlots" to have static pointers
-
 
 procedure PatchCodePtrUInt(Code: PPtrUInt; Value: PtrUInt; LeaveUnprotected: boolean);
 begin
   PatchCode(Code, @Value, SizeOf(Code^), nil, LeaveUnprotected);
 end;
 
-
-function ClassPropertiesGet(ObjectClass, PropertiesClass: TClass): pointer;
-var
-  slots: PObject;
+function ClassPropertiesGet(ObjectClass: TClass): pointer;
 begin
-  slots := PPointer(PAnsiChar(ObjectClass) + vmtAutoTable)^;
-  if slots <> nil then
-  begin
-    ObjectClass := PropertiesClass; // better TClass constant inlining on FPC
-    repeat
-      result := slots^;
-      if (result = nil) or
-         (PClass(result)^ = ObjectClass) then
-        exit; // reached end of list, or found the expected class type
-      inc(slots);
-    until false;
-  end;
-  result := nil;
+  result := PPointer(PAnsiChar(ObjectClass) + vmtAutoTable)^;
 end;
 
 function ClassPropertiesAdd(ObjectClass: TClass; PropertiesInstance: TObject;
   FreeExistingPropertiesInstance: boolean): TObject;
 var
   vmt: PPointer;
-  slots: PAutoSlots;
-  i: PtrInt;
 begin
   EnterCriticalSection(AutoSlotsLock);
   try
-    result := ClassPropertiesGet(ObjectClass, PropertiesInstance.ClassType);
+    vmt := Pointer(PAnsiChar(ObjectClass) + vmtAutoTable);
+    result := vmt^;
     if result <> nil then
     begin
-      // some background thread registered its own
-      if FreeExistingPropertiesInstance then
+      // thread-safe registration
+      if FreeExistingPropertiesInstance and
+         (PropertiesInstance <> result) then
         PropertiesInstance.Free;
       exit;
     end;
-    vmt := Pointer(PAnsiChar(ObjectClass) + vmtAutoTable);
-    slots := vmt^;
-    if slots = nil then
-    begin
-      slots := AllocMem(SizeOf(slots^));
-      PtrArrayAdd(AutoSlots, slots);
-      PatchCodePtrUInt(pointer(vmt), PtrUInt(slots), {leaveunprotected=}true);
-      if vmt^ <> slots then
-        raise EOSException.CreateFmt('ClassPropertiesAdd: mprotect failed for %s',
-          [ClassNameShort(ObjectClass)^]);
-    end;
-    for i := 0 to high(slots^) - 1 do
-      if slots^[i] = nil then
-      begin
-        // use the first void slot
-        slots^[i] := PropertiesInstance;
-        result := PropertiesInstance;
-        exit;
-      end;
+    // actually store the properties into the unused VMT AutoTable slot
+    result := PropertiesInstance;
+    PatchCodePtrUInt(pointer(vmt), PtrUInt(result), {leaveunprotected=}true);
+    if vmt^ <> result then
+      raise EOSException.CreateFmt('ClassPropertiesAdd: mprotect failed for %s',
+        [ClassNameShort(ObjectClass)^]);
   finally
     LeaveCriticalSection(AutoSlotsLock);
   end;
-  raise EOSException.CreateFmt('ClassPropertiesAdd: no slot available on %s',
-    [ClassNameShort(ObjectClass)^]);
 end;
 
 
@@ -2961,6 +2948,74 @@ begin // fast cross-platform implementation
   raise EOSException.Create('TemporaryFileName failed');
 end;
 
+function DirectoryDelete(const Directory: TFileName; const Mask: TFileName;
+  DeleteOnlyFilesNotDirectory: boolean; DeletedCount: PInteger): boolean;
+var
+  F: TSearchRec;
+  Dir: TFileName;
+  n: integer;
+begin
+  n := 0;
+  result := true;
+  if DirectoryExists(Directory) then
+  begin
+    Dir := IncludeTrailingPathDelimiter(Directory);
+    if FindFirst(Dir + Mask, faAnyFile - faDirectory, F) = 0 then
+    begin
+      repeat
+        if SearchRecValidFile(F) then
+          if DeleteFile(Dir + F.Name) then
+            inc(n)
+          else
+            result := false;
+      until FindNext(F) <> 0;
+      FindClose(F);
+    end;
+    if not DeleteOnlyFilesNotDirectory and
+       not RemoveDir(Dir) then
+      result := false;
+  end;
+  if DeletedCount <> nil then
+    DeletedCount^ := n;
+end;
+
+function DirectoryDeleteOlderFiles(const Directory: TFileName;
+  TimePeriod: TDateTime; const Mask: TFileName; Recursive: boolean;
+  TotalSize: PInt64): boolean;
+var
+  F: TSearchRec;
+  Dir: TFileName;
+  old: TDateTime;
+begin
+  if not Recursive and
+     (TotalSize <> nil) then
+    TotalSize^ := 0;
+  result := true;
+  if (Directory = '') or
+     not DirectoryExists(Directory) then
+    exit;
+  Dir := IncludeTrailingPathDelimiter(Directory);
+  if FindFirst(Dir + Mask, faAnyFile, F) = 0 then
+  begin
+    old := Now - TimePeriod;
+    repeat
+      if SearchRecValidFolder(F) then
+      begin
+        if Recursive then
+          DirectoryDeleteOlderFiles(
+            Dir + F.Name, TimePeriod, Mask, true, TotalSize);
+      end
+      else if SearchRecValidFile(F) and
+              (SearchRecToDateTime(F) < old) then
+        if not DeleteFile(Dir + F.Name) then
+          result := false
+        else if TotalSize <> nil then
+          inc(TotalSize^, F.Size);
+    until FindNext(F) <> 0;
+    FindClose(F);
+  end;
+end;
+
 function IsDirectoryWritable(const Directory: TFileName): boolean;
 var
   dir, fn: TFileName;
@@ -2994,7 +3049,7 @@ var
   OldRaiseProc: TExceptProc;
 
 procedure SynRaiseProc(Obj: TObject; Addr: CodePointer;
-  FrameCount: Longint; Frame: PCodePointer);
+  FrameCount: integer; Frame: PCodePointer);
 var
   ctxt: TSynLogExceptionContext;
   backuplasterror: DWORD;
@@ -4146,12 +4201,11 @@ begin
 end;
 
 
+
+
+
 procedure FinalizeUnit;
-var
-  i: PtrInt;
 begin
-  for i := 0 to high(AutoSlots) do
-    FreeMem(AutoSlots[i]);
   ObjArrayClear(CurrentFakeStubBuffers);
   ExeVersion.Version.Free;
   DeleteCriticalSection(AutoSlotsLock);
@@ -4173,6 +4227,6 @@ initialization
 
 finalization
   FinalizeUnit;
-  
+
 end.
 

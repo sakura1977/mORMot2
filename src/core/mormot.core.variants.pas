@@ -3612,7 +3612,7 @@ begin
       objRtti := Rtti.RegisterClass(PClass(obj)^);
     for p := 0 to doc.Count - 1 do
     begin
-      prop := objRtti.Props.Find(pointer(doc.Names[p]), length(doc.Names[p]));
+      prop := objRtti.Props.Find(doc.Names[p]);
       if prop <> nil then
         prop^.Prop.SetValue(obj, doc.Values[p]);
     end;
@@ -6433,10 +6433,9 @@ label
   s, w;
 begin
   VarClear(Value);
-  P := pointer(Options);
-  if (P <> nil) and
-     (dvoAllowDoubleValue in PDocVariantOptions(P)^) then
-    AllowDouble := true; // for ProcessField() above
+  if (Options <> nil) and
+     (dvoAllowDoubleValue in Options^) then
+    AllowDouble := true; // for GetVariantFromNotStringJSON() below
   if EndOfObject <> nil then
     EndOfObject^ := ' ';
   P := JSON;
@@ -6476,15 +6475,16 @@ w:  if {%H-}wasString or
   if (t <> nil) and
      not (dvoJSONParseDoNotTryCustomVariants in Options^) then
   begin
+    P2 := P;
     n := PDALen(PAnsiChar(t) - _DALEN)^ + _DAOFF;
     repeat
       inc(t); // SynVariantTypes[0] is always DocVariantVType -> ignore
       dec(n);
       if n = 0 then
         break;
-      P2 := P;
       if t^.TryJSONToVariant(P2, Value, @EndOfObject2) then
       begin
+        // currently, only set by BSONVariantType from mormot.db.nosql.bson
         if not wasParsedWithinString then
         begin
           if EndOfObject <> nil then
