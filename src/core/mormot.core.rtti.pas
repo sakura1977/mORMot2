@@ -737,7 +737,7 @@ type
       {$ifdef HASINLINE}inline;{$endif}
     /// for rkArray: get the size in bytes of all the static array items
     // - caller should ensure the type is indeed a static array
-    function ArrayItemSize: PtrInt;
+    function ArraySize: PtrInt;
       {$ifdef HASINLINE}inline;{$endif}
     /// recognize most used string types, returning their code page
     // - will return the exact code page on FPC and since Delphi 2009, from RTTI
@@ -2234,10 +2234,10 @@ type
     // - a wrapper around the RegisterBinaryType() method
     procedure RegisterBinaryTypes(const InfoBinarySize: array of const);
     /// register one dynamic array RTTI TypeInfo() to be serialized as T*ObjArray
+    // - not needed on FPC and Delphi 2010+ since "array of TSomeClass" will be
+    // recognized directly - see HASDYNARRAYTYPE conditional
     // - allow JSON serialization and unserialization of the registered dynamic
     // array property defined in any TPersistent or TOrm for oldest Delphi
-    // - not needed on FPC and Delphi 2010+ since "array of TSomeClass" will be
-    // recognized directly - you may use HASDYNARRAYTYPE conditional
     // - could be used as such (note the T*ObjArray type naming convention):
     // ! TUserObjArray = array of TUser;
     // ! ...
@@ -2253,7 +2253,7 @@ type
     /// register one or several dynamic array RTTI TypeInfo() to be serialized
     // as T*ObjArray
     // - not needed on FPC and Delphi 2010+ since "array of TSomeClass" will be
-    // recognized directly - you may use HASDYNARRAYTYPE conditional
+    // recognized directly - see HASDYNARRAYTYPE conditional
     // - will call the RegisterObjArray() class method by pair:
     // ! Rtti.RegisterObjArrays([
     // !   TypeInfo(TAddressObjArray), TAddress,
@@ -2273,7 +2273,7 @@ type
     // !   end;
     // ! end;
     // - call this method with RttiDefinition='' to return back to the default
-    // binary + Base64 encoding serialization (i.e. undefine custom serializer)
+    // serialization, i.e. binary + Base64 or Delphi 2010+ extended RTTI
     // - RTTI textual information shall be supplied as text, with the
     // same format as any pascal record:
     // ! 'A,B,C: integer; D: RawUTF8; E: record E1,E2: double;'
@@ -2308,11 +2308,11 @@ type
     // ! Rtti[TypeInfo(TMyClass)].Props.NameChange('old', 'new')
     property ByTypeInfo[P: PRttiInfo]: TRttiCustom
       read RegisterType; default;
-      /// default property to access a given RTTI customization of a class
-      // - you can access or register one type by using this default property:
-      // ! Rtti.ByClass[TMyClass].Props.NameChanges(['old', 'new'])
-      property ByClass[C: TClass]: TRttiCustom
-        read RegisterClass;
+    /// default property to access a given RTTI customization of a class
+    // - you can access or register one type by using this default property:
+    // ! Rtti.ByClass[TMyClass].Props.NameChanges(['old', 'new'])
+    property ByClass[C: TClass]: TRttiCustom
+      read RegisterClass;
   end;
 
 
@@ -2860,7 +2860,7 @@ begin
     rkVariant:
       result := SizeOf(variant);
     rkArray:
-      result := ArrayItemSize;
+      result := ArraySize;
     rkRecord {$ifdef FPC}, rkObject {$endif} :
       result := RecordSize;
     rkSString:
@@ -2985,7 +2985,11 @@ begin
     rkArray:
       begin
         Cache.ItemInfo := ArrayItemType(cnt, siz);
-        Cache.ItemSize := siz;
+        if (cnt = 0) or
+           (siz mod cnt <> 0) then
+          raise ERttiException.CreateUTF8('ComputeCache(%): array siz=% cnt=%',
+            [RawName, siz, cnt]);
+        Cache.ItemSize := siz div cnt;
         Cache.ItemCount := cnt;
       end;
     rkLString:
@@ -6314,7 +6318,7 @@ begin
           item := aInfo^.DynArrayItemTypeAny; // FPC or Delphi 2010+
           if item = nil then
           begin
-            // on oldest Delphi, recognize at least the most common types
+            // on Delphi 7-2009, recognize at least the most common types
             pt := DynArrayTypeInfoToStandardParserType(aInfo, nil,
               fCache.ItemSize, {exacttype=}true, dummy, @pct);
             item := ParserTypeToTypeInfo(pt, pct);
@@ -7157,7 +7161,9 @@ begin
       raise ERttiException.CreateUTF8('Rtti.RegisterFromText(%): text ' +
         'definition  covers % bytes, but RTTI defined %',
         [DynArrayOrRecord^.RawName, result.Props.Size, result.Size]);
-  end;
+  end
+  else if result.Kind in rkRecordTypes then
+    result.Props.SetFromRecordExtendedRtti(result.Info); // only for Delphi 2010+
   result.SetParserType(result.Parser, result.ParserComplex);
 end;
 

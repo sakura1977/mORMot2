@@ -209,6 +209,7 @@ type
     procedure InternalSetTableFromTableIndex(Index: integer); virtual;
     procedure InternalSetTableFromTableName(TableName: PUTF8Char); virtual;
     procedure InternalExecuteSOAByInterface; virtual;
+    function IsRemoteIPBanned: boolean;
     /// retrieve RESTful URI routing
     // - should set URI, Table,TableIndex,TableRecordProps,TableEngine,
     // ID, URIBlobFieldName and Parameters members
@@ -2750,18 +2751,22 @@ var // as set by TRestServer.AdministrationExecute()
 function TRestServerURIContext.Authenticate: boolean;
 var
   aSession: TAuthSession;
-  i: PtrInt;
+  a: ^TRestServerAuthentication;
+  n: integer;
 begin
-  if Server.fHandleAuthentication and not IsRemoteAdministrationExecute then
+  if Server.fHandleAuthentication and
+     not IsRemoteAdministrationExecute then
   begin
     Session := CONST_AUTHENTICATION_SESSION_NOT_STARTED;
     result := false;
     Server.fSessions.Safe.Lock;
     try
-      if Server.fSessionAuthentication <> nil then
-        for i := 0 to length(Server.fSessionAuthentication) - 1 do
-        begin
-          aSession := Server.fSessionAuthentication[i].RetrieveSession(self);
+      a := pointer(Server.fSessionAuthentication);
+      if a <> nil then
+      begin
+        n := PDALen(PAnsiChar(a) - _DALEN)^ + _DAOFF;
+        repeat
+          aSession := a^.RetrieveSession(self);
           if aSession <> nil then
           begin
             if (aSession.RemoteIP <> '') and
@@ -2771,7 +2776,10 @@ begin
             result := true;
             exit;
           end;
-        end;
+          inc(a);
+          dec(n);
+        until n = 0;
+      end;
     finally
       Server.fSessions.Safe.UnLock;
     end;
@@ -2952,7 +2960,8 @@ procedure StatsAddSizeForCall(Stats: TSynMonitorInputOutput;
 begin
   Stats.AddSize( // rough estimation
     length(Call.Url) + length(Call.Method) + length(Call.InHead) +
-    length(Call.InBody) + 12, length(Call.OutHead) + length(Call.OutBody) + 16);
+      length(Call.InBody) + 12,
+    length(Call.OutHead) + length(Call.OutBody) + 16);
 end;
 
 procedure TRestServerURIContext.StatsFromContext(Stats: TSynMonitorInputOutput;
@@ -3919,7 +3928,11 @@ begin
       break;
     inc(n, 2);
   until P^ = #0;
-  SetLength(fInput, n);
+  if n = 0 then
+    fInput := nil
+  else
+    // don't call SetLength() for a temporary variable, just fake its length
+    PDALen(PAnsiChar(fInput) - _DALEN)^ := n - _DAOFF;
   if LogInputIdent <> '' then
     Log.Add.Log(sllDebug, LogInputIdent, TypeInfo(TRawUTF8DynArray), fInput, self);
 end;
@@ -4225,7 +4238,7 @@ begin
       break;
     SetLength(fInputCookies, n + 1);
     fInputCookies[n].Name := cn;
-    fInputCookies[n].value := cv;
+    fInputCookies[n].Value := cv;
     inc(n);
     if n > COOKIE_MAXCOUNT_DOSATTACK then
       raise EParsingException.CreateUTF8(
@@ -4247,12 +4260,12 @@ begin
   for i := 0 to n - 1 do
     if fInputCookies[i].Name = CookieName then
     begin // cookies are case-sensitive
-      fInputCookies[i].value := CookieValue; // in-place update
+      fInputCookies[i].Value := CookieValue; // in-place update
       exit;
     end;
   SetLength(fInputCookies, n + 1);
   fInputCookies[n].Name := CookieName;
-  fInputCookies[n].value := CookieValue;
+  fInputCookies[n].Value := CookieValue;
 end;
 
 function TRestServerURIContext.GetInCookie(CookieName: RawUTF8): RawUTF8;
@@ -4270,7 +4283,7 @@ begin
     if fInputCookies[i].Name = CookieName then
     begin
       // cookies are case-sensitive
-      result := fInputCookies[i].value;
+      result := fInputCookies[i].Value;
       exit;
     end;
 end;
@@ -4303,6 +4316,17 @@ end;
 function TRestServerURIContext.GetRemoteIP: RawUTF8;
 begin
   result := Call^.HeaderOnce(fRemoteIP, HEADER_REMOTEIP_UPPER);
+end;
+
+function TRestServerURIContext.IsRemoteIPBanned: boolean;
+begin
+  if Server.fIPBan.Exists(GetRemoteIP) then
+  begin
+    Error('Banned IP %', [fRemoteIP]);
+    result := true;
+  end
+  else
+    result := true;
 end;
 
 function TRestServerURIContext.GetRemoteIPNotLocal: RawUTF8;
@@ -5301,7 +5325,8 @@ begin
     else
     begin
       Ctxt.Log.Log(sllUserAuth, 'Invalid Signature: expected %, got %',
-        [Int64(aExpectedSignature), Int64(aSignature)], self);
+        [CardinalToHexShort(aExpectedSignature),
+         CardinalToHexShort(aSignature)], self);
     end;
   end
   else
@@ -7184,10 +7209,8 @@ begin
       Ctxt.Error('Server is shutting down', HTTP_UNAVAILABLE)
     else if Ctxt.Method = mNone then
       Ctxt.Error('Unknown Verb %', [Call.Method])
-    else if (fIPBan <> nil) and
-            fIPBan.Exists(Ctxt.RemoteIP) then
-      Ctxt.Error('Banned IP %', [Ctxt.fRemoteIP])
-    else
+    else if (fIPBan = nil) or
+            not Ctxt.IsRemoteIPBanned then
     // 1. decode URI
     if not Ctxt.URIDecodeREST then
       Ctxt.Error('Invalid Root', HTTP_NOTFOUND)
@@ -7323,10 +7346,10 @@ begin
     if fStatUsage <> nil then
       fStatUsage.Modified(fStats, []);
     if Assigned(OnAfterURI) then
-    try
-      OnAfterURI(Ctxt);
-    except
-    end;
+      try
+        OnAfterURI(Ctxt);
+      except
+      end;
     Ctxt.Free;
   end;
   if Assigned(OnIdle) then

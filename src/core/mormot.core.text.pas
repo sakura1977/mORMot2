@@ -1119,7 +1119,7 @@ type
     procedure WriteObject(Value: TObject;
       WriteOptions: TTextWriterWriteObjectOptions = [woDontStoreDefault]); virtual;
     /// append a T*ObjArray dynamic array as a JSON array
-    // - as expected by Rtti.RegisterObjArray()
+    // - for proper serialization on Delphi 7-2009, use Rtti.RegisterObjArray()
     procedure AddObjArrayJSON(const aObjArray;
       aOptions: TTextWriterWriteObjectOptions = [woDontStoreDefault]);
     /// return the last char appended
@@ -3174,9 +3174,9 @@ begin
     while P^ in [#9, ' '] do // trim left
       inc(P);
     L := 0;
-    while P[L] > #13 do // end of line/value
+    while P[L] > #13 do      // end of line/value
       inc(L);
-    while P[L - 1] = ' ' do // trim right
+    while P[L - 1] = ' ' do  // trim right
       dec(L);
     FastSetString(Value, P, L);
     result := true;
