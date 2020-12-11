@@ -198,7 +198,7 @@ const
   BSON_DECIMAL128_HI_NAN = $7c00000000000000;
   BSON_DECIMAL128_HI_INT64POS = $3040000000000000; // 0 fixed decimals
   BSON_DECIMAL128_HI_INT64NEG = $b040000000000000;
-  BSON_DECIMAL128_HI_CURRPOS = $3038000000000000; // 4 fixed decimals
+  BSON_DECIMAL128_HI_CURRPOS = $3038000000000000;  // 4 fixed decimals
   BSON_DECIMAL128_HI_CURRNEG = $b038000000000000;
   BSON_DECIMAL128_EXPONENT_MAX = 6111;
   BSON_DECIMAL128_EXPONENT_MIN = -6176;
@@ -1371,20 +1371,26 @@ end;
 
 function div128bits9digits(var value: THash128Rec): PtrUInt;
 var
-  r64: QWord;
-  i: PtrInt;
+  r, t: QWord;
+  i: PtrUInt;
 begin
-  r64 := 0;
+  r := 0;
   for i := 0 to high(value.c) do
   begin
-    r64 := r64 shl 32;   // adjust remainder to match value of next dividend
-    inc(r64, value.c[i]); // add the divided to _rem
-    if r64 = 0 then
+    {$ifdef CPU32} // circumvent bug at least with FPC 3.2
+    Int64Rec(r).Hi := Int64Rec(r).Lo;
+    Int64Rec(r).Lo := 0;
+    {$else}
+    r := r shl 32;    // adjust remainder to match value of next dividend
+    {$endif CPU32}
+    inc(r, value.c[i]); // add the divided to _rem
+    if r = 0 then
       continue;
-    value.c[i] := r64 div 1000000000;
-    dec(r64, QWord(value.c[i]) * 1000000000);
+    t := r div 1000000000;
+    value.c[i] := t;
+    dec(r, t * 1000000000);
   end;
-  result := r64;
+  result := r;
 end;
 
 procedure append(var dest: PUTF8Char; var dig: PByte; digits: PtrInt);
@@ -1457,14 +1463,16 @@ begin
   _128.c[3] := Bits.c[0];
   FillCharFast(digbuffer, sizeof(digbuffer), 0);
   dig := @digbuffer;
-  if ((_128.lo = 0) and (_128.hi = 0)) or
+  if ((_128.lo = 0) and
+      (_128.hi = 0)) or
      (_128.c[0] >= 1 shl 17) then
     signdig := 1 // non-canonical or zero -> 0
   else
   begin
     for k := 3 downto 0 do
     begin
-      if (_128.lo = 0) and (_128.hi = 0) then
+      if (_128.lo = 0) and
+         (_128.hi = 0) then
         break;
       leastdig := div128bits9digits(_128);
       if leastdig = 0 then
@@ -1712,8 +1720,8 @@ begin
     diglast := digstored - 1;
     signdig := digcount;
     // handle trailing zeros as non-significant
-    while text[firstnon0 + signdig - 1 + ord(radix in flags) + ord(signed in
-      flags)] = '0' do
+    while text[firstnon0 + signdig - 1 +
+               ord(radix in flags) + ord(signed in flags)] = '0' do
       dec(signdig);
   end;
   if (exp <= radixpos) and
@@ -1764,7 +1772,8 @@ begin
       exit;
   end;
   if diglast - digfirst + 1 < signdig then
-    if text[firstnon0 + diglast + ord(signed in flags) + ord(radix in flags)] <> '0' then
+    if text[firstnon0 + diglast +
+            ord(signed in flags) + ord(radix in flags)] <> '0' then
       exit; // inexact rouding
   signhi := 0;
   signlo := 0;
