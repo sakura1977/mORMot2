@@ -539,7 +539,7 @@ type
     function GetServerTimestamp: TTimeLog; virtual;
 
     /// main access to the IRestOrm methods of this instance
-    property ORM: IRestOrm
+    property Orm: IRestOrm
       read fOrm;
     /// low-level access to the associated Data Model
     property Model: TOrmModel
@@ -880,14 +880,6 @@ const
 { ************ RESTful Authentication Support }
 
 const
-  /// the used TAuthSession.IDCardinal value if the session not started yet
-  // - i.e. if the session handling is still in its handshaking phase
-  CONST_AUTHENTICATION_SESSION_NOT_STARTED = 0;
-
-  /// the used TAuthSession.IDCardinal value if authentication mode is not set
-  // - i.e. if TRest.HandleAuthentication equals FALSE
-  CONST_AUTHENTICATION_NOT_USED = 1;
-
   /// default hashed password set by TAuthGroup.InitializeTable for all users
   // - contains TAuthUser.ComputeHashedPassword('synopse')
   // - override AuthAdminDefaultPassword, AuthSupervisorDefaultPassword and
@@ -1179,6 +1171,16 @@ type
   /// used to map set of parameters for a Client or Server method call
   PRestURIParams = ^TRestURIParams;
 
+  /// how a TLibraryRequest function will release its Head and Resp returned values
+  TLibraryRequestFree = procedure(Data: pointer); cdecl;
+
+  /// the function signature of the LibraryRequest() function
+  // - as exported by TRestServer.ExportServerGlobalLibraryRequest
+  // - and as consummed by TRestClientLibraryRequest on client side
+  TLibraryRequest = function(
+    Url, Method, SendData: PUTF8Char; UrlLen, MethodLen, SendDataLen: cardinal;
+    out HeadRespFree: TLibraryRequestFree; var Head: PUTF8Char; var HeadLen: cardinal;
+    out Resp: PUTF8Char; out RespLen, State: cardinal): cardinal; cdecl;
 
 {$ifndef PUREMORMOT2}
 // backward compatibility types redirections
@@ -1831,12 +1833,14 @@ procedure TRest.SetOrmInstance(aORM: TInterfacedObject);
 begin
   if fOrmInstance <> nil then
     raise ERestException.CreateUTF8('%.SetOrmInstance twice', [self]);
-  if aORM = nil then
-    raise ERestException.CreateUTF8('%.SetOrmInstance(nil)', [self]);
+  if (aORM = nil) or
+     not aORM.GetInterface(IRestOrm, fOrm) then
+    raise ERestException.CreateUTF8(
+      '%.SetOrmInstance(%) is not an IRestOrm', [self, aORM]);
   fOrmInstance := aORM;
   if not fOrmInstance.GetInterface(IRestOrm, fOrm) then
-    raise ERestException.CreateUTF8('%.Create with invalid %',
-      [self, fOrmInstance]);
+    raise ERestException.CreateUTF8(
+      '%.Create with invalid %', [self, fOrmInstance]);
 end;
 
 destructor TRest.Destroy;

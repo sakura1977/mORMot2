@@ -1827,6 +1827,7 @@ type
     fOnIdleLastTix: cardinal;
     fServicesRouting: TRestServerURIContextClass;
     fRecordVersionSlaveCallbacks: array of IServiceRecordVersionCallback;
+    fServer: IRestOrmServer;
     procedure SetNoAJAXJSON(const Value: boolean);
     function GetNoAJAXJSON: boolean;
       {$ifdef HASINLINE}inline;{$endif}
@@ -1964,6 +1965,8 @@ type
     constructor CreateWithOwnModel(const Tables: array of TOrmClass;
       aHandleUserAuthentication: boolean = false;
       const aRoot: RawUTF8 = 'root');
+    /// called by TRestOrm.Create overriden constructor to set fOrm from IRestOrm
+    procedure SetOrmInstance(aORM: TInterfacedObject); override;
 
     /// implement a generic local, piped or HTTP/1.1 provider
     // - this is the main entry point of the server, from the client side
@@ -2277,6 +2280,15 @@ type
     function RecordVersionSynchronizeSubscribeMaster(Table: TOrmClass;
       RecordVersion: TRecordVersion;
       const SlaveCallback: IServiceRecordVersionCallback): boolean; overload;
+    /// grant access to this database content from a dll using the global
+    // LibraryRequest() function
+    // - returns true if the LibraryRequest() function is set to this TRestServer
+    // - returns false if a TRestServer was already exported
+    function ExportServerGlobalLibraryRequest: boolean;
+
+    /// main access to the IRestOrmServer methods of this instance
+    property Server: IRestOrmServer
+      read fServer;
     /// set this property to true to transmit the JSON data in a "not expanded" format
     // - not directly compatible with Javascript object list decode: not to be
     // used in AJAX environnement (like in TSQLite3HttpServer)
@@ -2487,6 +2499,19 @@ function ServiceRunningContext: PServiceRunningContext;
 // - this function is very fast, even if cryptographically-level SHA-3 secure
 function CurrentServerNonce(Previous: boolean = false): RawUTF8;
 
+/// this function can be exported from a DLL to remotely access to a TRestServer
+// - use TRestServer.ExportServerGlobalLibraryRequest to assign a server to this function
+// - return the HTTP status, e.g. 501 HTTP_NOTIMPLEMENTED if no
+// TRestServer.ExportServerGlobalLibraryRequest has been assigned yet
+// - once used, memory for Resp and Head should be released with
+// LibraryRequestFree() returned function
+// - the Server current Internal State counter will be set to State
+// - simply use TRestClientLibraryRequest to access to an exported LibraryRequest() function
+// - match TLibraryRequest function signature
+function LibraryRequest(
+  Url, Method, SendData: PUTF8Char; UrlLen, MethodLen, SendDataLen: cardinal;
+  out HeadRespFree: TLibraryRequestFree; var Head: PUTF8Char; var HeadLen: cardinal;
+  out Resp: PUTF8Char; out RespLen, State: cardinal): cardinal; cdecl;
 
 
 { ************ TRestHttpServerDefinition Settings for a HTTP Server }
@@ -3488,8 +3513,8 @@ begin
                   if StaticOrm <> nil then
                     Call.OutBody := StaticOrm.EngineRetrieve(TableIndex, TableID)
                   else
-                    Call.OutBody := TRestOrmServer(Server.fOrmInstance).MainEngineRetrieve
-                      (TableIndex, TableID);
+                    Call.OutBody := TRestOrmServer(Server.fOrmInstance).
+                      MainEngineRetrieve(TableIndex, TableID);
                   // cache if expected
                   if cache <> nil then
                     if Call.OutBody = '' then
@@ -3576,9 +3601,9 @@ begin
                       // if ORDER BY already in the SQLWhere clause
                       SetLength(SQLWhereCount, i - 1);
                   end;
-                  ResultList := TRestOrmServer(Server.fOrmInstance).ExecuteList([Table],
-                    Server.fModel.TableProps[TableIndex].SQLFromSelectWhere('Count(*)',
-                    SQLWhereCount));
+                  ResultList := TRestOrmServer(Server.fOrmInstance).
+                    ExecuteList([Table], Server.fModel.TableProps[TableIndex].
+                      SQLFromSelectWhere('Count(*)', SQLWhereCount));
                   if ResultList <> nil then
                   try
                     SQLTotalRowsCount := ResultList.GetAsInteger(1, 0);
@@ -3710,7 +3735,7 @@ begin
     Call.OutStatus := HTTP_FORBIDDEN;
     exit;
   end;
-  orm := Server.fOrmInstance as TRestOrmServer;
+  orm := TRestOrmServer(Server.fOrmInstance);
   case Method of
     mPOST:
       // POST=ADD=INSERT
@@ -5386,6 +5411,7 @@ begin
 end;
 
 
+
 { TRestServerAuthenticationDefault }
 
 function TRestServerAuthenticationDefault.Auth(Ctxt: TRestServerURIContext): boolean;
@@ -6110,6 +6136,14 @@ begin
   Model := TOrmModel.Create(Tables, aRoot);
   Create(Model, aHandleUserAuthentication);
   Model.Owner := self;
+end;
+
+procedure TRestServer.SetOrmInstance(aORM: TInterfacedObject);
+begin
+  inherited SetOrmInstance(aORM);
+  if not aORM.GetInterface(IRestOrmServer, fServer) then
+    raise ERestException.CreateUTF8(
+      '%.SetOrmInstance(%) is not an IRestOrmServer', [self, aORM]);
 end;
 
 function TRestServer.OrmInstance: TRestOrm;
@@ -7502,6 +7536,99 @@ begin
     end;
   Ctxt.Call.OutBody := '["OK"]';  // to save bandwith if no adding
 end;
+
+var
+  GlobalLibraryRequestServer: TRestServer = nil;
+
+function TRestServer.ExportServerGlobalLibraryRequest: boolean;
+begin
+  {$ifdef MSWINDOWS2}
+  if (fServerWindow <> 0) or
+     (fExportServerNamedPipeThread <> nil) then
+    // another named pipe server was running
+    result := false
+  else
+  {$endif MSWINDOWS}
+    if (GlobalLibraryRequestServer = nil) or
+       (GlobalLibraryRequestServer = self) then
+    begin
+      GlobalLibraryRequestServer := self;
+      result := true;
+    end
+    else
+      // another server was running
+      result := false;
+end;
+
+procedure LibraryRequestFree(Data: pointer);
+begin
+  if Data <> nil then
+    RawUTF8(Data) := '';
+end;
+
+procedure LibraryRequestString(var s: RawUTF8; p: PUTF8Char; l: PtrInt);
+begin
+  if p <> nil then
+  try
+    with PStrRec(p - SizeOf(TStrRec))^ do
+      if (refCnt > 0) and
+         {$ifdef HASCODEPAGE}
+         (elemSize = 1) and
+         ((codepage = CP_UTF8) or
+          (codepage = CP_RAWBYTESTRING)) and
+         {$endif HASCODEPAGE}
+         (length = l) then
+      begin
+        // no memory allocation if comes from pascal code -> byref assignment
+        inc(refCnt);
+        pointer(s) := p;
+        exit;
+      end
+  except
+  end;
+  // standard allocation
+  FastSetString(s, p, l);
+end;
+
+function LibraryRequest(
+  Url, Method, SendData: PUTF8Char; UrlLen, MethodLen, SendDataLen: cardinal;
+  out HeadRespFree: TLibraryRequestFree; var Head: PUTF8Char; var HeadLen: cardinal;
+  out Resp: PUTF8Char; out RespLen, State: cardinal): cardinal; cdecl;
+var
+  call: TRestURIParams;
+  h: RawUTF8;
+begin
+  if GlobalLibraryRequestServer = nil then
+  begin
+    result := HTTP_NOTIMPLEMENTED; // 501
+    exit;
+  end;
+  HeadRespFree := @LibraryRequestFree;
+  call.Init;
+  LibraryRequestString(call.Url, Url, UrlLen);
+  LibraryRequestString(call.Method, Method, MethodLen);
+  call.LowLevelConnectionID := PtrInt(GlobalLibraryRequestServer);
+  call.LowLevelFlags := [llfSecured]; // in-process communication is safe
+  call.InHead := 'RemoteIP: 127.0.0.1';
+  if (Head <> nil) and
+     (HeadLen <> 0) then
+  begin
+    LibraryRequestString(h, Head, HeadLen);
+    call.InHead := h + call.InHead + #13#10;
+  end;
+  LibraryRequestString(call.InBody, SendData, SendDataLen);
+  call.RestAccessRights := @SUPERVISOR_ACCESS_RIGHTS;
+  GlobalLibraryRequestServer.URI(call);
+  result := call.OutStatus;
+  State := call.OutInternalState;
+  Head := pointer(call.OutHead);
+  HeadLen := length(call.OutHead);
+  Resp := pointer(call.OutBody);
+  RespLen := length(call.OutBody);
+  pointer(call.OutHead) := nil; // will be released by HeadRespFree()
+  pointer(call.OutBody) := nil;
+end;
+
 
 
 initialization
