@@ -30,6 +30,7 @@ uses
   mormot.core.os,
   mormot.core.unicode,
   mormot.core.text,
+  mormot.core.buffers,
   mormot.core.variants,
   mormot.core.data,
   mormot.core.rtti,
@@ -44,12 +45,12 @@ uses
 type
   /// handled kind of parameters for an interface-based service provider method
   // - we do not handle all kind of variables, but provide some enhanced types
-  // handled by JSONToObject/ObjectToJSON functions (smvObject) or
-  // TDynArray.LoadFromJSON / TTextWriter.AddDynArrayJSON methods (smvDynArray)
+  // handled by JsonToObject/ObjectToJson functions (smvObject) or
+  // TDynArray.LoadFromJson / TTextWriter.AddDynArrayJson methods (smvDynArray)
   // - records will be serialized as Base64 string, with our RecordSave/RecordLoad
   // low-level format by default, or as true JSON objects since Delphi 2010 or
-  // after registration via a TTextWriter.RegisterCustomJSONSerializer call
-  // - smvRawJSON will transmit the raw JSON content, without serialization
+  // after registration via a TTextWriter.RegisterCustomJsonSerializer call
+  // - smvRawJson will transmit the raw JSON content, without serialization
   TInterfaceMethodValueType = (
     imvNone,
     imvSelf,
@@ -62,7 +63,7 @@ type
     imvDouble,
     imvDateTime,
     imvCurrency,
-    imvRawUTF8,
+    imvRawUtf8,
     imvString,
     imvRawByteString,
     imvWideString,
@@ -70,7 +71,7 @@ type
     imvRecord,
     imvVariant,
     imvObject,
-    imvRawJSON,
+    imvRawJson,
     imvDynArray,
     imvInterface);
 
@@ -82,7 +83,7 @@ type
     imvvNone,
     imvvSelf,
     imvv64,
-    imvvRawUTF8,
+    imvvRawUtf8,
     imvvString,
     imvvWideString,
     imvvRecord,
@@ -108,9 +109,9 @@ type
   TInterfaceMethodValueDirections = set of TInterfaceMethodValueDirection;
 
   /// set of low-level processing options at assembly level
-  // - vIsString is included for imvRawUTF8, imvString, imvRawByteString and
+  // - vIsString is included for imvRawUtf8, imvString, imvRawByteString and
   // imvWideString kind of parameter (imvRecord has it to false, even if they
-  // are Base-64 encoded within the JSON content, and also imvVariant/imvRawJSON)
+  // are Base-64 encoded within the JSON content, and also imvVariant/imvRawJson)
   // - vPassedByReference is included if the parameter is passed as reference
   // (i.e. defined as var/out, or is a record or a reference-counted type result)
   // - vIsObjArray is set if the dynamic array is a T*ObjArray, so should be
@@ -190,23 +191,23 @@ type
     /// check if the supplied argument value is the default (e.g. 0, '' or null)
     function IsDefault(V: pointer): boolean;
     /// unserialize a JSON value into this argument
-    function FromJSON(const MethodName: RawUTF8; var R: PUTF8Char; V: pointer;
+    function FromJson(const MethodName: RawUtf8; var R: PUtf8Char; V: pointer;
       Error: PShortString; DVO: TDocVariantOptions): boolean;
     /// append the JSON value corresponding to this argument
     // - includes a pending ','
-    procedure AddJSON(WR: TTextWriter; V: pointer;
+    procedure AddJson(WR: TTextWriter; V: pointer;
       ObjectOptions: TTextWriterWriteObjectOptions = [woDontStoreDefault]);
     /// append the value corresponding to this argument as within a JSON string
     // - will escape any JSON string character, and include a pending ','
-    procedure AddJSONEscaped(WR: TTextWriter; V: pointer);
+    procedure AddJsonEscaped(WR: TTextWriter; V: pointer);
     /// append the JSON value corresponding to this argument, from its text value
     // - includes a pending ','
-    procedure AddValueJSON(WR: TTextWriter; const Value: RawUTF8);
+    procedure AddValueJson(WR: TTextWriter; const Value: RawUtf8);
     /// append the default JSON value corresponding to this argument
     // - includes a pending ','
-    procedure AddDefaultJSON(WR: TTextWriter);
+    procedure AddDefaultJson(WR: TTextWriter);
     /// convert a value into its JSON representation
-    procedure AsJson(var DestValue: RawUTF8; V: pointer);
+    procedure AsJson(var DestValue: RawUtf8; V: pointer);
     /// convert a value into its variant representation
     // - complex objects will be converted into a TDocVariant, after JSON
     // serialization: variant conversion options may e.g. be retrieve from
@@ -238,7 +239,7 @@ type
   // callback parameter
   // - implementation should set the Obj local variable to an instance of
   // a fake class implementing the aParamInfo interface
-  TOnInterfaceMethodExecuteCallback = procedure(var Par: PUTF8Char;
+  TOnInterfaceMethodExecuteCallback = procedure(var Par: PUtf8Char;
     ParamInterfaceInfo: TRttiJson; out Obj) of object;
 
   /// how TInterfaceMethod.TInterfaceMethod method will return the generated document
@@ -261,18 +262,18 @@ type
     /// the method URI, i.e. the method name
     // - as declared in object pascal code, e.g. 'Add' for ICalculator.Add
     // - this property value is hashed internaly for faster access
-    URI: RawUTF8;
+    Uri: RawUtf8;
     /// the method default result, formatted as a JSON array
     // - example of content may be '[]' for a procedure or '[0]' for a function
     // - any var/out and potential function result will be set as a JSON array
     // of values, with 0 for numerical values, "" for textual values,
     // false for booleans, [] for dynamic arrays, a void record serialized
     // as expected (including customized serialization) and null for objects
-    DefaultResult: RawUTF8;
+    DefaultResult: RawUtf8;
     /// the fully qualified dotted method name, including the interface name
     // - as used by TServiceContainerInterfaceMethod.InterfaceDotMethodName
     // - match the URI fullpath name, e.g. 'Calculator.Add'
-    InterfaceDotMethodName: RawUTF8;
+    InterfaceDotMethodName: RawUtf8;
     /// method index in the original (non emulated) interface
     // - our custom methods start at index 3 (RESERVED_VTABLE_SLOTS), since
     // QueryInterface, _AddRef, and _Release are always defined by default
@@ -313,7 +314,7 @@ type
     // - that is, a custom Header+Content BLOB transfert, not a JSON object
     ArgsResultIsServiceCustomAnswer: boolean;
     /// true if there is a single input parameter as RawByteString/RawBlob
-    // - TRestRoutingREST.ExecuteSOAByInterface will identify binary input
+    // - TRestRoutingRest.ExecuteSoaByInterface will identify binary input
     // with mime-type 'application/octet-stream' as expected
     ArgsInputIsOctetStream: boolean;
     /// the index of the first argument expecting manual stack initialization
@@ -336,7 +337,7 @@ type
     // - if Input is TRUE, will search within const / var arguments
     // - if Input is FALSE, will search within var / out / result arguments
     // - returns -1 if not found
-    function ArgIndex(ArgName: PUTF8Char; ArgNameLen: integer; Input: boolean): integer;
+    function ArgIndex(ArgName: PUtf8Char; ArgNameLen: integer; Input: boolean): integer;
     /// find the next argument index in Args[]
     // - if Input is TRUE, will search within const / var arguments
     // - if Input is FALSE, will search within var / out / result arguments
@@ -345,19 +346,19 @@ type
     /// convert parameters encoded as a JSON array into a JSON object
     // - if Input is TRUE, will handle const / var arguments
     // - if Input is FALSE, will handle var / out / result arguments
-    function ArgsArrayToObject(P: PUTF8Char; Input: boolean): RawUTF8;
+    function ArgsArrayToObject(P: PUtf8Char; Input: boolean): RawUtf8;
     /// convert parameters encoded as name=value or name='"value"' or name='{somejson}'
     // into a JSON object
     // - on Windows, use double-quotes ("") anywhere you expect single-quotes (")
     // - as expected e.g. from a command line tool
     // - if Input is TRUE, will handle const / var arguments
     // - if Input is FALSE, will handle var / out / result arguments
-    function ArgsCommandLineToObject(P: PUTF8Char; Input: boolean;
-      RaiseExceptionOnUnknownParam: boolean = false): RawUTF8;
+    function ArgsCommandLineToObject(P: PUtf8Char; Input: boolean;
+      RaiseExceptionOnUnknownParam: boolean = false): RawUtf8;
     /// returns a dynamic array list of all parameter names
     // - if Input is TRUE, will handle const / var arguments
     // - if Input is FALSE, will handle var / out / result arguments
-    function ArgsNames(Input: boolean): TRawUTF8DynArray;
+    function ArgsNames(Input: boolean): TRawUtf8DynArray;
     /// computes a TDocVariant containing the input or output arguments values
     // - Values[] should contain the input/output raw values as variant
     // - Kind will specify the expected returned document layout
@@ -423,7 +424,7 @@ const
   smvDouble        = imvDouble;
   smvDateTime      = imvDateTime;
   smvCurrency      = imvCurrency;
-  smvRawUTF8       = imvRawUTF8;
+  smvRawUtf8       = imvRawUtf8;
   smvString        = imvString;
   smvRawByteString = imvRawByteString;
   smvWideString    = imvWideString;
@@ -431,14 +432,14 @@ const
   smvRecord        = imvRecord;
   smvVariant       = imvVariant;
   smvObject        = imvObject;
-  smvRawJSON       = imvRawJSON;
+  smvRawJson       = imvRawJson;
   smvDynArray      = imvDynArray;
   smvInterface     = imvInterface;
   // TServiceMethodValueVar = TInterfaceMethodValueVar items
   smvvNone       = imvvNone;
   smvvSelf       = imvvSelf;
   smvv64         = imvv64;
-  smvvRawUTF8    = imvvRawUTF8;
+  smvvRawUtf8    = imvvRawUtf8;
   smvvString     = imvvString;
   smvvWideString = imvvWideString;
   smvvRecord     = imvvRecord;
@@ -486,8 +487,11 @@ type
 const
   /// URI of some pseudo methods when an interface is used as remote service
   // - match TInterfaceFactory MethodIndex 0..3
-  SERVICE_PSEUDO_METHOD: array[TServiceInternalMethod] of RawUTF8 = (
-    '_free_', '_contract_', '_signature_', '_instance_');
+  SERVICE_PSEUDO_METHOD: array[TServiceInternalMethod] of RawUtf8 = (
+    '_free_',
+    '_contract_',
+    '_signature_',
+    '_instance_');
 
   /// how many pseudo methods are assigned to TInterfaceFactory
   // - equals currently 4
@@ -517,20 +521,20 @@ type
   // and not manual TInterfaceFactory.Create / Free
   // - if you want to search the interfaces by name or TGUID, call once
   // Get(TypeInfo(IMyInterface)) or RegisterInterfaces() for proper registration
-  // - will use TInterfaceFactoryRTTI classes generated from compiler RTTI
+  // - will use TInterfaceFactoryRtti classes generated from compiler RTTI
   TInterfaceFactory = class
   protected
     fInterfaceTypeInfo: PRttiInfo;
     fInterfaceIID: TGUID;
-    fInterfaceRTTI: TRttiJson;
+    fInterfaceRtti: TRttiJson;
     fMethodsCount: cardinal;
     fAddMethodsLevel: integer;
     fMethods: TInterfaceMethodDynArray;
     fMethod: TDynArrayHashed;
     // contains e.g. [{"method":"Add","arguments":[...]},{"method":"...}]
-    fContract: RawUTF8;
-    fInterfaceName: RawUTF8;
-    fInterfaceURI: RawUTF8;
+    fContract: RawUtf8;
+    fInterfaceName: RawUtf8;
+    fInterfaceUri: RawUtf8;
     fDocVariantOptions: TDocVariantOptions;
     fFakeVTable: array of pointer;
     fFakeStub: PByteArray;
@@ -549,29 +553,29 @@ type
     // overloaded Get(TypeInfo(IMyInterface)) method or RegisterInterfaces()
     // - if the supplied TGUID has not been previously registered, returns nil
     {$ifdef FPC_HAS_CONSTREF}
-    class function Get(constref aGUID: TGUID): TInterfaceFactory; overload;
+    class function Get(constref aGuid: TGUID): TInterfaceFactory; overload;
     {$else}
-    class function Get(const aGUID: TGUID): TInterfaceFactory; overload;
+    class function Get(const aGuid: TGUID): TInterfaceFactory; overload;
     {$endif FPC_HAS_CONSTREF}
     /// retrieve an interface factory from cache, from its name (e.g. 'IMyInterface')
     // - access to this method is thread-safe
     // - you shall have registered the interface by a previous call to the
     // overloaded Get(TypeInfo(IMyInterface)) method or RegisterInterfaces()
     // - if the supplied TGUID has not been previously registered, returns nil
-    class function Get(const aInterfaceName: RawUTF8): TInterfaceFactory; overload;
+    class function Get(const aInterfaceName: RawUtf8): TInterfaceFactory; overload;
     /// register one or several interfaces to the global interface factory cache
-    // - so that you can use TInterfaceFactory.Get(aGUID) or Get(aName)
+    // - so that you can use TInterfaceFactory.Get(aGuid) or Get(aName)
     class procedure RegisterInterfaces(const aInterfaces: array of PRttiInfo);
     /// could be used to retrieve an array of TypeInfo() from their GUID
-    class function GUID2TypeInfo(const aGUIDs: array of TGUID): PRttiInfoDynArray; overload;
+    class function Guid2TypeInfo(const aGuids: array of TGUID): PRttiInfoDynArray; overload;
     /// could be used to retrieve an array of TypeInfo() from their GUID
-    class function GUID2TypeInfo(const aGUID: TGUID): PRttiInfo; overload;
+    class function Guid2TypeInfo(const aGuid: TGUID): PRttiInfo; overload;
     /// returns the list of all declared TInterfaceFactory
     // - as used by SOA and mocking/stubing features of this unit
     class function GetUsedInterfaces: TSynObjectListLocked;
     /// add some TInterfaceFactory instances from their GUID
     class procedure AddToObjArray(var Obj: TInterfaceFactoryObjArray;
-      const aGUIDs: array of TGUID);
+      const aGuids: array of TGUID);
     /// register some TypeInfo() containing unsafe parameter values
     // - i.e. any RTTI type containing Sensitive Personal Information, e.g.
     // a bank card number or a plain password
@@ -585,44 +589,44 @@ type
     // - do not call this constructor directly, but TInterfaceFactory.Get()
     constructor Create(aInterface: PRttiInfo);
     /// find the index of a particular method in internal Methods[] list
-    // - will search for a match against Methods[].URI property
+    // - will search for a match against Methods[].Uri property
     // - won't find the default AddRef/Release/QueryInterface methods
     // - will return -1 if the method is not known
     // - if aMethodName does not have an exact method match, it will try with a
     // trailing underscore, so that e.g. /service/start will match IService._Start()
-    function FindMethodIndex(const aMethodName: RawUTF8): integer;
+    function FindMethodIndex(const aMethodName: RawUtf8): integer;
     /// find a particular method in internal Methods[] list
     // - just a wrapper around FindMethodIndex() returing a PInterfaceMethod
     // - will return nil if the method is not known
-    function FindMethod(const aMethodName: RawUTF8): PInterfaceMethod;
+    function FindMethod(const aMethodName: RawUtf8): PInterfaceMethod;
     /// find the index of a particular interface.method in internal Methods[] list
     // - will search for a match against Methods[].InterfaceDotMethodName property
     // - won't find the default AddRef/Release/QueryInterface methods
     // - will return -1 if the method is not known
-    function FindFullMethodIndex(const aFullMethodName: RawUTF8;
+    function FindFullMethodIndex(const aFullMethodName: RawUtf8;
       alsoSearchExactMethodName: boolean = false): integer;
     /// find the index of a particular method in internal Methods[] list
     // - won't find the default AddRef/Release/QueryInterface methods
     // - will raise an EInterfaceFactory if the method is not known
-    function CheckMethodIndex(const aMethodName: RawUTF8): integer; overload;
+    function CheckMethodIndex(const aMethodName: RawUtf8): integer; overload;
     /// find the index of a particular method in internal Methods[] list
     // - won't find the default AddRef/Release/QueryInterface methods
     // - will raise an EInterfaceFactory if the method is not known
-    function CheckMethodIndex(aMethodName: PUTF8Char): integer; overload;
+    function CheckMethodIndex(aMethodName: PUtf8Char): integer; overload;
     /// returns the method name from its method index
     // - the method index should start at 0 for _free_/_contract_/_signature_
     // pseudo-methods, and start at index 3 for real Methods[]
-    function GetMethodName(MethodIndex: integer): RawUTF8;
+    function GetMethodName(MethodIndex: integer): RawUtf8;
     /// set the Methods[] indexes bit from some methods names
     // - won't find the default AddRef/Release/QueryInterface methods
     // - will raise an EInterfaceFactory if the method is not known
-    procedure CheckMethodIndexes(const aMethodName: array of RawUTF8;
+    procedure CheckMethodIndexes(const aMethodName: array of RawUtf8;
       aSetAllIfNone: boolean; out aBits: TInterfaceFactoryMethodBits);
     /// returns the full 'Interface.MethodName' text, from a method index
     // - the method index should start at 0 for _free_/_contract_/_signature_
     // pseudo-methods, and start at index 3 for real Methods[]
     // - will return plain 'Interface' text, if aMethodIndex is incorrect
-    function GetFullMethodName(aMethodIndex: integer): RawUTF8;
+    function GetFullMethodName(aMethodIndex: integer): RawUtf8;
     /// the declared internal methods
     // - list does not contain default AddRef/Release/QueryInterface methods
     // - nor the _free_/_contract_/_signature_ pseudo-methods
@@ -633,7 +637,7 @@ type
     property MethodsCount: cardinal read fMethodsCount;
     /// identifies a CallbackReleased() method in this interface
     // - i.e. the index in Methods[] of the following signature:
-    // ! procedure CallbackReleased(const callback: IInvokable; const interfaceName: RawUTF8);
+    // ! procedure CallbackReleased(const callback: IInvokable; const interfaceName: RawUtf8);
     // - this method will be called e.g. by TInterfacedCallback.Destroy, when
     // a callback is released on the client side so that you may be able e.g. to
     // unsubscribe the callback from an interface list (via InterfaceArrayDelete)
@@ -657,13 +661,13 @@ type
       read fInterfaceIID;
     /// the interface name, without its initial 'I'
     // - e.g. ICalculator -> 'Calculator'
-    property InterfaceURI: RawUTF8
-      read fInterfaceURI write fInterfaceURI;
+    property InterfaceUri: RawUtf8
+      read fInterfaceUri write fInterfaceUri;
     /// the registered Interface high-level compiler RTTI type
-    property InterfaceRTTI: TRttiJson
-      read fInterfaceRTTI;
+    property InterfaceRtti: TRttiJson
+      read fInterfaceRtti;
     /// the service contract as a JSON array
-    property Contract: RawUTF8
+    property Contract: RawUtf8
       read fContract;
     /// how this interface will work with variants (including TDocVariant)
     // - by default, contains JSON_OPTIONS_FAST for best performance - i.e.
@@ -673,7 +677,7 @@ type
   published
     /// will return the interface name, e.g. 'ICalculator'
     // - published property to be serializable as JSON e.g. for debbuging info
-    property InterfaceName: RawUTF8
+    property InterfaceName: RawUtf8
       read fInterfaceName;
   end;
 
@@ -682,7 +686,7 @@ type
   /// class handling interface RTTI and fake implementation class
   // - this class only exists for Delphi 6 and up, and newer FPC, which has
   // the expected RTTI - see http://bugs.freepascal.org/view.php?id=26774
-  TInterfaceFactoryRTTI = class(TInterfaceFactory)
+  TInterfaceFactoryRtti = class(TInterfaceFactory)
   protected
     procedure AddMethodsFromTypeInfo(aInterface: PRttiInfo); override;
   end;
@@ -696,14 +700,14 @@ type
   // AddMethodsFromTypeInfo() to define the interface methods
   TInterfaceFactoryGenerated = class(TInterfaceFactory)
   protected
-    fTempStrings: TRawUTF8DynArray;
+    fTempStrings: TRawUtf8DynArray;
     /// the overriden AddMethodsFromTypeInfo() method will call e.g. as
     // ! AddMethod('Add',[
     // !   0,'n1',TypeInfo(integer),
     // !   0,'n2',TypeInfo(integer),
     // !   3,'result',TypeInfo(integer)]);
     // with 0=ord(imdConst) and 3=ord(imdResult)
-    procedure AddMethod(const aName: RawUTF8; const aParams: array of const); virtual;
+    procedure AddMethod(const aName: RawUtf8; const aParams: array of const); virtual;
   public
     /// register one interface type definition from the current class
     // - will be called by mORMotWrapper.pas generated code, in initialization
@@ -720,12 +724,11 @@ type
   // (via POST), to retrieve some custom content
   TServiceCustomAnswer = record
     /// mandatory response type, as encoded in the HTTP header
-    // - useful to set the response mime-type - see e.g. JSON_CONTENT_TYPE_HEADER_VAR
+    // - set the response mime-type - use e.g. JSON_CONTENT_TYPE_HEADER_VAR
     // TEXT_CONTENT_TYPE_HEADER or BINARY_CONTENT_TYPE_HEADER constants or
     // GetMimeContentType() function
-    // - in order to be handled as expected, this field SHALL be set to NOT ''
-    // (otherwise TServiceCustomAnswer will be transmitted as raw JSON)
-    Header: RawUTF8;
+    // - if this field is not set, then JSON_CONTENT_TYPE_HEADER will be forced
+    Header: RawUtf8;
     /// the response body
     // - corresponding to the response type, as defined in Header
     Content: RawByteString;
@@ -742,7 +745,7 @@ type
 
 /// returns the interface name of a registered GUID, or its hexadecimal value
 function ToText({$IFDEF FPC_HAS_CONSTREF}constref{$ELSE}const{$ENDIF}
-  aGUID: TGUID): TGUIDShortString; overload;
+  aGuid: TGUID): TGuidShortString; overload;
 
 /// low-level function to retrieve the class instance implementing a given interface
 // - this will work with interfaces stubs generated by the compiler, but also
@@ -801,7 +804,7 @@ type
     fImplementationEntry: PInterfaceEntry;
     fImplementation: TRttiCustom;
     function TryResolve(aInterface: PRttiInfo; out Obj): boolean; override;
-    function GetImplementationName: RawUTF8;
+    function GetImplementationName: RawUtf8;
     // main IoC/DI virtual method - call fImplementation.CreateNew by default
     function CreateInstance: TInterfacedObject; virtual;
   public
@@ -819,7 +822,7 @@ type
     function Implements(aInterface: PRttiInfo): boolean; override;
   published
     /// the class name which will implement each repository instance
-    property ImplementationClass: RawUTF8
+    property ImplementationClass: RawUtf8
       read GetImplementationName;
   end;
 
@@ -901,7 +904,7 @@ type
     // ! begin
     // !   if ServiceContainer.Resolve(ICalculator,cal) then
     // !   ... use calc methods
-    function Resolve(const aGUID: TGUID; out Obj): boolean; overload;
+    function Resolve(const aGuid: TGUID; out Obj): boolean; overload;
     /// can be used to perform several DI/IoC for a given set of interfaces
     // - here interfaces and instances are provided as TypeInfo,@Instance pairs
     // - raise an EServiceException if any interface can't be resolved, unless
@@ -975,7 +978,7 @@ type
     /// can be used to perform an DI/IoC for a given interface type information
     procedure Resolve(aInterface: PRttiInfo; out Obj); overload;
     /// can be used to perform an DI/IoC for a given interface TGUID
-    procedure Resolve(const aGUID: TGUID; out Obj); overload;
+    procedure Resolve(const aGuid: TGUID; out Obj); overload;
     /// can be used to perform several DI/IoC for a given set of interfaces
     // - here interfaces and instances are provided as TypeInfo,@Instance pairs
     procedure ResolveByPair(const aInterfaceObjPairs: array of pointer);
@@ -1005,9 +1008,9 @@ type
   EInterfaceStub = class(EInterfaceFactory)
   public
     constructor Create(Sender: TInterfaceStub; const Method: TInterfaceMethod;
-      const Error: RawUTF8); overload;
+      const Error: RawUtf8); overload;
     constructor Create(Sender: TInterfaceStub; const Method: TInterfaceMethod;
-      const Format: RawUTF8; const Args: array of const); overload;
+      const Format: RawUtf8; const Args: array of const); overload;
   end;
 
 
@@ -1016,19 +1019,19 @@ type
   protected
     fSender: TInterfaceStub;
     fMethod: PInterfaceMethod;
-    fParams: RawUTF8;
-    fEventParams: RawUTF8;
-    fResult: RawUTF8;
+    fParams: RawUtf8;
+    fEventParams: RawUtf8;
+    fResult: RawUtf8;
     fFailed: boolean;
     function GetSenderAsMockTestCase: TSynTestCase;
   public
     /// constructor of one parameters marshalling instance
     constructor Create(aSender: TInterfaceStub; aMethod: PInterfaceMethod;
-      const aParams, aEventParams: RawUTF8); virtual;
+      const aParams, aEventParams: RawUtf8); virtual;
     /// call this method if the callback implementation failed
-    procedure Error(const aErrorMessage: RawUTF8); overload;
+    procedure Error(const aErrorMessage: RawUtf8); overload;
     /// call this method if the callback implementation failed
-    procedure Error(const Format: RawUTF8; const Args: array of const); overload;
+    procedure Error(const Format: RawUtf8; const Args: array of const); overload;
     /// the stubbing / mocking generator
     property Sender: TInterfaceStub
       read fSender;
@@ -1041,7 +1044,7 @@ type
     property Method: PInterfaceMethod
       read fMethod;
     /// a custom message, defined at TInterfaceStub.Executes() definition
-    property EventParams: RawUTF8
+    property EventParams: RawUtf8
       read fEventParams;
     /// outgoing values array encoded as JSON
     // - every var, out parameter or the function result shall be encoded as
@@ -1049,7 +1052,7 @@ type
     // method declaration
     // - use Returns() method to create the JSON array directly, from an array
     // of values
-    property result: RawUTF8
+    property result: RawUtf8
       read fResult;
     /// low-level flag, set to TRUE if one of the Error() method was called
     property Failed: boolean
@@ -1059,21 +1062,21 @@ type
   /// parameters used by TInterfaceStub.Executes() events callbacks as Variant
   // - this class will expect input and output parameters to specified as
   // variant arrays properties, so is easier (and a bit slower) than the
-  // TOnInterfaceStubExecuteParamsJSON class
+  // TOnInterfaceStubExecuteParamsJson class
   TOnInterfaceStubExecuteParamsVariant = class(TOnInterfaceStubExecuteParamsAbstract)
   protected
     fInput: TVariantDynArray;
     fOutput: TVariantDynArray;
     function GetInput(Index: integer): variant;
     procedure SetOutput(Index: integer; const Value: variant);
-    function GetInNamed(const aParamName: RawUTF8): variant;
-    procedure SetOutNamed(const aParamName: RawUTF8; const Value: variant);
-    function GetInUTF8(const ParamName: RawUTF8): RawUTF8;
+    function GetInNamed(const aParamName: RawUtf8): variant;
+    procedure SetOutNamed(const aParamName: RawUtf8; const Value: variant);
+    function GetInUtf8(const ParamName: RawUtf8): RawUtf8;
     procedure SetResultFromOutput;
   public
     /// constructor of one parameters marshalling instance
     constructor Create(aSender: TInterfaceStub; aMethod: PInterfaceMethod;
-      const aParams, aEventParams: RawUTF8); override;
+      const aParams, aEventParams: RawUtf8); override;
     /// returns the input parameters as a TDocVariant object or array
     function InputAsDocVariant(Kind: TInterfaceMethodParamsDocVariantKind;
       Options: TDocVariantOptions = [dvoReturnNullForUnknownProperty,
@@ -1131,27 +1134,27 @@ type
     // - using this default Named[] property is recommended over the index-based
     // Output[] property
     // - if an Output[]/Named[] item is not set, a default value will be used
-    property Named[const ParamName: RawUTF8]: variant
+    property Named[const ParamName: RawUtf8]: variant
       read GetInNamed write SetOutNamed; default;
     /// access to UTF-8 input parameters when calling the method
     // - if the supplied name is incorrect, an EInterfaceStub will be raised
     // - is a bit slower than Input[]/Output[] indexed properties, but easier
     // to work with, and safer in case of method signature change (like parameter
     // add or rename)
-    // - slightly easier to use Ctxt.UTF8['str'] than ToUTF8(Ctxt.Named['str'])
-    property UTF8[const ParamName: RawUTF8]: RawUTF8
+    // - slightly easier to use Ctxt.U['str'] than ToUtf8(Ctxt.Named['str'])
+    property U[const ParamName: RawUtf8]: RawUtf8
       read GetInUTF8;
   end;
 
   /// parameters used by TInterfaceStub.Executes() events callbacks as JSON
   // - this class will expect input and output parameters to be encoded as
   // JSON arrays, so is faster than TOnInterfaceStubExecuteParamsVariant
-  TOnInterfaceStubExecuteParamsJSON = class(TOnInterfaceStubExecuteParamsAbstract)
+  TOnInterfaceStubExecuteParamsJson = class(TOnInterfaceStubExecuteParamsAbstract)
   public
     /// a method to return an array of values into result
-    // - just a wrapper around JSONEncodeArrayOfConst([...])
+    // - just a wrapper around JsonEncodeArrayOfConst([...])
     // - can be used as such:
-    // !  procedure TFooTestCase.ExecuteBar(var Ctxt: TOnInterfaceStubExecuteParamsJSON);
+    // !  procedure TFooTestCase.ExecuteBar(var Ctxt: TOnInterfaceStubExecuteParamsJson);
     // !  begin // Ctxt.Params := '[i]' -> Ctxt.result := '[i+1,42]'
     // !    Ctxt.Returns([GetInteger(pointer(Ctxt.Params))+1,42]);
     // !  end;
@@ -1164,11 +1167,11 @@ type
     procedure Returns(const Values: array of const); overload;
     /// a method to return a JSON array of values into result
     // - expected format is e.g. '[43,42]'
-    procedure Returns(const ValuesJsonArray: RawUTF8); overload;
+    procedure Returns(const ValuesJsonArray: RawUtf8); overload;
     /// incoming parameters array encoded as JSON array without braces
     // - order follows the method const and var parameters
     // ! Stub.Add(10,20) -> Params = '10,20';
-    property Params: RawUTF8
+    property Params: RawUtf8
       read fParams;
   end;
 
@@ -1188,15 +1191,15 @@ type
   // !  P := pointer(Ctxt.Params);
   // !  Ctxt.Returns([GetNextItemDouble(P)-GetNextItemDouble(P)]);
   // - you can call Ctxt.Error() to notify the caller for an execution error
-  TOnInterfaceStubExecuteJSON = procedure(
-    Ctxt: TOnInterfaceStubExecuteParamsJSON) of object;
+  TOnInterfaceStubExecuteJson = procedure(
+    Ctxt: TOnInterfaceStubExecuteParamsJson) of object;
 
   /// diverse types of stubbing / mocking rules
   // - isUndefined is the first, since it will be a ExpectsCount() weak rule
   // which may be overwritten by the other real run-time rules
   TInterfaceStubRuleKind = (
     isUndefined,
-    isExecutesJSON,
+    isExecutesJson,
     isExecutesVariant,
     isRaises,
     isReturns,
@@ -1218,7 +1221,7 @@ type
     /// optional expected parameters, serialized as a JSON array
     // - if equals '', the rule is not parametrized - i.e. it will be the
     // default for this method
-    Params: RawUTF8;
+    Params: RawUtf8;
     /// values associated to the rule
     // - for TInterfaceStub.Executes(), is the aEventParams parameter transmitted
     // to Execute event handler (could be used to e.g. customize the handler)
@@ -1228,13 +1231,13 @@ type
     // JSON array (including var / out parameters then any function result)
     // - for TInterfaceStub.Fails() is the returned error message for
     // TInterfaceStub exception or TInterfaceMock associated test case
-    Values: RawUTF8;
+    Values: RawUtf8;
     /// the type of this rule
     // - isUndefined is used for a TInterfaceStub.ExpectsCount() weak rule
     Kind: TInterfaceStubRuleKind;
     /// the event handler to be executed
     // - for TInterfaceStub.Executes(), Values is transmitted as aResult parameter
-    // - either a TOnInterfaceStubExecuteJSON, or a TOnInterfaceStubExecuteVariant
+    // - either a TOnInterfaceStubExecuteJson, or a TOnInterfaceStubExecuteVariant
     Execute: TMethod;
     /// the exception class to be raised
     // - for TInterfaceStub.Raises(), Values contains Exception.Message
@@ -1270,12 +1273,12 @@ type
     /// the number of times this method has been executed
     MethodPassCount: cardinal;
     /// find a rule index from its Params content
-    function FindRuleIndex(const aParams: RawUTF8): integer;
+    function FindRuleIndex(const aParams: RawUtf8): integer;
     /// find a strong rule index from its Params content
-    function FindStrongRuleIndex(const aParams: RawUTF8): integer;
+    function FindStrongRuleIndex(const aParams: RawUtf8): integer;
     /// register a rule
     procedure AddRule(Sender: TInterfaceStub; aKind: TInterfaceStubRuleKind;
-      const aParams, aValues: RawUTF8; const aEvent: TNotifyEvent = nil;
+      const aParams, aValues: RawUtf8; const aEvent: TNotifyEvent = nil;
       aExceptionClass: ExceptClass = nil;
       aExpectedPassCountOperator: TInterfaceStubRuleOperator = ioUndefined;
       aValue: cardinal = 0);
@@ -1331,14 +1334,14 @@ type
     // - a pointer to the existing information in shared TInterfaceFactory
     Method: PInterfaceMethod;
     /// the parameters at execution call, as JSON CSV (i.e. array without [ ])
-    Params: RawUTF8;
+    Params: RawUtf8;
     /// any non default result returned after execution
     // - if not set (i.e. if equals ''), Method^.DefaultResult has been returned
     // - if WasError is TRUE, always contain the error message
-    CustomResults: RawUTF8;
+    CustomResults: RawUtf8;
     /// the result returned after execution
     // - this method will return Method^.DefaultResult if CustomResults=''
-    function Results: RawUTF8;
+    function Results: RawUtf8;
     /// append the log in textual format
     // - typical output is as such:
     // $ Add(10,20)=[30],
@@ -1376,10 +1379,10 @@ type
     function TryResolve(aInterface: PRttiInfo; out Obj): boolean; override;
     procedure InternalGetInstance(out aStubbedInterface); virtual;
     function InternalCheck(aValid, aExpectationFailed: boolean;
-      const aErrorMsgFmt: RawUTF8; const aErrorMsgArgs: array of const): boolean; virtual;
+      const aErrorMsgFmt: RawUtf8; const aErrorMsgArgs: array of const): boolean; virtual;
     // match TOnFakeInstanceInvoke callback signature
-    function Invoke(const aMethod: TInterfaceMethod; const aParams: RawUTF8;
-      aResult, aErrorMsg: PRawUTF8; aClientDrivenID: PCardinal;
+    function Invoke(const aMethod: TInterfaceMethod; const aParams: RawUtf8;
+      aResult, aErrorMsg: PRawUtf8; aClientDrivenID: PCardinal;
       aServiceCustomAnswer: PServiceCustomAnswer): boolean;
     // will launch InternalCheck() process if some expectations defined by
     // ExpectsCount() are not met, i.e. raise an exception for TInterfaceStub
@@ -1388,15 +1391,15 @@ type
     procedure IntSetOptions(Options: TInterfaceStubOptions); virtual;
     procedure IntCheckCount(aMethodIndex, aComputed: cardinal;
       aOperator: TInterfaceStubRuleOperator; aCount: cardinal);
-    function IntGetLogAsText(asmndx: integer; const aParams: RawUTF8;
-      aScope: TInterfaceStubLogLayouts; SepChar: AnsiChar): RawUTF8;
+    function IntGetLogAsText(asmndx: integer; const aParams: RawUtf8;
+      aScope: TInterfaceStubLogLayouts; SepChar: AnsiChar): RawUtf8;
     function GetLogHash: cardinal;
     procedure OnExecuteToLog(Ctxt: TOnInterfaceStubExecuteParamsVariant);
   public
     /// low-level internal constructor
     // - you should not call this method, but the overloaded alternatives
     constructor Create(aFactory: TInterfaceFactory;
-      const aInterfaceName: RawUTF8); reintroduce; overload; virtual;
+      const aInterfaceName: RawUtf8); reintroduce; overload; virtual;
     /// initialize an interface stub from TypeInfo(IMyInterface)
     // - assign the fake class instance to a stubbed interface variable:
     // !var I: ICalculator;
@@ -1412,13 +1415,13 @@ type
     // !  TInterfaceStub.Create(ICalculator,I);
     // !  Check(I.Add(10,20)=0,'Default result');
     // - if the supplied TGUID has not been previously registered, raise an Exception
-    constructor Create(const aGUID: TGUID;
+    constructor Create(const aGuid: TGUID;
       out aStubbedInterface); reintroduce; overload;
     /// initialize an interface stub from an interface name (e.g. 'IMyInterface')
     // - you shall have registered the interface by a previous call to
     // TInterfaceFactory.Get(TypeInfo(IMyInterface)) or RegisterInterfaces([])
     // - if the supplied name has not been previously registered, raise an Exception
-    constructor Create(const aInterfaceName: RawUTF8;
+    constructor Create(const aInterfaceName: RawUtf8;
       out aStubbedInterface); reintroduce; overload;
     /// prepare an interface stub from TypeInfo(IMyInterface) for later injection
     // - create several TInterfaceStub instances for a given TInjectableObject
@@ -1441,58 +1444,58 @@ type
     // !     [IMyInterface],
     // !     TInterfaceMock.Create(IPersistence,self).
     // !       ExpectsCount('SaveItem',qoEqualTo,1)]);
-    constructor Create(const aGUID: TGUID); reintroduce; overload;
+    constructor Create(const aGuid: TGUID); reintroduce; overload;
 
     /// add an execution rule for a given method, with JSON marshalling
     // - optional aEventParams parameter will be transmitted to aEvent handler
     // - raise an Exception if the method name does not exist for this interface
-    function Executes(const aMethodName: RawUTF8;
-      const aEvent: TOnInterfaceStubExecuteJSON;
-      const aEventParams: RawUTF8 = ''): TInterfaceStub; overload;
+    function Executes(const aMethodName: RawUtf8;
+      const aEvent: TOnInterfaceStubExecuteJson;
+      const aEventParams: RawUtf8 = ''): TInterfaceStub; overload;
     /// add an execution rule for a given method and a set of parameters,
     // with JSON marshalling
     // - if execution context matches the supplied aParams value, aEvent is triggered
     // - optional aEventParams parameter will be transmitted to aEvent handler
     // - raise an Exception if the method name does not exist for this interface
-    function Executes(const aMethodName, aParams: RawUTF8;
-      const aEvent: TOnInterfaceStubExecuteJSON;
-      const aEventParams: RawUTF8 = ''): TInterfaceStub; overload;
+    function Executes(const aMethodName, aParams: RawUtf8;
+      const aEvent: TOnInterfaceStubExecuteJson;
+      const aEventParams: RawUtf8 = ''): TInterfaceStub; overload;
     /// add an execution rule for a given method and a set of parameters,
     // with JSON marshalling
     // - if execution context matches the supplied aParams value, aEvent is triggered
     // - optional aEventParams parameter will be transmitted to aEvent handler
     // - raise an Exception if the method name does not exist for this interface
-    function Executes(const aMethodName: RawUTF8; const aParams: array of const;
-      const aEvent: TOnInterfaceStubExecuteJSON;
-      const aEventParams: RawUTF8 = ''): TInterfaceStub; overload;
+    function Executes(const aMethodName: RawUtf8; const aParams: array of const;
+      const aEvent: TOnInterfaceStubExecuteJson;
+      const aEventParams: RawUtf8 = ''): TInterfaceStub; overload;
     /// add an execution rule for a given method, with Variant marshalling
     // - optional aEventParams parameter will be transmitted to aEvent handler
     // - raise an Exception if the method name does not exist for this interface
-    function Executes(const aMethodName: RawUTF8;
+    function Executes(const aMethodName: RawUtf8;
       const aEvent: TOnInterfaceStubExecuteVariant;
-      const aEventParams: RawUTF8 = ''): TInterfaceStub; overload;
+      const aEventParams: RawUtf8 = ''): TInterfaceStub; overload;
     /// add an execution rule for a given method and a set of parameters,
     // with Variant marshalling
     // - if execution context matches the supplied aParams value, aEvent is triggered
     // - optional aEventParams parameter will be transmitted to aEvent handler
     // - raise an Exception if the method name does not exist for this interface
-    function Executes(const aMethodName, aParams: RawUTF8;
+    function Executes(const aMethodName, aParams: RawUtf8;
       const aEvent: TOnInterfaceStubExecuteVariant;
-      const aEventParams: RawUTF8 = ''): TInterfaceStub; overload;
+      const aEventParams: RawUtf8 = ''): TInterfaceStub; overload;
     /// add an execution rule for a given method and a set of parameters,
     // with Variant marshalling
     // - if execution context matches the supplied aParams value, aEvent is triggered
     // - optional aEventParams parameter will be transmitted to aEvent handler
     // - raise an Exception if the method name does not exist for this interface
-    function Executes(const aMethodName: RawUTF8; const aParams: array of const;
+    function Executes(const aMethodName: RawUtf8; const aParams: array of const;
       const aEvent: TOnInterfaceStubExecuteVariant;
-      const aEventParams: RawUTF8 = ''): TInterfaceStub; overload;
+      const aEventParams: RawUtf8 = ''): TInterfaceStub; overload;
     /// add an execution rule for all methods, with Variant marshalling
     // - optional aEventParams parameter will be transmitted to aEvent handler
     // - callback's Ctxt: TOnInterfaceStubExecuteParamsVariant's Method field
     // will identify the executed method
     function Executes(const aEvent: TOnInterfaceStubExecuteVariant;
-      const aEventParams: RawUTF8 = ''): TInterfaceStub; overload;
+      const aEventParams: RawUtf8 = ''): TInterfaceStub; overload;
     /// will add execution rules for all methods to log the input parameters
     // - aKind will define how the input parameters are serialized in JSON
     function Executes(aLog: TSynLogClass; aLogLevel: TSynLogInfo;
@@ -1501,41 +1504,41 @@ type
     /// add an exception rule for a given method
     // - will create and raise the specified exception for this method
     // - raise an Exception if the method name does not exist for this interface
-    function Raises(const aMethodName: RawUTF8; aException: ExceptClass;
+    function Raises(const aMethodName: RawUtf8; aException: ExceptClass;
       const aMessage: string): TInterfaceStub; overload;
     /// add an exception rule for a given method and a set of parameters
     // - will create and raise the specified exception for this method, if the
     // execution context matches the supplied aParams value
     // - raise an Exception if the method name does not exist for this interface
-    function Raises(const aMethodName, aParams: RawUTF8; aException: ExceptClass;
+    function Raises(const aMethodName, aParams: RawUtf8; aException: ExceptClass;
       const aMessage: string): TInterfaceStub; overload;
     /// add an exception rule for a given method and a set of parameters
     // - will create and raise the specified exception for this method, if the
     // execution context matches the supplied aParams value
     // - raise an Exception if the method name does not exist for this interface
-    function Raises(const aMethodName: RawUTF8; const aParams: array of const;
+    function Raises(const aMethodName: RawUtf8; const aParams: array of const;
       aException: ExceptClass; const aMessage: string): TInterfaceStub; overload;
 
     /// add an evaluation rule for a given method
     // - aExpectedResults JSON array will be returned to the caller
     // - raise an Exception if the method name does not exist for this interface
     function Returns(const aMethodName,
-      aExpectedResults: RawUTF8): TInterfaceStub; overload;
+      aExpectedResults: RawUtf8): TInterfaceStub; overload;
     /// add an evaluation rule for a given method
     // - aExpectedResults will be returned to the caller after conversion to
     // a JSON array
     // - raise an Exception if the method name does not exist for this interface
-    function Returns(const aMethodName: RawUTF8;
+    function Returns(const aMethodName: RawUtf8;
       const aExpectedResults: array of const): TInterfaceStub; overload;
     /// add an evaluation rule for a given method and a set of parameters
     // - aExpectedResults JSON array will be returned to the caller
     // - raise an Exception if the method name does not exist for this interface
     function Returns(const aMethodName, aParams,
-      aExpectedResults: RawUTF8): TInterfaceStub; overload;
+      aExpectedResults: RawUtf8): TInterfaceStub; overload;
     /// add an evaluation rule for a given method and a set of parameters
     // - aExpectedResults JSON array will be returned to the caller
     // - raise an Exception if the method name does not exist for this interface
-    function Returns(const aMethodName: RawUTF8;
+    function Returns(const aMethodName: RawUtf8;
       const aParams, aExpectedResults: array of const): TInterfaceStub; overload;
 
     /// add an error rule for a given method
@@ -1543,21 +1546,21 @@ type
     // - it will raise EInterfaceFactory for TInterfaceStub, but
     // TInterfaceMock will push the failure to the associated test case
     // - raise an Exception if the method name does not exist for this interface
-    function Fails(const aMethodName, aErrorMsg: RawUTF8): TInterfaceStub; overload;
+    function Fails(const aMethodName, aErrorMsg: RawUtf8): TInterfaceStub; overload;
     /// add an error rule for a given method and a set of parameters
     // - an error will be returned to the caller, with aErrorMsg as message
     // - it will raise EInterfaceFactory for TInterfaceStub, but
     // TInterfaceMock will push the failure to the associated test case
     // - raise an Exception if the method name does not exist for this interface
     function Fails(const aMethodName, aParams,
-      aErrorMsg: RawUTF8): TInterfaceStub; overload;
+      aErrorMsg: RawUtf8): TInterfaceStub; overload;
     /// add an error rule for a given method and a set of parameters
     // - an error will be returned to the caller, with aErrorMsg as message
     // - it will raise EInterfaceFactory for TInterfaceStub, but
     // TInterfaceMock will push the failure to the associated test case
     // - raise an Exception if the method name does not exist for this interface
-    function Fails(const aMethodName: RawUTF8; const aParams: array of const;
-      const aErrorMsg: RawUTF8): TInterfaceStub; overload;
+    function Fails(const aMethodName: RawUtf8; const aParams: array of const;
+      const aErrorMsg: RawUtf8): TInterfaceStub; overload;
 
     /// add a pass count expectation rule for a given method
     // - those rules will be evaluated at Destroy execution
@@ -1565,7 +1568,7 @@ type
     // - it will raise EInterfaceFactory for TInterfaceStub, but
     // TInterfaceMock will push the failure to the associated test case
     // - raise an Exception if the method name does not exist for this interface
-    function ExpectsCount(const aMethodName: RawUTF8;
+    function ExpectsCount(const aMethodName: RawUtf8;
       aOperator: TInterfaceStubRuleOperator; aValue: cardinal): TInterfaceStub; overload;
     /// add a pass count expectation rule for a given method and a set of parameters
     // - those rules will be evaluated at Destroy execution
@@ -1573,7 +1576,7 @@ type
     // - it will raise EInterfaceFactory for TInterfaceStub, but
     // TInterfaceMock will push the failure to the associated test case
     // - raise an Exception if the method name does not exist for this interface
-    function ExpectsCount(const aMethodName, aParams: RawUTF8;
+    function ExpectsCount(const aMethodName, aParams: RawUtf8;
       aOperator: TInterfaceStubRuleOperator; aValue: cardinal): TInterfaceStub; overload;
     /// add a pass count expectation rule for a given method and a set of parameters
     // - those rules will be evaluated at Destroy execution
@@ -1581,7 +1584,7 @@ type
     // - it will raise EInterfaceFactory for TInterfaceStub, but
     // TInterfaceMock will push the failure to the associated test case
     // - raise an Exception if the method name does not exist for this interface
-    function ExpectsCount(const aMethodName: RawUTF8;
+    function ExpectsCount(const aMethodName: RawUtf8;
       const aParams: array of const; aOperator: TInterfaceStubRuleOperator;
       aValue: cardinal): TInterfaceStub; overload;
 
@@ -1597,7 +1600,7 @@ type
     // - it will raise EInterfaceFactory for TInterfaceStub, but
     // TInterfaceMock will push the failure to the associated test case
     // - raise an Exception if the method name does not exist for this interface
-    function ExpectsTrace(const aMethodName: RawUTF8;
+    function ExpectsTrace(const aMethodName: RawUtf8;
       aValue: cardinal): TInterfaceStub; overload;
     /// add a hash-based execution expectation rule for a given method
     // and a set of parameters
@@ -1606,7 +1609,7 @@ type
     // - it will raise EInterfaceFactory for TInterfaceStub, but
     // TInterfaceMock will push the failure to the associated test case
     // - raise an Exception if the method name does not exist for this interface
-    function ExpectsTrace(const aMethodName, aParams: RawUTF8;
+    function ExpectsTrace(const aMethodName, aParams: RawUtf8;
       aValue: cardinal): TInterfaceStub; overload;
     /// add a hash-based execution expectation rule for a given method
     // and a set of parameters
@@ -1615,21 +1618,21 @@ type
     // - it will raise EInterfaceFactory for TInterfaceStub, but
     // TInterfaceMock will push the failure to the associated test case
     // - raise an Exception if the method name does not exist for this interface
-    function ExpectsTrace(const aMethodName: RawUTF8;
+    function ExpectsTrace(const aMethodName: RawUtf8;
       const aParams: array of const; aValue: cardinal): TInterfaceStub; overload;
     /// add a JSON-based execution expectation rule for the whole interface
     // - those rules will be evaluated at Destroy execution
     // - supplied aValue is the trace in LogAsText format
     // - it will raise EInterfaceFactory for TInterfaceStub, but
     // TInterfaceMock will push the failure to the associated test case
-    function ExpectsTrace(const aValue: RawUTF8): TInterfaceStub; overload;
+    function ExpectsTrace(const aValue: RawUtf8): TInterfaceStub; overload;
     /// add a JSON-based execution expectation rule for a given method
     // - those rules will be evaluated at Destroy execution
     // - supplied aValue is the trace in LogAsText format
     // - it will raise EInterfaceFactory for TInterfaceStub, but
     // TInterfaceMock will push the failure to the associated test case
     // - raise an Exception if the method name does not exist for this interface
-    function ExpectsTrace(const aMethodName, aValue: RawUTF8): TInterfaceStub; overload;
+    function ExpectsTrace(const aMethodName, aValue: RawUtf8): TInterfaceStub; overload;
     /// add a JSON-based execution expectation rule for a given method
     // and a set of parameters
     // - those rules will be evaluated at Destroy execution
@@ -1638,7 +1641,7 @@ type
     // TInterfaceMock will push the failure to the associated test case
     // - raise an Exception if the method name does not exist for this interface
     function ExpectsTrace(const aMethodName, aParams,
-      aValue: RawUTF8): TInterfaceStub; overload;
+      aValue: RawUtf8): TInterfaceStub; overload;
     /// add a JSON-based execution expectation rule for a given method
     // and a set of parameters
     // - those rules will be evaluated at Destroy execution
@@ -1646,9 +1649,9 @@ type
     // - it will raise EInterfaceFactory for TInterfaceStub, but
     // TInterfaceMock will push the failure to the associated test case
     // - raise an Exception if the method name does not exist for this interface
-    function ExpectsTrace(const aMethodName: RawUTF8;
+    function ExpectsTrace(const aMethodName: RawUtf8;
       const aParams: array of const;
-      const aValue: RawUTF8): TInterfaceStub; overload;
+      const aValue: RawUtf8): TInterfaceStub; overload;
 
     /// set the optional stubing/mocking options
     // - same as the Options property, but in a fluent-style interface
@@ -1663,7 +1666,7 @@ type
     /// the stubbed method execution trace converted as text
     // - typical output is a list of calls separated by commas:
     // $ Add(10,20)=[30],Divide(20,0) error "divide by zero"
-    function LogAsText(SepChar: AnsiChar = ','): RawUTF8;
+    function LogAsText(SepChar: AnsiChar = ','): RawUtf8;
     /// returns the last created TInterfacedObject instance
     // - e.g. corresponding to the out aStubbedInterface parameter of Create()
     property LastInterfacedObjectFake: TInterfacedObject
@@ -1700,7 +1703,7 @@ type
   protected
     fTestCase: TSynTestCase;
     function InternalCheck(aValid, aExpectationFailed: boolean;
-      const aErrorMsgFmt: RawUTF8;
+      const aErrorMsgFmt: RawUtf8;
       const aErrorMsgArgs: array of const): boolean; override;
   public
     /// initialize an interface mock from TypeInfo(IMyInterface)
@@ -1723,14 +1726,14 @@ type
     // !   TInterfaceMock.Create(IPersistence,Persist,self).
     // !     ExpectsCount('SaveItem',qoEqualTo,1)]);
     // - if the supplied TGUID has not been previously registered, raise an Exception
-    constructor Create(const aGUID: TGUID; out aMockedInterface;
+    constructor Create(const aGuid: TGUID; out aMockedInterface;
       aTestCase: TSynTestCase); reintroduce; overload;
     /// initialize an interface mock from an interface name (e.g. 'IMyInterface')
     // - aTestCase.Check() will be called in case of mocking failure
     // - you shall have registered the interface by a previous call to
     // TInterfaceFactory.Get(TypeInfo(IMyInterface)) or RegisterInterfaces()
     // - if the supplied name has not been previously registered, raise an Exception
-    constructor Create(const aInterfaceName: RawUTF8; out aMockedInterface;
+    constructor Create(const aInterfaceName: RawUtf8; out aMockedInterface;
       aTestCase: TSynTestCase); reintroduce; overload;
     /// initialize an interface mock from TypeInfo(IMyInterface) for later injection
     // - aTestCase.Check() will be called in case of mocking failure
@@ -1738,7 +1741,7 @@ type
       reintroduce; overload;
     /// initialize an interface mock from TypeInfo(IMyInterface) for later injection
     // - aTestCase.Check() will be called in case of mocking failure
-    constructor Create(const aGUID: TGUID; aTestCase: TSynTestCase);
+    constructor Create(const aGuid: TGUID; aTestCase: TSynTestCase);
       reintroduce; overload;
     /// the associated test case
     property TestCase: TSynTestCase
@@ -1763,19 +1766,19 @@ type
     /// this will set and force imoLogMethodCallsAndResults option as needed
     // - you should not call this method, but the overloaded alternatives
     constructor Create(aFactory: TInterfaceFactory;
-      const aInterfaceName: RawUTF8); override;
+      const aInterfaceName: RawUtf8); override;
     /// check that a method has been called a specify number of times
-    procedure Verify(const aMethodName: RawUTF8;
+    procedure Verify(const aMethodName: RawUtf8;
       aOperator: TInterfaceStubRuleOperator = ioGreaterThan;
       aCount: cardinal = 0); overload;
     /// check a method calls count with a set of parameters
     // - parameters shall be defined as a JSON array of values
-    procedure Verify(const aMethodName, aParams: RawUTF8;
+    procedure Verify(const aMethodName, aParams: RawUtf8;
       aOperator: TInterfaceStubRuleOperator = ioGreaterThan;
       aCount: cardinal = 0); overload;
     /// check a method calls count with a set of parameters
     // - parameters shall be defined as a JSON array of values
-    procedure Verify(const aMethodName: RawUTF8; const aParams: array of const;
+    procedure Verify(const aMethodName: RawUtf8; const aParams: array of const;
       aOperator: TInterfaceStubRuleOperator = ioGreaterThan;
       aCount: cardinal = 0); overload;
     /// check an execution trace for the global interface
@@ -1785,7 +1788,7 @@ type
     // ! Verify('Multiply(10,30),Add(2,35)',chkNameParams);
     // or include parameters and function results:
     // ! Verify('Multiply(10,30)=[300],Add(2,35)=[37]',chkNameParamsResults);
-    procedure Verify(const aTrace: RawUTF8;
+    procedure Verify(const aTrace: RawUtf8;
       aScope: TInterfaceMockSpyCheck); overload;
     /// check an execution trace for a specified method
     // - text trace format will follow specified scope, e.g.
@@ -1793,17 +1796,17 @@ type
     // or include parameters and function results:
     // ! Verify('Add','(10,30)=[300],(2,35)=[37]',chkNameParamsResults);
     // - if aMethodName does not exists or aScope=chkName, will raise an exception
-    procedure Verify(const aMethodName, aTrace: RawUTF8;
+    procedure Verify(const aMethodName, aTrace: RawUtf8;
       aScope: TInterfaceMockSpyCheck); overload;
     /// check an execution trace for a specified method and parameters
     // - text trace format shall contain only results, e.g.
     // ! Verify('Add','2,35','[37]');
-    procedure Verify(const aMethodName, aParams, aTrace: RawUTF8); overload;
+    procedure Verify(const aMethodName, aParams, aTrace: RawUtf8); overload;
     /// check an execution trace for a specified method and parameters
     // - text trace format shall contain only results, e.g.
     // ! Verify('Add',[2,35],'[37]');
-    procedure Verify(const aMethodName: RawUTF8; const aParams: array of const;
-      const aTrace: RawUTF8); overload;
+    procedure Verify(const aMethodName: RawUtf8; const aParams: array of const;
+      const aTrace: RawUtf8); overload;
   end;
 
 function ToText(c: TInterfaceMockSpyCheck): PShortString; overload;
@@ -1829,7 +1832,7 @@ type
     optNoLogOutput,
     optErrorOnMissingParam,
     optForceStandardJSON,
-    optDontStoreVoidJSON,
+    optDontStoreVoidJson,
     optIgnoreException);
 
   /// set of per-method execution options for an interface-based service provider
@@ -1840,7 +1843,7 @@ type
   // a RunningThread.Synchronize() call - it can be used e.g. if your
   // implementation rely heavily on COM servers - by default, service methods
   // are called within the thread which received them, on multi-thread server
-  // instances (e.g. TSQLite3HttpServer or TRestServerNamedPipeResponse),
+  // instances (e.g. TSqlite3HttpServer or TRestServerNamedPipeResponse),
   // for better response time and CPU use (this is the technical reason why
   // service implementation methods have to handle multi-threading safety
   // carefully, e.g. by using TRTLCriticalSection mutex on purpose)
@@ -1863,7 +1866,7 @@ type
   // - by default, it wil check for the client user agent, and use extended
   // JSON if none is found (e.g. from WebSockets), or if it contains 'mORMot':
   // you can set optForceStandardJSON to ensure standard JSON is always returned
-  // - optDontStoreVoidJSON will reduce the JSON object verbosity by not writing
+  // - optDontStoreVoidJson will reduce the JSON object verbosity by not writing
   // void (e.g. 0 or '') properties when serializing objects and records
   // - any exceptions will be propagated during execution, unless
   // optIgnoreException is set and the exception is trapped (not to be used
@@ -1875,7 +1878,7 @@ type
   // - implementation should set the Obj local variable to an instance of
   // a fake class implementing the aParamInfo interface
   TOnServiceMethodExecuteCallback =
-    procedure(var Par: PUTF8Char; ParamInterfaceInfo: TRttiCustom; out Obj) of object;
+    procedure(var Par: PUtf8Char; ParamInterfaceInfo: TRttiCustom; out Obj) of object;
 
   /// the current step of a TInterfaceMethodExecute.OnExecute call
   TInterfaceMethodExecuteEventStep = (
@@ -1895,7 +1898,7 @@ type
   TInterfaceMethodExecute = class
   protected
     fMethod: PInterfaceMethod;
-    fRawUTF8s: TRawUTF8DynArray;
+    fRawUtf8s: TRawUtf8DynArray;
     fStrings: TStringDynArray;
     fWideStrings: TWideStringDynArray;
     fRecords: array of TBytes;
@@ -1913,13 +1916,13 @@ type
     fBackgroundExecutionThread: TSynBackgroundThreadMethod;
     fOnCallback: TOnInterfaceMethodExecuteCallback;
     fOptions: TInterfaceMethodOptions;
-    fServiceCustomAnswerHead: RawUTF8;
+    fServiceCustomAnswerHead: RawUtf8;
     fServiceCustomAnswerStatus: cardinal;
     fLastException: Exception;
     fInput: TDocVariantData;
     fOutput: TDocVariantData;
     fCurrentStep: TInterfaceMethodExecuteEventStep;
-    fExecutedInstancesFailed: TRawUTF8DynArray;
+    fExecutedInstancesFailed: TRawUtf8DynArray;
     procedure BeforeExecute;
     procedure RawExecute(const Instances: PPointerArray; InstancesLast: integer); virtual;
     procedure AfterExecute;
@@ -1939,23 +1942,23 @@ type
     /// execute the corresponding method of weak IInvokable references
     // - will retrieve a JSON array of parameters from Par (as [1,"par2",3])
     // - will append a JSON array of results in Res, or set an Error message, or
-    // a JSON object (with parameter names) in Res if ResultAsJSONObject is set
+    // a JSON object (with parameter names) in Res if ResultAsJsonObject is set
     // - if one Instances[] is supplied, any exception will be propagated (unless
     // optIgnoreException is set); if more than one Instances[] is supplied,
     // corresponding ExecutedInstancesFailed[] property will be filled with
     // the JSON serialized exception
-    function ExecuteJson(const Instances: array of pointer; Par: PUTF8Char;
-      Res: TTextWriter; Error: PShortString=nil; ResAsJSONObject: boolean=false): boolean;
+    function ExecuteJson(const Instances: array of pointer; Par: PUtf8Char;
+      Res: TTextWriter; Error: PShortString = nil; ResAsJsonObject: boolean = false): boolean;
     /// execute the corresponding method of one weak IInvokable reference
     // - exepect no output argument, i.e. no returned data, unless output is set
     // - this version will identify TInterfacedObjectFake implementations,
     // and will call directly fInvoke() if possible, to avoid JSON marshalling
     // - expect params value to be without [ ], just like TOnFakeInstanceInvoke
-    function ExecuteJsonCallback(Instance: pointer; const params: RawUTF8;
-      output: PRawUTF8): boolean;
+    function ExecuteJsonCallback(Instance: pointer; const params: RawUtf8;
+      output: PRawUtf8): boolean;
     /// execute directly TInterfacedObjectFake.fInvoke()
     // - expect params value to be with [ ], just like ExecuteJson
-    function ExecuteJsonFake(Instance: pointer; params: PUTF8Char): boolean;
+    function ExecuteJsonFake(Instance: pointer; params: PUtf8Char): boolean;
     /// low-level direct access to the associated method information
     property Method: PInterfaceMethod
       read fMethod;
@@ -1971,7 +1974,7 @@ type
     property CurrentStep: TInterfaceMethodExecuteEventStep
       read fCurrentStep write fCurrentStep;
     /// set from output TServiceCustomAnswer.Header result parameter
-    property ServiceCustomAnswerHead: RawUTF8
+    property ServiceCustomAnswerHead: RawUtf8
       read fServiceCustomAnswerHead write fServiceCustomAnswerHead;
     /// set from output TServiceCustomAnswer.Status result parameter
     property ServiceCustomAnswerStatus: cardinal
@@ -1995,7 +1998,7 @@ type
     /// reference to the background execution thread, if any
     property BackgroundExecutionThread: TSynBackgroundThreadMethod
       read fBackgroundExecutionThread write fBackgroundExecutionThread;
-    /// points e.g. to TRestServerURIContext.ExecuteCallback
+    /// points e.g. to TRestServerUriContext.ExecuteCallback
     property OnCallback: TOnInterfaceMethodExecuteCallback
       read fOnCallback write fOnCallback;
     /// contains exception serialization after ExecuteJson of multiple instances
@@ -2003,11 +2006,11 @@ type
     // - if only a single Instances[] is supplied, the exception will be
     // propagated to the caller, unless optIgnoreException option is defined
     // - if more than one Instances[] is supplied, any raised Exception will
-    // be serialized using ObjectToJSONDebug(), or this property will be left
+    // be serialized using ObjectToJsonDebug(), or this property will be left
     // to its default nil content if no exception occurred
-    property ExecutedInstancesFailed: TRawUTF8DynArray
+    property ExecutedInstancesFailed: TRawUtf8DynArray
       read fExecutedInstancesFailed;
-    /// allow to use an instance-specific temporary TJSONSerializer
+    /// allow to use an instance-specific temporary TJsonSerializer
     function TempTextWriter: TTextWriter;
   end;
 
@@ -2023,7 +2026,7 @@ type
   // to set HTTP custom content and headers, and ignore aResult content
   // - aClientDrivenID can be set optionally to specify e.g. an URI-level session
   TOnFakeInstanceInvoke = function(const aMethod: TInterfaceMethod;
-    const aParams: RawUTF8; aResult, aErrorMsg: PRawUTF8; aClientDrivenID: PCardinal;
+    const aParams: RawUtf8; aResult, aErrorMsg: PRawUtf8; aClientDrivenID: PCardinal;
     aServiceCustomAnswer: PServiceCustomAnswer): boolean of object;
 
   /// event called when destroying a TInterfaceFactory's fake instance
@@ -2035,11 +2038,11 @@ type
   /// how TInterfacedObjectFromFactory will perform its execution
   // - by default, fInvoke() will receive standard JSON content, unless
   // ifoJsonAsExtended is set, and extended JSON is used
-  // - ifoDontStoreVoidJSON will ensure objects and records won't include
+  // - ifoDontStoreVoidJson will ensure objects and records won't include
   // default void fields in JSON serialization
   TInterfacedObjectFromFactoryOption = (
     ifoJsonAsExtended,
-    ifoDontStoreVoidJSON);
+    ifoDontStoreVoidJson);
 
   /// defines how TInterfacedObjectFromFactory will perform its execution
   TInterfacedObjectFromFactoryOptions = set of TInterfacedObjectFromFactoryOption;
@@ -2118,9 +2121,9 @@ type
   TInterfacedObjectFakeCallback = class(TInterfacedObjectFake)
   protected
     fLogClass: TSynLogClass;
-    fName: RawUTF8;
-    function FakeInvoke(const aMethod: TInterfaceMethod; const aParams: RawUTF8;
-      aResult, aErrorMsg: PRawUTF8; aClientDrivenID: PCardinal;
+    fName: RawUtf8;
+    function FakeInvoke(const aMethod: TInterfaceMethod; const aParams: RawUtf8;
+      aResult, aErrorMsg: PRawUtf8; aClientDrivenID: PCardinal;
       aServiceCustomAnswer: PServiceCustomAnswer): boolean; virtual;
   end;
 
@@ -2169,7 +2172,7 @@ begin
 {$ifdef SOA_DEBUG}
   WR.Add('"', ',');
   WR.AddPropJSONInt64('index', IndexVar);
-  WR.AddPropJSONString('var', GetEnumNameTrimed(TypeInfo(TInterfaceMethodValueVar),
+  WR.AddPropJsonString('var', GetEnumNameTrimed(TypeInfo(TInterfaceMethodValueVar),
     ValueVar));
   WR.AddPropJSONInt64('stackoffset', InStackOffset);
   WR.AddPropJSONInt64('reg', RegisterIdent);
@@ -2179,7 +2182,7 @@ begin
   if ValueType = imvBinary then
     WR.AddPropJSONInt64('binsize', SizeInBinary);
   WR.AddPropName('asm');
-  WR.AddString(GetSetNameCSV(TypeInfo(TInterfaceMethodValueAsm), ValueKindAsm));
+  WR.AddString(GetSetNameCsv(TypeInfo(TInterfaceMethodValueAsm), ValueKindAsm));
   WR.AddShort('},');
 {$else}
   WR.AddShorter('"},');
@@ -2201,7 +2204,7 @@ begin
         8:
           result := PInt64(V)^ = 0;
       end;
-    imvRawUTF8..imvWideString, imvObject..imvInterface:
+    imvRawUtf8..imvWideString, imvObject..imvInterface:
       result := PPointer(V)^ = nil;
     imvBinary, imvRecord:
       result := IsZeroSmall(V, SizeInStorage);
@@ -2215,45 +2218,62 @@ const
    [jpoHandleCustomVariants, jpoIgnoreUnknownEnum, jpoIgnoreUnknownProperty,
     jpoIgnoreStringType, jpoAllowInt64Hex, jpoNullDontReleaseObjectInstance];
 
-function TInterfaceMethodArgument.FromJSON(const MethodName: RawUTF8;
-  var R: PUTF8Char; V: pointer; Error: PShortString;
+function TInterfaceMethodArgument.FromJson(const MethodName: RawUtf8;
+  var R: PUtf8Char; V: pointer; Error: PShortString;
   DVO: TDocVariantOptions): boolean;
 var
   tmp: shortstring;
   ctxt: TJsonParserContext;
 begin
-  // use direct TRttiJson unserialization
   ctxt.Init(R, ArgRtti, JSONPARSER_SERVICE, @DVO, nil);
-  TRttiJsonLoad(ArgRtti.JsonLoad)(V, ctxt);
+  if ArgRtti.JsonLoad = nil then
+    // fallback to raw record RTTI binary unserialization with Base64 encoding
+    ctxt.Valid := ctxt.ParseNext and
+              (ctxt.Value <> nil) and
+              (PCardinal(ctxt.Value)^ and $ffffff = JSON_BASE64_MAGIC_C) and
+              BinaryLoadBase64(pointer(ctxt.Value + 3), ctxt.ValueLen - 3,
+                V, ctxt.Info.Info, {uri=}false, rkRecordTypes)
+  else
+    // use direct TRttiJson unserialization
+    TRttiJsonLoad(ArgRtti.JsonLoad)(V, ctxt);
   if not ctxt.Valid then
   begin
-    FormatShort('I% failed parsing %:% from JSON',
+    FormatShort('I% failed parsing %:% from input JSON',
       [MethodName, ParamName^, ArgTypeName^], tmp);
     if Error = nil then
-      raise EInterfaceFactory.CreateUTF8('%', [tmp]);
+      raise EInterfaceFactory.CreateUtf8('%', [tmp]);
     Error^ := tmp;
     result := false;
   end
   else
+  begin
+    R := ctxt.Json;
     result := true;
+  end;
 end;
 
-procedure TInterfaceMethodArgument.AddJSON(WR: TTextWriter; V: pointer;
+procedure TInterfaceMethodArgument.AddJson(WR: TTextWriter; V: pointer;
   ObjectOptions: TTextWriterWriteObjectOptions);
 var
   ctxt: TJsonSaveContext;
 begin
-  // use direct TRttiJson serialization
-  {%H-}ctxt.Init(WR, ObjectOptions, ArgRtti);
-  TRttiJsonSave(ArgRtti.JsonSave)(V, ctxt);
+  if ArgRtti.JsonSave <> nil then
+  begin
+    // use direct TRttiJson serialization
+    {%H-}ctxt.Init(WR, ObjectOptions, ArgRtti);
+    TRttiJsonSave(ArgRtti.JsonSave)(V, ctxt);
+  end
+  else
+    // fallback to raw record RTTI binary serialization with Base64 encoding
+    BinarySaveBase64(V, ArgRtti.Info, false, rkRecordTypes);
 end;
 
-procedure TInterfaceMethodArgument.AsJson(var DestValue: RawUTF8; V: pointer);
+procedure TInterfaceMethodArgument.AsJson(var DestValue: RawUtf8; V: pointer);
 var
   W: TTextWriter;
   temp: TTextWriterStackBuffer;
 begin
-  case ValueType of  // some direct conversion of simple types into RawUTF8
+  case ValueType of  // some direct conversion of simple types into RawUtf8
     imvBoolean:
       DestValue := BOOL_UTF8[PBoolean(V)^];
     imvEnum..imvInt64:
@@ -2277,14 +2297,14 @@ begin
       DoubleToStr(unaligned(PDouble(V)^), DestValue);
     imvCurrency:
       Curr64ToStr(PInt64(V)^, DestValue);
-    imvRawJSON:
-      DestValue := PRawUTF8(V)^;
+    imvRawJson:
+      DestValue := PRawUtf8(V)^;
   else
     begin
-      // use generic AddJSON() method for complex "..." content
+      // use generic AddJson() method for complex "..." content
       W := TTextWriter.CreateOwnedStream(temp);
       try
-        AddJSON(W, V);
+        AddJson(W, V);
         W.SetText(DestValue);
       finally
         W.Free;
@@ -2293,27 +2313,27 @@ begin
   end;
 end;
 
-procedure TInterfaceMethodArgument.AddJSONEscaped(WR: TTextWriter; V: pointer);
+procedure TInterfaceMethodArgument.AddJsonEscaped(WR: TTextWriter; V: pointer);
 var
   W: TTextWriter;
 begin
   if ValueType in [imvBoolean..imvCurrency, imvInterface] then
     // no need to escape those
-    AddJSON(WR, V)
+    AddJson(WR, V)
   else
   begin
-    W := WR.InternalJSONWriter;
-    AddJSON(W, V);
-    WR.AddJSONEscape(W);
+    W := WR.InternalJsonWriter;
+    AddJson(W, V);
+    WR.AddJsonEscape(W);
   end;
 end;
 
-procedure TInterfaceMethodArgument.AddValueJSON(WR: TTextWriter; const Value: RawUTF8);
+procedure TInterfaceMethodArgument.AddValueJson(WR: TTextWriter; const Value: RawUtf8);
 begin
   if vIsString in ValueKindAsm then
   begin
     WR.Add('"');
-    WR.AddJSONEscape(pointer(Value));
+    WR.AddJsonEscape(pointer(Value));
     WR.Add('"', ',');
   end
   else
@@ -2323,7 +2343,7 @@ begin
   end;
 end;
 
-procedure TInterfaceMethodArgument.AddDefaultJSON(WR: TTextWriter);
+procedure TInterfaceMethodArgument.AddDefaultJson(WR: TTextWriter);
 begin
   case ValueType of
     imvBoolean:
@@ -2336,7 +2356,7 @@ begin
       WR.AddShorter('[],');
     imvRecord:
       begin
-        WR.AddVoidRecordJSON(ArgRtti);
+        WR.AddVoidRecordJson(ArgRtti);
         WR.Add(',');
       end;
     imvVariant:
@@ -2352,7 +2372,7 @@ end;
 procedure TInterfaceMethodArgument.AsVariant(var DestValue: variant; V: pointer;
   Options: TDocVariantOptions);
 var
-  tmp: RawUTF8;
+  tmp: RawUtf8;
 begin
   case ValueType of // some direct conversion of simple types
     imvBoolean:
@@ -2378,24 +2398,25 @@ begin
       DestValue := unaligned(PDouble(V)^);
     imvCurrency:
       DestValue := PCurrency(V)^;
-    imvRawUTF8:
-      RawUTF8ToVariant(PRawUTF8(V)^, DestValue);
+    imvRawUtf8:
+      RawUtf8ToVariant(PRawUtf8(V)^, DestValue);
     imvString:
       begin
-        StringToUTF8(PString(V)^, tmp);
-        RawUTF8ToVariant(tmp, DestValue);
+        StringToUtf8(PString(V)^, tmp);
+        RawUtf8ToVariant(tmp, DestValue);
       end;
     imvWideString:
       begin
         RawUnicodeToUtf8(PPointer(V)^, length(PWideString(V)^), tmp);
-        RawUTF8ToVariant(tmp, DestValue);
+        RawUtf8ToVariant(tmp, DestValue);
       end;
     imvVariant:
       DestValue := PVariant(V)^;
   else
-    begin // use generic AddJSON() method
+    begin
+      // use generic AddJson() method
       AsJson(tmp, V);
-      VariantLoadJSON(DestValue, pointer(tmp), nil, @Options);
+      VariantLoadJson(DestValue, pointer(tmp), nil, @Options);
     end;
   end;
 end;
@@ -2428,7 +2449,7 @@ var
   arr: pointer;
   dyn: TDynArray;
   rec: TByteDynArray;
-  json: RawUTF8;
+  json: RawUtf8;
 begin
   case ValueType of
     imvEnum:
@@ -2453,9 +2474,9 @@ begin
         arr := nil; // recreate using a proper dynamic array
         dyn.InitRtti(ArgRtti, arr);
         try
-          VariantSaveJSON(Value, twJSONEscape, json);
-          dyn.LoadFromJSON(pointer(json));
-          json := dyn.SaveToJSON(true);
+          VariantSaveJson(Value, twJsonEscape, json);
+          dyn.LoadFromJson(pointer(json));
+          json := dyn.SaveToJson(true);
           _Json(json, Value, JSON_OPTIONS_FAST);
         finally
           dyn.Clear;
@@ -2466,9 +2487,9 @@ begin
       begin
         SetLength(rec, ArgRtti.Size);
         try
-          VariantSaveJSON(Value, twJSONEscape, json);
-          RecordLoadJSON(rec[0], pointer(json), ArgRtti.Info);
-          json := SaveJSON(rec[0], ArgRtti.Info, {EnumSetsAsText=}true);
+          VariantSaveJson(Value, twJsonEscape, json);
+          RecordLoadJson(rec[0], pointer(json), ArgRtti.Info);
+          json := SaveJson(rec[0], ArgRtti.Info, {EnumSetsAsText=}true);
           _Json(json, Value, JSON_OPTIONS_FAST);
         finally
           ArgRtti.ValueFinalize(pointer(rec));
@@ -2480,7 +2501,7 @@ end;
 
 { TInterfaceMethod }
 
-function TInterfaceMethod.ArgIndex(ArgName: PUTF8Char; ArgNameLen: integer; Input:
+function TInterfaceMethod.ArgIndex(ArgName: PUtf8Char; ArgNameLen: integer; Input:
   boolean): integer;
 begin
   if ArgNameLen > 0 then
@@ -2524,11 +2545,11 @@ begin
   result := false;
 end;
 
-function TInterfaceMethod.ArgsArrayToObject(P: PUTF8Char; Input: boolean): RawUTF8;
+function TInterfaceMethod.ArgsArrayToObject(P: PUtf8Char; Input: boolean): RawUtf8;
 var
   i: integer;
   W: TTextWriter;
-  Value: PUTF8Char;
+  Value: PUtf8Char;
   temp: TTextWriterStackBuffer;
 begin
   W := TTextWriter.CreateOwnedStream(temp);
@@ -2555,7 +2576,7 @@ begin
           W.AddPropName(ParamName^);
           P := GotoNextNotSpace(P);
           Value := P;
-          P := GotoEndJSONItem(P);
+          P := GotoEndJsonItem(P);
           if P^ = ',' then
             inc(P); // include ending ','
           W.AddNoJsonEscape(Value, P - Value);
@@ -2568,14 +2589,14 @@ begin
   end;
 end;
 
-function TInterfaceMethod.ArgsCommandLineToObject(P: PUTF8Char;
-  Input, RaiseExceptionOnUnknownParam: boolean): RawUTF8;
+function TInterfaceMethod.ArgsCommandLineToObject(P: PUtf8Char;
+  Input, RaiseExceptionOnUnknownParam: boolean): RawUtf8;
 var
   i: integer;
   W: TTextWriter;
-  B: PUTF8Char;
+  B: PUtf8Char;
   arginfo: PInterfaceMethodArgument;
-  arg, value: RawUTF8;
+  arg, value: RawUtf8;
   ok: boolean;
   temp: TTextWriterStackBuffer;
 begin
@@ -2591,7 +2612,7 @@ begin
       i := ArgIndex(pointer(arg), length(arg), Input);
       if i < 0 then
         if RaiseExceptionOnUnknownParam then
-          raise EInterfaceFactory.CreateUTF8('Unexpected [%] parameter for %',
+          raise EInterfaceFactory.CreateUtf8('Unexpected [%] parameter for %',
             [arg, InterfaceDotMethodName])
         else
           ok := false;
@@ -2599,20 +2620,20 @@ begin
       if ok then
         W.AddPropName(arginfo^.ParamName^);
       if not (P^ in [':', '=']) then
-        raise EInterfaceFactory.CreateUTF8('"%" parameter has no = for %',
+        raise EInterfaceFactory.CreateUtf8('"%" parameter has no = for %',
           [arg, InterfaceDotMethodName]);
       P := GotoNextNotSpace(P + 1);
       if P^ in ['"', '[', '{'] then
       begin
         // name='"value"' or name='{somejson}'
         B := P;
-        P := GotoEndJSONItem(P);
+        P := GotoEndJsonItem(P);
         if P = nil then
-          raise EInterfaceFactory.CreateUTF8('%= parameter has invalid content for %',
+          raise EInterfaceFactory.CreateUtf8('%= parameter has invalid content for %',
             [arg, InterfaceDotMethodName]);
         if not ok then
           continue;
-        W.AddNoJSONEscape(B, P - B);
+        W.AddNoJsonEscape(B, P - B);
       end
       else
       begin
@@ -2624,9 +2645,9 @@ begin
           // write [value] or ["value"]
           W.Add('[');
         if arginfo^.ValueKindAsm * [vIsString, vIsDynArrayString] <> [] then
-          W.AddJSONString(value)
+          W.AddJsonString(value)
         else
-          W.AddNoJSONEscape(pointer(value), length(value));
+          W.AddNoJsonEscape(pointer(value), length(value));
         if arginfo^.ValueType = imvDynArray then
           W.Add(']');
       end;
@@ -2640,7 +2661,7 @@ begin
   end;
 end;
 
-function TInterfaceMethod.ArgsNames(Input: boolean): TRawUTF8DynArray;
+function TInterfaceMethod.ArgsNames(Input: boolean): TRawUtf8DynArray;
 var
   a, n: PtrInt;
 begin
@@ -2906,11 +2927,11 @@ const
 
   STACKOFFSET_NONE = -1;
 
-  // ordinal values are stored within 64-bit buffer, and records in a RawUTF8
+  // ordinal values are stored within 64-bit buffer, and records in a RawUtf8
   ARGS_TO_VAR: array[TInterfaceMethodValueType] of TInterfaceMethodValueVar = (
     imvvNone, imvvSelf, imvv64, imvv64, imvv64, imvv64, imvv64, imvv64, imvv64,
-    imvv64, imvv64, imvvRawUTF8, imvvString, imvvRawUTF8, imvvWideString, imvv64,
-    imvvRecord, imvvRecord, imvvObject, imvvRawUTF8, imvvDynArray, imvvInterface);
+    imvv64, imvv64, imvvRawUtf8, imvvString, imvvRawUtf8, imvvWideString, imvv64,
+    imvvRecord, imvvRecord, imvvObject, imvvRawUtf8, imvvDynArray, imvvInterface);
 
   {$ifdef CPU32}
   // parameters are always aligned to 8 bytes boundaries on 64-bit ABI
@@ -2922,7 +2943,7 @@ const
   {$endif CPU32}
 
   ARGS_RESULT_BY_REF: TInterfaceMethodValueTypes =
-    [imvRawUTF8, imvRawJSON, imvString, imvRawByteString, imvWideString,
+    [imvRawUtf8, imvRawJson, imvString, imvRawByteString, imvWideString,
      imvRecord, imvVariant, imvDynArray];
 
 type
@@ -2974,6 +2995,7 @@ end;
 {$else}
 function TInterfacedObjectFake.SelfFromInterface: TInterfacedObjectFake;
 asm
+        // asm version for oldest Delphi 7
         sub     eax, TInterfacedObjectFake.fVTable
 end;
 {$endif HASINLINE}
@@ -2993,7 +3015,7 @@ function TInterfacedObjectFake.FakeQueryInterface(
   out Obj): TIntQry;
 begin
   self := SelfFromInterface;
-  if IsEqualGUID(@IID, @fFactory.fInterfaceIID) then
+  if IsEqualGuid(@IID, @fFactory.fInterfaceIID) then
   begin
     pointer(Obj) := @fVTable;
     _AddRef;
@@ -3022,23 +3044,23 @@ var
   resultType: TInterfaceMethodValueType; // type of value stored into result
   ctxt: TFakeCallStack absolute aCall;
 
-  procedure RaiseError(const Format: RawUTF8; const Args: array of const);
+  procedure RaiseError(const Format: RawUtf8; const Args: array of const);
   var
-    msg: RawUTF8;
+    msg: RawUtf8;
   begin
-    msg := FormatUTF8(Format, Args);
-    raise EInterfaceFactory.CreateUTF8('%.FakeCall(%.%) failed: %',
-      [self, fFactory.fInterfaceName, method^.URI, msg]);
+    msg := FormatUtf8(Format, Args);
+    raise EInterfaceFactory.CreateUtf8('%.FakeCall(%.%) failed: %',
+      [self, fFactory.fInterfaceName, method^.Uri, msg]);
   end;
 
   procedure InternalProcess;
   var
     Params: TTextWriter;
-    Error, ResArray, ParamsJSON: RawUTF8;
+    Error, ResArray, ParamsJson: RawUtf8;
     arg, ValLen: integer;
     V: PPointer;
-    R, Val: PUTF8Char;
-    resultAsJSONObject: boolean;
+    R, Val: PUtf8Char;
+    resultAsJsonObject: boolean;
     opt: TTextWriterWriteObjectOptions;
     ServiceCustomAnswerPoint: PServiceCustomAnswer;
     DynArrays: array[0..MAX_METHOD_ARGS - 1] of TDynArray;
@@ -3050,11 +3072,11 @@ var
     try
       // create the parameters
       if ifoJsonAsExtended in fOptions then
-        Params.CustomOptions := Params.CustomOptions + [twoForceJSONExtended]
+        Params.CustomOptions := Params.CustomOptions + [twoForceJsonExtended]
       else
         // e.g. for AJAX
-        Params.CustomOptions := Params.CustomOptions + [twoForceJSONStandard];
-      if ifoDontStoreVoidJSON in fOptions then
+        Params.CustomOptions := Params.CustomOptions + [twoForceJsonStandard];
+      if ifoDontStoreVoidJson in fOptions then
       begin
         opt := DEFAULT_WRITEOPTIONS[true];
         Params.CustomOptions := Params.CustomOptions + [twoIgnoreDefaultInRecord];
@@ -3107,17 +3129,20 @@ var
                 imvDynArray:
                   begin
                     if vIsObjArray in ValueKindAsm then
-                      Params.AddObjArrayJSON(V^, opt)
+                      Params.AddObjArrayJson(V^, opt)
                     else
-                      Params.AddDynArrayJSON(DynArrays[IndexVar]);
+                      Params.AddDynArrayJson(DynArrays[IndexVar]);
                     Params.Add(',');
                   end;
               else
-                AddJSON(Params, V, opt);
+                begin
+                  AddJson(Params, V, opt);
+                  Params.Add(',');
+                end;
               end;
           end;
       Params.CancelLastComma;
-      Params.SetText(ParamsJSON); // without [ ]
+      Params.SetText(ParamsJson); // without [ ]
     finally
       Params.Free;
     end;
@@ -3126,7 +3151,7 @@ var
       ServiceCustomAnswerPoint := Value[method^.ArgsResultIndex]
     else
       ServiceCustomAnswerPoint := nil;
-    if not fInvoke(method^, ParamsJSON, @ResArray, @Error, @fClientDrivenID,
+    if not fInvoke(method^, ParamsJson, @ResArray, @Error, @fClientDrivenID,
       ServiceCustomAnswerPoint) then
       RaiseError('''%''', [Error]);
     // retrieve method result and var/out parameters content
@@ -3138,19 +3163,19 @@ var
           repeat
             inc(R)
           until not (R^ in [#1..' ']);
-        resultAsJSONObject := false; // [value,...] JSON array format
+        resultAsJsonObject := false; // [value,...] JSON array format
         if R^ = '{' then
           // {"paramname":value,...} JSON object format
-          resultAsJSONObject := true
+          resultAsJsonObject := true
         else if R^ <> '[' then
           RaiseError('JSON array/object result expected', []);
         inc(R);
         arg := method^.ArgsOutFirst;
         if arg > 0 then
           repeat
-            if resultAsJSONObject then
+            if resultAsJsonObject then
             begin
-              Val := GetJSONPropName(R, @ValLen);
+              Val := GetJsonPropName(R, @ValLen);
               if Val = nil then
                 // end of JSON object
                 break;
@@ -3168,7 +3193,7 @@ var
             begin
               //assert(ValueDirection in [imdVar,imdOut,imdResult]);
               V := Value[arg];
-              FromJSON(method^.InterfaceDotMethodName, R, V, nil, fFactory.DocVariantOptions);
+              FromJson(method^.InterfaceDotMethodName, R, V, nil, fFactory.DocVariantOptions);
               if ValueDirection = imdResult then
               begin
                 resultType := ValueType;
@@ -3183,7 +3208,7 @@ var
               repeat
                 inc(R)
               until not (R^ in [#1..' ']);
-            if resultAsJSONObject then
+            if resultAsJsonObject then
             begin
               if (R^ = #0) or
                  (R^ = '}') then
@@ -3211,7 +3236,7 @@ begin
   *)
   self := SelfFromInterface;
   if ctxt.MethodIndex >= fFactory.MethodsCount then
-    raise EInterfaceFactory.CreateUTF8('%.FakeCall(%.%) failed: out of range method %>=%',
+    raise EInterfaceFactory.CreateUtf8('%.FakeCall(%.%) failed: out of range method %>=%',
       [self, fFactory.fInterfaceName, ctxt.MethodIndex, fFactory.MethodsCount]);
   method := @fFactory.fMethods[ctxt.MethodIndex];
   if not Assigned(fInvoke) then
@@ -3240,8 +3265,8 @@ procedure TInterfacedObjectFake.InterfaceWrite(W: TTextWriter;
   const aMethod: TInterfaceMethod; const aParamInfo: TInterfaceMethodArgument;
   aParamValue: Pointer);
 begin
-  raise EInterfaceFactory.CreateUTF8('%: unhandled %.%(%: %) argument', [self,
-    fFactory.fInterfaceName, aMethod.URI, aParamInfo.ParamName^, aParamInfo.ArgTypeName^]);
+  raise EInterfaceFactory.CreateUtf8('%: unhandled %.%(%: %) argument', [self,
+    fFactory.fInterfaceName, aMethod.Uri, aParamInfo.ParamName^, aParamInfo.ArgTypeName^]);
 end;
 
 
@@ -3258,19 +3283,19 @@ const
 
   /// which TRttiParserType are actually serialized as JSON Strings
   _SMV_STRING =
-    [imvRawUTF8..imvBinary, imvDateTime];
+    [imvRawUtf8..imvBinary, imvDateTime];
 
   _FROM_RTTI: array[TRttiParserType] of TInterfaceMethodValueType = (
   // ptNone, ptArray, ptBoolean, ptByte, ptCardinal, ptCurrency, ptDouble, ptExtended,
     imvNone, imvNone, imvBoolean, imvNone, imvCardinal, imvCurrency, imvDouble, imvNone,
-  // ptInt64, ptInteger, ptQWord, ptRawByteString, ptRawJSON, ptRawUTF8,
-    imvInt64, imvInteger, imvInt64, imvRawByteString, imvRawJSON, imvRawUTF8,
+  // ptInt64, ptInteger, ptQWord, ptRawByteString, ptRawJson, ptRawUtf8,
+    imvInt64, imvInteger, imvInt64, imvRawByteString, imvRawJson, imvRawUtf8,
   // ptRecord, ptSingle, ptString, ptSynUnicode, ptDateTime, ptDateTimeMS,
     imvRecord, imvDouble, imvString, imvSynUnicode, imvDateTime, imvDateTime,
-  // ptGUID, ptHash128, ptHash256, ptHash512, ptORM, ptTimeLog, ptUnicodeString,
-    imvBinary, imvBinary, imvBinary, imvBinary, imvObject, imvInt64, imvUnicodeString,
+  // ptGuid, ptHash128, ptHash256, ptHash512, ptORM, ptTimeLog, ptUnicodeString,
+    imvBinary, imvBinary, imvBinary, imvBinary, imvInt64, imvInt64, imvUnicodeString,
   // ptUnixTime, ptUnixMSTime, ptVariant, ptWideString, ptWinAnsi, ptWord,
-    imvInt64, imvInt64, imvVariant, imvWideString, imvRawUTF8, imvNone,
+    imvInt64, imvInt64, imvVariant, imvWideString, imvRawUtf8, imvNone,
   // ptEnumeration, ptSet, ptClass, ptDynArray, ptInterface, ptCustom);
     imvEnum, imvSet, imvObject, imvDynArray, imvInterface, imvNone);
 
@@ -3295,7 +3320,7 @@ var
 begin
   if (aInterface = nil) or
      (aInterface^.Kind <> rkInterface) then
-    raise EInterfaceFactory.CreateUTF8('%.Get(invalid)', [self]);
+    raise EInterfaceFactory.CreateUtf8('%.Get(invalid)', [self]);
   if InterfaceFactoryCache = nil then
     InitializeInterfaceFactoryCache;
   InterfaceFactoryCache.Safe.Lock;
@@ -3311,11 +3336,11 @@ begin
         inc(F);
     // not existing -> create new instance from RTTI
     {$ifdef HASINTERFACERTTI}
-    result := TInterfaceFactoryRTTI.Create(aInterface);
+    result := TInterfaceFactoryRtti.Create(aInterface);
     InterfaceFactoryCache.Add(result);
     {$else}
     result := nil; // make compiler happy
-    raise EInterfaceFactory.CreateUTF8('No RTTI available for I%: please ' +
+    raise EInterfaceFactory.CreateUtf8('No RTTI available for I%: please ' +
       'define the methods using a TInterfaceFactoryGenerated wrapper',
       [aInterface^.RawName]);
     {$endif HASINTERFACERTTI}
@@ -3347,14 +3372,14 @@ end;
 {$endif HASINTERFACERTTI}
 
 {$ifdef FPC_HAS_CONSTREF}
-class function TInterfaceFactory.Get(constref aGUID: TGUID): TInterfaceFactory;
+class function TInterfaceFactory.Get(constref aGuid: TGUID): TInterfaceFactory;
 {$else}
-class function TInterfaceFactory.Get(const aGUID: TGUID): TInterfaceFactory;
+class function TInterfaceFactory.Get(const aGuid: TGUID): TInterfaceFactory;
 {$endif FPC_HAS_CONSTREF}
 var
   n: PtrInt;
   F: ^TInterfaceFactory;
-  g: THash128Rec absolute aGUID;
+  g: THash128Rec absolute aGuid;
   {$ifdef CPUX86NOTPIC}
   cache: TSynObjectListLocked absolute InterfaceFactoryCache;
   {$else}
@@ -3388,42 +3413,42 @@ begin
 end;
 
 class procedure TInterfaceFactory.AddToObjArray(var Obj: TInterfaceFactoryObjArray;
-  const aGUIDs: array of TGUID);
+  const aGuids: array of TGUID);
 var
   i: PtrInt;
   fac: TInterfaceFactory;
 begin
-  for i := 0 to high(aGUIDs) do
+  for i := 0 to high(aGuids) do
   begin
-    fac := Get(aGUIDs[i]);
+    fac := Get(aGuids[i]);
     if fac <> nil then
       ObjArrayAddOnce(Obj, fac);
   end;
 end;
 
-class function TInterfaceFactory.GUID2TypeInfo(
-  const aGUIDs: array of TGUID): PRttiInfoDynArray;
+class function TInterfaceFactory.Guid2TypeInfo(
+  const aGuids: array of TGUID): PRttiInfoDynArray;
 var
   i: PtrInt;
 begin
   result := nil;
-  SetLength(result, length(aGUIDs));
-  for i := 0 to high(aGUIDs) do
-    result[i] := GUID2TypeInfo(aGUIDs[i]);
+  SetLength(result, length(aGuids));
+  for i := 0 to high(aGuids) do
+    result[i] := Guid2TypeInfo(aGuids[i]);
 end;
 
-class function TInterfaceFactory.GUID2TypeInfo(const aGUID: TGUID): PRttiInfo;
+class function TInterfaceFactory.Guid2TypeInfo(const aGuid: TGUID): PRttiInfo;
 var
   fact: TInterfaceFactory;
 begin
-  fact := Get(aGUID);
+  fact := Get(aGuid);
   if fact = nil then
-    raise EInterfaceFactory.CreateUTF8('%.GUID2TypeInfo(%): Interface not ' +
-      'registered - use %.RegisterInterfaces()', [self, GUIDToShort(aGUID), self]);
+    raise EInterfaceFactory.CreateUtf8('%.Guid2TypeInfo(%): Interface not ' +
+      'registered - use %.RegisterInterfaces()', [self, GuidToShort(aGuid), self]);
   result := fact.fInterfaceTypeInfo;
 end;
 
-class function TInterfaceFactory.Get(const aInterfaceName: RawUTF8): TInterfaceFactory;
+class function TInterfaceFactory.Get(const aInterfaceName: RawUtf8): TInterfaceFactory;
 var
   L, i: integer;
   F: ^TInterfaceFactory;
@@ -3437,7 +3462,7 @@ begin
     try
       F := pointer(InterfaceFactoryCache.List);
       for i := 1 to InterfaceFactoryCache.Count do
-        if IdemPropName(F^.fInterfaceName, pointer(aInterfaceName), L) then
+        if IdemPropNameU(F^.fInterfaceName, pointer(aInterfaceName), L) then
         begin
           result := F^;
           exit; // retrieved from cache
@@ -3464,7 +3489,7 @@ constructor TInterfaceFactory.Create(aInterface: PRttiInfo);
 var
   m, a, reg: integer;
   WR: TTextWriter;
-  ErrorMsg: RawUTF8;
+  ErrorMsg: RawUtf8;
   {$ifdef HAS_FPREG}
   ValueIsInFPR: boolean;
   {$endif HAS_FPREG}
@@ -3478,31 +3503,31 @@ var
 begin
   // validate supplied TypeInfo() RTTI input
   if aInterface = nil then
-    raise EInterfaceFactory.CreateUTF8('%.Create(nil)', [self]);
+    raise EInterfaceFactory.CreateUtf8('%.Create(nil)', [self]);
   if aInterface^.Kind <> rkInterface then
-    raise EInterfaceFactory.CreateUTF8('%.Create: % is not an interface',
+    raise EInterfaceFactory.CreateUtf8('%.Create: % is not an interface',
       [self, aInterface^.RawName]);
   fDocVariantOptions := JSON_OPTIONS_FAST;
   fInterfaceTypeInfo := aInterface;
-  fInterfaceIID := aInterface^.InterfaceGUID^;
-  if IsNullGUID(fInterfaceIID) then
-    raise EInterfaceFactory.CreateUTF8(
+  fInterfaceIID := aInterface^.InterfaceGuid^;
+  if IsNullGuid(fInterfaceIID) then
+    raise EInterfaceFactory.CreateUtf8(
       '%.Create: % has no GUID', [self, aInterface^.RawName]);
-  fInterfaceRTTI := Rtti.RegisterType(aInterface) as TRttiJson;
-  fInterfaceName := fInterfaceRTTI.Name;
-  fInterfaceURI := fInterfaceName;
-  if fInterfaceURI[1] in ['i','I'] then
+  fInterfaceRtti := Rtti.RegisterType(aInterface) as TRttiJson;
+  fInterfaceName := fInterfaceRtti.Name;
+  fInterfaceUri := fInterfaceName;
+  if fInterfaceUri[1] in ['i','I'] then
     // as in TServiceFactory.Create
-    delete(fInterfaceURI, 1, 1);
+    delete(fInterfaceUri, 1, 1);
   // retrieve all interface methods (recursively including ancestors)
-  fMethod.InitSpecific(TypeInfo(TInterfaceMethodDynArray), fMethods, ptRawUTF8,
+  fMethod.InitSpecific(TypeInfo(TInterfaceMethodDynArray), fMethods, ptRawUtf8,
     @fMethodsCount, true);
   AddMethodsFromTypeInfo(aInterface); // from RTTI or generated code
   if fMethodsCount = 0 then
-    raise EInterfaceFactory.CreateUTF8('%.Create(%): interface has ' +
+    raise EInterfaceFactory.CreateUtf8('%.Create(%): interface has ' +
       'no RTTI - should inherit from IInvokable', [self, fInterfaceName]);
   if MethodsCount > MAX_METHOD_COUNT then
-    raise EInterfaceFactory.CreateUTF8(
+    raise EInterfaceFactory.CreateUtf8(
       '%.Create(%): interface has too many methods (%), so breaks the ' +
       'Interface Segregation Principle', [self, fInterfaceName, MethodsCount]);
   fMethodIndexCurrentFrameCallback := -1;
@@ -3512,7 +3537,7 @@ begin
   for m := 0 to MethodsCount - 1 do
   with fMethods[m] do
   begin
-    InterfaceDotMethodName := fInterfaceURI + '.' + URI;
+    InterfaceDotMethodName := fInterfaceUri + '.' + URI;
     IsInherited := HierarchyLevel <> fAddMethodsLevel;
     ExecutionMethodIndex := m + RESERVED_VTABLE_SLOTS;
     ArgsInFirst := -1;
@@ -3538,7 +3563,7 @@ begin
           rkFloat:
             ErrorMsg := ' - use double/currency instead';
         else
-          FormatUTF8(' (%)', [ToText(ArgRtti.Info^.Kind)], ErrorMsg);
+          FormatUtf8(' (%)', [ToText(ArgRtti.Info^.Kind)], ErrorMsg);
         end;
       imvObject:
         if ArgRtti.ValueClass = TList then
@@ -3554,7 +3579,7 @@ begin
           ErrorMsg := ' - interface not allowed as output: use a const parameter';
       end;
       if ErrorMsg <> '' then
-        raise EInterfaceFactory.CreateUTF8(
+        raise EInterfaceFactory.CreateUtf8(
           '%.Create: %.% [%] parameter has unexpected type %%',
           [self, aInterface^.RawName, URI, ParamName^, ArgRtti.Name, ErrorMsg]);
       if ValueDirection = imdResult then
@@ -3602,7 +3627,7 @@ begin
         2:
           if (Args[1].ValueType = imvInterface) and
              (Args[1].ArgRtti.Info = TypeInfo(IInvokable)) and
-             (Args[2].ValueType = imvRawUTF8) and
+             (Args[2].ValueType = imvRawUtf8) and
              IdemPropNameU(URI, 'CallbackReleased') then
             fMethodIndexCallbackReleased := m;
       end;
@@ -3610,7 +3635,7 @@ begin
       with Args[ArgsResultIndex] do
       case ValueType of
         imvNone, imvObject, imvInterface:
-          raise EInterfaceFactory.CreateUTF8(
+          raise EInterfaceFactory.CreateUtf8(
             '%.Create: I% unexpected result type %',
             [self, InterfaceDotMethodName, ArgTypeName^]);
         imvRecord:
@@ -3618,7 +3643,7 @@ begin
           begin
             for a := ArgsOutFirst to ArgsOutLast do
               if Args[a].ValueDirection in [imdVar, imdOut] then
-                raise EInterfaceFactory.CreateUTF8('%.Create: I% ' +
+                raise EInterfaceFactory.CreateUtf8('%.Create: I% ' +
                   'var/out parameter [%] not allowed with TServiceCustomAnswer result',
                   [self, InterfaceDotMethodName, Args[a].ParamName^]);
             ArgsResultIsServiceCustomAnswer := true;
@@ -3694,13 +3719,13 @@ begin
           begin
             SizeInStorage := ArgRtti.Cache.EnumInfo.SizeInStorageAsSet;
             if SizeInStorage = 0 then
-              raise EInterfaceFactory.CreateUTF8(
+              raise EInterfaceFactory.CreateUtf8(
                 '%.Create: % set invalid SizeInStorage=% in %.% method % parameter',
                 [self, ArgTypeName^, SizeInStorage, fInterfaceName, URI, ParamName^]);
           end;
         imvRecord:
           if ArgRtti.Size <= POINTERBYTES then
-            raise EInterfaceFactory.CreateUTF8(
+            raise EInterfaceFactory.CreateUtf8(
               '%.Create: % record too small in %.% method % parameter',
               [self, ArgTypeName^, fInterfaceName, URI, ParamName^])
           else
@@ -3809,7 +3834,7 @@ begin
       end;
     end;
     if ArgsSizeInStack > MAX_EXECSTACK then
-      raise EInterfaceFactory.CreateUTF8(
+      raise EInterfaceFactory.CreateUtf8(
         '%.Create: Stack size % > % for %.% method',
         [self, ArgsSizeInStack, MAX_EXECSTACK, fInterfaceName, URI]);
     {$ifdef CPUX86}
@@ -3836,7 +3861,7 @@ begin
       for a := ArgsOutFirst to ArgsOutLast do
         with Args[a] do
         if ValueDirection in [imdVar, imdOut, imdResult] then
-          AddDefaultJSON(WR);
+          AddDefaultJson(WR);
       WR.CancelLastComma;
       WR.Add(']');
       WR.SetText(DefaultResult);
@@ -3857,7 +3882,7 @@ begin
     WR.Add(']');
     WR.SetText(fContract);
     {$ifdef SOA_DEBUG}
-    JSONReformatToFile(fContract,TFileName(fInterfaceName + '-' +
+    JsonReformatToFile(fContract,TFileName(fInterfaceName + '-' +
       COMP_TEXT + OS_TEXT + CPU_ARCH_TEXT + '.json'));
     {$endif SOA_DEBUG}
   finally
@@ -3865,7 +3890,7 @@ begin
   end;
 end;
 
-function TInterfaceFactory.FindMethodIndex(const aMethodName: RawUTF8): integer;
+function TInterfaceFactory.FindMethodIndex(const aMethodName: RawUtf8): integer;
 begin
   if (self = nil) or
      (aMethodName = '') then
@@ -3875,7 +3900,7 @@ begin
     if MethodsCount < 10 then
     begin
       for result := 0 to MethodsCount - 1 do
-        if IdemPropNameU(fMethods[result].URI, aMethodName) then
+        if IdemPropNameU(fMethods[result].Uri, aMethodName) then
           exit;
       result := -1;
     end
@@ -3887,7 +3912,7 @@ begin
   end;
 end;
 
-function TInterfaceFactory.FindMethod(const aMethodName: RawUTF8): PInterfaceMethod;
+function TInterfaceFactory.FindMethod(const aMethodName: RawUtf8): PInterfaceMethod;
 var
   i: PtrInt;
 begin
@@ -3898,7 +3923,7 @@ begin
     result := @fMethods[i];
 end;
 
-function TInterfaceFactory.FindFullMethodIndex(const aFullMethodName: RawUTF8;
+function TInterfaceFactory.FindFullMethodIndex(const aFullMethodName: RawUtf8;
   alsoSearchExactMethodName: boolean): integer;
 begin
   if PosExChar('.', aFullMethodName) <> 0 then
@@ -3911,23 +3936,23 @@ begin
     result := -1;
 end;
 
-function TInterfaceFactory.CheckMethodIndex(const aMethodName: RawUTF8): integer;
+function TInterfaceFactory.CheckMethodIndex(const aMethodName: RawUtf8): integer;
 begin
   if self = nil then
     raise EInterfaceFactory.Create('TInterfaceFactory(nil).CheckMethodIndex');
   result := FindMethodIndex(aMethodName);
   if result < 0 then
-    raise EInterfaceFactory.CreateUTF8('%.CheckMethodIndex: %.% not found',
+    raise EInterfaceFactory.CreateUtf8('%.CheckMethodIndex: %.% not found',
       [self, fInterfaceName, aMethodName]);
 end;
 
-function TInterfaceFactory.CheckMethodIndex(aMethodName: PUTF8Char): integer;
+function TInterfaceFactory.CheckMethodIndex(aMethodName: PUtf8Char): integer;
 begin
-  result := CheckMethodIndex(RawUTF8(aMethodName));
+  result := CheckMethodIndex(RawUtf8(aMethodName));
 end;
 
 procedure TInterfaceFactory.CheckMethodIndexes(
-  const aMethodName: array of RawUTF8; aSetAllIfNone: boolean;
+  const aMethodName: array of RawUtf8; aSetAllIfNone: boolean;
   out aBits: TInterfaceFactoryMethodBits);
 var
   i: PtrInt;
@@ -3943,7 +3968,7 @@ begin
     include(aBits, CheckMethodIndex(aMethodName[i]));
 end;
 
-function TInterfaceFactory.GetMethodName(MethodIndex: integer): RawUTF8;
+function TInterfaceFactory.GetMethodName(MethodIndex: integer): RawUtf8;
 begin
   if (MethodIndex < 0) or
      (self = nil) then
@@ -3954,13 +3979,13 @@ begin
   begin
     dec(MethodIndex, SERVICE_PSEUDO_METHOD_COUNT);
     if cardinal(MethodIndex) < MethodsCount then
-      result := fMethods[MethodIndex].URI
+      result := fMethods[MethodIndex].Uri
     else
       result := '';
   end;
 end;
 
-function TInterfaceFactory.GetFullMethodName(aMethodIndex: integer): RawUTF8;
+function TInterfaceFactory.GetFullMethodName(aMethodIndex: integer): RawUtf8;
 begin
   if self = nil then
     result := ''
@@ -4290,9 +4315,9 @@ end;
 
 {$ifdef HASINTERFACERTTI}
 
-{ TInterfaceFactoryRTTI }
+{ TInterfaceFactoryRtti }
 
-procedure TInterfaceFactoryRTTI.AddMethodsFromTypeInfo(aInterface: PRttiInfo);
+procedure TInterfaceFactoryRtti.AddMethodsFromTypeInfo(aInterface: PRttiInfo);
 var
   info: TRttiInterface;
   nm, na: integer;
@@ -4333,7 +4358,7 @@ end;
 
 { TInterfaceFactoryGenerated }
 
-procedure TInterfaceFactoryGenerated.AddMethod(const aName: RawUTF8;
+procedure TInterfaceFactoryGenerated.AddMethod(const aName: RawUtf8;
   const aParams: array of const);
 const
   ARGPERARG = 3; // aParams = [ 0,'n1',TypeInfo(integer), ... ]
@@ -4341,10 +4366,10 @@ var
   meth: PInterfaceMethod;
   arg: ^TInterfaceMethodArgument;
   na, ns, a: PtrInt;
-  u: RawUTF8;
+  u: RawUtf8;
 begin
   if Length(aParams) mod ARGPERARG <> 0 then
-    raise EInterfaceFactory.CreateUTF8(
+    raise EInterfaceFactory.CreateUtf8(
       '%: invalid aParams count for %.AddMethod("%")', [fInterfaceName, self, aName]);
   meth := fMethod.AddUniqueName(aName, '%.% method: duplicated generated name for %',
     [fInterfaceName, aName, self]);
@@ -4353,7 +4378,7 @@ begin
   with meth^.Args[0] do
   begin
     ParamName := @PSEUDO_SELF_NAME;
-    ArgRtti := fInterfaceRTTI;
+    ArgRtti := fInterfaceRtti;
     ArgTypeName := fInterfaceTypeInfo^.Name;
   end;
   ns := length(fTempStrings);
@@ -4362,21 +4387,21 @@ begin
   begin
     arg := @meth^.Args[a + 1];
     if aParams[a * ARGPERARG].VType <> vtInteger then
-      raise EInterfaceFactory.CreateUTF8(
+      raise EInterfaceFactory.CreateUtf8(
         '%: invalid param type #% for %.AddMethod("%")',
         [fInterfaceName, a, self, aName]);
     arg^.ValueDirection :=
       TInterfaceMethodValueDirection(aParams[a * ARGPERARG].VInteger);
-    VarRecToUTF8(aParams[a * ARGPERARG + 1], u);
+    VarRecToUtf8(aParams[a * ARGPERARG + 1], u);
     if u = '' then
-      raise EInterfaceFactory.CreateUTF8(
+      raise EInterfaceFactory.CreateUtf8(
         '%: invalid param name #% for %.AddMethod("%")',
         [fInterfaceName, a, self, aName]);
     insert(AnsiChar(Length(u)), u, 1); // create fake PShortString
     arg^.ParamName := pointer(u);
     fTempStrings[ns + a] := u;
     if aParams[a * ARGPERARG + 2].VType <> vtPointer then
-      raise EInterfaceFactory.CreateUTF8(
+      raise EInterfaceFactory.CreateUtf8(
         '%: expect TypeInfo() at #% for %.AddMethod("%")',
         [fInterfaceName, a, self, aName]);
     arg^.ArgRtti := Rtti.RegisterType(aParams[a * ARGPERARG + 2].VPointer) as TRttiJson;
@@ -4390,7 +4415,7 @@ var
 begin
   if (aInterface = nil) or
      (self = TInterfaceFactoryGenerated) then
-    raise EInterfaceFactory.CreateUTF8('%.RegisterInterface(nil)', [self]);
+    raise EInterfaceFactory.CreateUtf8('%.RegisterInterface(nil)', [self]);
   if InterfaceFactoryCache = nil then
     InitializeInterfaceFactoryCache;
   InterfaceFactoryCache.Safe.Lock;
@@ -4398,7 +4423,7 @@ begin
     for i := 0 to InterfaceFactoryCache.Count - 1 do
       if TInterfaceFactory(InterfaceFactoryCache.List[i]).fInterfaceTypeInfo =
         aInterface then
-        raise EInterfaceFactory.CreateUTF8('Duplicated %.RegisterInterface(%)',
+        raise EInterfaceFactory.CreateUtf8('Duplicated %.RegisterInterface(%)',
           [self, aInterface^.RawName]);
     InterfaceFactoryCache.Add(Create(aInterface));
   finally
@@ -4441,13 +4466,13 @@ begin
 end;
 
 function ToText({$ifdef FPC_HAS_CONSTREF}constref{$else}const{$endif}
-  aGUID: TGUID): TGUIDShortString;
+  aGuid: TGUID): TGuidShortString;
 var
   fact: TInterfaceFactory;
 begin
-  fact := TInterfaceFactory.Get(aGUID);
+  fact := TInterfaceFactory.Get(aGuid);
   if fact = nil then
-    GUIDToShort(aGUID, result)
+    GuidToShort(aGuid, result)
   else
     result := fact.fInterfaceTypeInfo^.RawName;
 end;
@@ -4538,12 +4563,12 @@ var
   guid: PGUID;
 begin
   fInterfaceTypeInfo := aInterface;
-  guid := aInterface^.InterfaceGUID;
+  guid := aInterface^.InterfaceGuid;
   if guid = nil then
-    raise EInterfaceResolver.CreateUTF8('%.Create expects an Interface', [self]);
+    raise EInterfaceResolver.CreateUtf8('%.Create expects an Interface', [self]);
   fImplementationEntry := aImplementation.GetInterfaceEntry(guid^);
   if fImplementationEntry = nil then
-    raise EInterfaceResolver.CreateUTF8('%.Create: % does not implement %',
+    raise EInterfaceResolver.CreateUtf8('%.Create: % does not implement %',
       [self, aImplementation, fInterfaceTypeInfo^.RawName]);
   aInterface^.InterfaceAncestors(fInterfaceAncestors, aImplementation,
     fInterfaceAncestorsImplementationEntry);
@@ -4553,7 +4578,7 @@ end;
 constructor TInterfaceResolverForSingleInterface.Create(const aInterface: TGUID;
   aImplementation: TInterfacedObjectClass);
 begin
-  Create(TInterfaceFactory.GUID2TypeInfo(aInterface), aImplementation);
+  Create(TInterfaceFactory.Guid2TypeInfo(aInterface), aImplementation);
 end;
 
 function TInterfaceResolverForSingleInterface.CreateInstance: TInterfacedObject;
@@ -4561,7 +4586,7 @@ begin
   result := TInterfacedObject(fImplementation.ClassNewInstance);
 end;
 
-function TInterfaceResolverForSingleInterface.GetImplementationName: RawUTF8;
+function TInterfaceResolverForSingleInterface.GetImplementationName: RawUtf8;
 begin
   if (self = nil) or
      (fImplementation.ValueClass = nil) then
@@ -4638,15 +4663,15 @@ var
 begin
   if (aInterface = nil) or
      (aImplementationClass = nil) then
-    raise EInterfaceResolver.CreateUTF8(
+    raise EInterfaceResolver.CreateUtf8(
       '%.RegisterGlobal(nil)', [self]);
   if aInterface^.Kind <> rkInterface then
-    raise EInterfaceResolver.CreateUTF8(
+    raise EInterfaceResolver.CreateUtf8(
       '%.RegisterGlobal(%): % is not an interface',
       [self, aInterface^.RawName]);
-  result := aImplementationClass.GetInterfaceEntry(aInterface^.InterfaceGUID^);
+  result := aImplementationClass.GetInterfaceEntry(aInterface^.InterfaceGuid^);
   if result = nil then
-    raise EInterfaceResolver.CreateUTF8(
+    raise EInterfaceResolver.CreateUtf8(
       '%.RegisterGlobal(): % does not implement %',
       [self, aImplementationClass, aInterface^.RawName]);
   EnterCriticalSection(GlobalInterfaceResolutionLock);
@@ -4654,7 +4679,7 @@ begin
     if GlobalInterfaceResolution[i].TypeInfo = aInterface then
     begin
       LeaveCriticalSection(GlobalInterfaceResolutionLock); // always UnLock
-      raise EInterfaceResolver.CreateUTF8(
+      raise EInterfaceResolver.CreateUtf8(
         '%.RegisterGlobal(%): % already registered',
         [self, aImplementationClass, aInterface^.RawName]);
     end;
@@ -4696,7 +4721,7 @@ begin
     with GlobalInterfaceResolution[n] do
     begin
       if not GetInterfaceFromEntry(aImplementation, aInterfaceEntry, Instance) then
-        raise EInterfaceResolver.CreateUTF8('Unexcepted %.RegisterGlobal(%,%)',
+        raise EInterfaceResolver.CreateUtf8('Unexcepted %.RegisterGlobal(%,%)',
           [self, aInterface^.RawName, aImplementation]);
       TypeInfo := aInterface;
       InterfaceEntry := aInterfaceEntry;
@@ -4712,7 +4737,7 @@ var
 begin
   if (aInterface = nil) or
      (aInterface^.Kind <> rkInterface) then
-    raise EInterfaceResolver.CreateUTF8('%.RegisterGlobalDelete(?)', [self]);
+    raise EInterfaceResolver.CreateUtf8('%.RegisterGlobalDelete(?)', [self]);
   EnterCriticalSection(GlobalInterfaceResolutionLock);
   try
     n := length(GlobalInterfaceResolution) - 1;
@@ -4721,7 +4746,7 @@ begin
         if TypeInfo = aInterface then
         begin
           if Instance = nil then
-            raise EInterfaceResolver.CreateUTF8(
+            raise EInterfaceResolver.CreateUtf8(
               '%.RegisterGlobalDelete(%) does not match an instance, but a class',
               [self, aInterface^.RawName]);
           Instance := nil; // avoid GPF
@@ -4754,7 +4779,7 @@ begin
             exit;
       if fDependencies <> nil then
         for i := 0 to Length(fDependencies) - 1 do
-          if fDependencies[i].GetInterface(aInterface^.InterfaceGUID^, Obj) then
+          if fDependencies[i].GetInterface(aInterface^.InterfaceGuid^, Obj) then
             exit;
     end;
     EnterCriticalSection(GlobalInterfaceResolutionLock);
@@ -4875,7 +4900,7 @@ begin
     result := TryResolve(aInterface, Obj);
 end;
 
-function TInterfaceResolverInjected.Resolve(const aGUID: TGUID; out Obj): boolean;
+function TInterfaceResolverInjected.Resolve(const aGuid: TGUID; out Obj): boolean;
 var
   known: TInterfaceFactory;
 begin
@@ -4883,7 +4908,7 @@ begin
     result := false
   else
   begin
-    known := TInterfaceFactory.Get(aGUID);
+    known := TInterfaceFactory.Get(aGuid);
     if known <> nil then
       result := Resolve(known.fInterfaceTypeInfo, Obj)
     else
@@ -4899,11 +4924,11 @@ begin
   n := length(aInterfaceObjPairs);
   if (n = 0) or
      (n and 1 = 1) then
-    raise EInterfaceResolver.CreateUTF8('%.Resolve([odd])', [self]);
+    raise EInterfaceResolver.CreateUtf8('%.Resolve([odd])', [self]);
   for i := 0 to (n shr 1) - 1 do
     if not Resolve(aInterfaceObjPairs[i * 2], aInterfaceObjPairs[i * 2 + 1]^) then
       if aRaiseExceptionIfNotFound then
-        raise EInterfaceResolver.CreateUTF8('%.ResolveByPair(%) unsatisfied',
+        raise EInterfaceResolver.CreateUtf8('%.ResolveByPair(%) unsatisfied',
           [self, PRttiInfo(aInterfaceObjPairs[i * 2])^.RawName]);
 end;
 
@@ -4916,14 +4941,14 @@ begin
   n := length(aInterfaces);
   if (n = 0) or
      (n <> length(aObjs)) then
-    raise EInterfaceResolver.CreateUTF8('%.Resolve([?,?])', [self]);
+    raise EInterfaceResolver.CreateUtf8('%.Resolve([?,?])', [self]);
   for i := 0 to n - 1 do
     if PPointer(aObjs[i])^ = nil then
     begin
-      info := TInterfaceFactory.GUID2TypeInfo(aInterfaces[i]);
+      info := TInterfaceFactory.Guid2TypeInfo(aInterfaces[i]);
       if not Resolve(info, aObjs[i]^) then
         if aRaiseExceptionIfNotFound then
-          raise EInterfaceResolver.CreateUTF8('%.Resolve(%) unsatisfied',
+          raise EInterfaceResolver.CreateUtf8('%.Resolve(%) unsatisfied',
             [self, info^.RawName]);
     end;
 end;
@@ -4944,17 +4969,17 @@ end;
 procedure TInjectableObject.Resolve(aInterface: PRttiInfo; out Obj);
 begin
   if not TryResolve(aInterface, Obj) then
-    raise EInterfaceResolver.CreateUTF8('%.Resolve(%) unsatisfied', [self,
+    raise EInterfaceResolver.CreateUtf8('%.Resolve(%) unsatisfied', [self,
       aInterface^.RawName]);
 end;
 
-procedure TInjectableObject.Resolve(const aGUID: TGUID; out Obj);
+procedure TInjectableObject.Resolve(const aGuid: TGUID; out Obj);
 var
   info: PRttiInfo;
 begin
-  info := TInterfaceFactory.GUID2TypeInfo(aGUID);
+  info := TInterfaceFactory.Guid2TypeInfo(aGuid);
   if not TryResolve(info, Obj) then
-    raise EInterfaceResolver.CreateUTF8('%.Resolve(%): Interface not registered',
+    raise EInterfaceResolver.CreateUtf8('%.Resolve(%): Interface not registered',
       [self, info^.RawName]);
 end;
 
@@ -4965,7 +4990,7 @@ begin
   else if high(aInterfaceObjPairs) = 1 then
     Resolve(aInterfaceObjPairs[0], aInterfaceObjPairs[1]^)
   else
-    raise EInterfaceResolver.CreateUTF8('%.ResolveByPair(?)', [self]);
+    raise EInterfaceResolver.CreateUtf8('%.ResolveByPair(?)', [self]);
 end;
 
 procedure TInjectableObject.Resolve(const aInterfaces: array of TGUID;
@@ -4977,7 +5002,7 @@ begin
           (high(aObjs) = 0) then
     Resolve(aInterfaces[0], aObjs[0]^)
   else
-    raise EInterfaceResolver.CreateUTF8('%.Resolve(?,?)', [self]);
+    raise EInterfaceResolver.CreateUtf8('%.Resolve(?,?)', [self]);
 end;
 
 procedure TInjectableObject.AutoResolve(aRaiseEServiceExceptionIfNotFound: boolean);
@@ -4989,7 +5014,7 @@ var
 begin
   if (self = nil) or
      (fResolver = nil) then
-    raise EInterfaceResolver.CreateUTF8(
+    raise EInterfaceResolver.CreateUtf8(
       '%.AutoResolve with no prior registration', [self]);
   CT := ClassType;
   while CT <> TInjectableObject do
@@ -5002,12 +5027,12 @@ begin
           addr := P^.GetterAddr(self);
           if not TryResolve(P^.TypeInfo, addr^) then
             if aRaiseEServiceExceptionIfNotFound then
-              raise EInterfaceResolver.CreateUTF8(
+              raise EInterfaceResolver.CreateUtf8(
                 '%.AutoResolve: impossible to resolve published property %: %',
                 [self, P^.Name^, P^.TypeInfo^.RawName]);
         end
         else
-          raise EInterfaceResolver.CreateUTF8('%.AutoResolve: published ' +
+          raise EInterfaceResolver.CreateUtf8('%.AutoResolve: published ' +
             'property %: % should directly read the field',
             [self, P^.Name^, P^.TypeInfo^.RawName]);
       P := P^.Next;
@@ -5036,7 +5061,7 @@ begin
   if fResolver <> nil then
     exit; // inject once!
   if aResolver = nil then
-    raise EInterfaceResolver.CreateUTF8('%.CreateWithResolver(nil)', [self]);
+    raise EInterfaceResolver.CreateUtf8('%.CreateWithResolver(nil)', [self]);
   fResolver := aResolver; // may be needed by overriden Create
   Create;
   AutoResolve(aRaiseEServiceExceptionIfNotFound);
@@ -5056,22 +5081,22 @@ end;
 { EInterfaceStub }
 
 constructor EInterfaceStub.Create(Sender: TInterfaceStub;
-  const Method: TInterfaceMethod; const Error: RawUTF8);
+  const Method: TInterfaceMethod; const Error: RawUtf8);
 begin
-  inherited CreateUTF8('Error in % for %.% - %', [Sender, Sender.fInterface.fInterfaceName,
-    Method.URI, Error]);
+  inherited CreateUtf8('Error in % for %.% - %', [Sender, Sender.fInterface.fInterfaceName,
+    Method.Uri, Error]);
 end;
 
 constructor EInterfaceStub.Create(Sender: TInterfaceStub;
-  const Method: TInterfaceMethod; const Format: RawUTF8; const Args: array of const);
+  const Method: TInterfaceMethod; const Format: RawUtf8; const Args: array of const);
 begin
-  Create(Sender, Method, FormatUTF8(Format, Args));
+  Create(Sender, Method, FormatUtf8(Format, Args));
 end;
 
 
 { TInterfaceStubRules }
 
-function TInterfaceStubRules.FindRuleIndex(const aParams: RawUTF8): integer;
+function TInterfaceStubRules.FindRuleIndex(const aParams: RawUtf8): integer;
 begin
   for result := 0 to length(Rules) - 1 do
     if Rules[result].Params = aParams then
@@ -5079,7 +5104,7 @@ begin
   result := -1;
 end;
 
-function TInterfaceStubRules.FindStrongRuleIndex(const aParams: RawUTF8): integer;
+function TInterfaceStubRules.FindStrongRuleIndex(const aParams: RawUtf8): integer;
 begin
   for result := 0 to length(Rules) - 1 do
     if (Rules[result].Kind <> isUndefined) and
@@ -5089,7 +5114,7 @@ begin
 end;
 
 procedure TInterfaceStubRules.AddRule(Sender: TInterfaceStub;
-  aKind: TInterfaceStubRuleKind; const aParams, aValues: RawUTF8;
+  aKind: TInterfaceStubRuleKind; const aParams, aValues: RawUtf8;
   const aEvent: TNotifyEvent; aExceptionClass: ExceptClass;
   aExpectedPassCountOperator: TInterfaceStubRuleOperator; aValue: cardinal);
 var
@@ -5137,7 +5162,7 @@ end;
 
 { TInterfaceStubLog }
 
-function TInterfaceStubLog.Results: RawUTF8;
+function TInterfaceStubLog.Results: RawUtf8;
 begin
   if CustomResults = '' then
     result := method^.DefaultResult
@@ -5149,7 +5174,7 @@ procedure TInterfaceStubLog.AddAsText(WR: TTextWriter; aScope:
   TInterfaceStubLogLayouts; SepChar: AnsiChar);
 begin
   if wName in aScope then
-    WR.AddString(method^.URI);
+    WR.AddString(method^.Uri);
   if wParams in aScope then
   begin
     WR.Add('(');
@@ -5180,7 +5205,7 @@ end;
 { TOnInterfaceStubExecuteParamsAbstract }
 
 constructor TOnInterfaceStubExecuteParamsAbstract.Create(aSender: TInterfaceStub;
-  aMethod: PInterfaceMethod; const aParams, aEventParams: RawUTF8);
+  aMethod: PInterfaceMethod; const aParams, aEventParams: RawUtf8);
 begin
   fSender := aSender;
   fMethod := aMethod;
@@ -5188,13 +5213,13 @@ begin
   fEventParams := aEventParams;
 end;
 
-procedure TOnInterfaceStubExecuteParamsAbstract.Error(const Format: RawUTF8;
+procedure TOnInterfaceStubExecuteParamsAbstract.Error(const Format: RawUtf8;
   const Args: array of const);
 begin
-  Error(FormatUTF8(Format, Args));
+  Error(FormatUtf8(Format, Args));
 end;
 
-procedure TOnInterfaceStubExecuteParamsAbstract.Error(const aErrorMessage: RawUTF8);
+procedure TOnInterfaceStubExecuteParamsAbstract.Error(const aErrorMessage: RawUtf8);
 begin
   fFailed := true;
   fResult := aErrorMessage;
@@ -5205,14 +5230,14 @@ begin
   result := (fSender as TInterfaceMock).TestCase;
 end;
 
-{ TOnInterfaceStubExecuteParamsJSON }
+{ TOnInterfaceStubExecuteParamsJson }
 
-procedure TOnInterfaceStubExecuteParamsJSON.Returns(const Values: array of const);
+procedure TOnInterfaceStubExecuteParamsJson.Returns(const Values: array of const);
 begin
-  JSONEncodeArrayOfConst(Values, false, fResult);
+  JsonEncodeArrayOfConst(Values, false, fResult);
 end;
 
-procedure TOnInterfaceStubExecuteParamsJSON.Returns(const ValuesJsonArray: RawUTF8);
+procedure TOnInterfaceStubExecuteParamsJson.Returns(const ValuesJsonArray: RawUtf8);
 begin
   fResult := ValuesJsonArray;
 end;
@@ -5220,10 +5245,10 @@ end;
 { TOnInterfaceStubExecuteParamsVariant }
 
 constructor TOnInterfaceStubExecuteParamsVariant.Create(aSender: TInterfaceStub;
-  aMethod: PInterfaceMethod; const aParams, aEventParams: RawUTF8);
+  aMethod: PInterfaceMethod; const aParams, aEventParams: RawUtf8);
 var
   i: PtrInt;
-  P: PUTF8Char;
+  P: PUtf8Char;
   tmp: TSynTempBuffer;
 begin
   inherited;
@@ -5232,7 +5257,7 @@ begin
   try
     P := tmp.buf;
     for i := 0 to fMethod^.ArgsInputValuesCount - 1 do
-      P := VariantLoadJSON(fInput[i], P, nil, @aSender.fInterface.DocVariantOptions);
+      P := VariantLoadJson(fInput[i], P, nil, @aSender.fInterface.DocVariantOptions);
   finally
     tmp.Done;
   end;
@@ -5259,7 +5284,7 @@ begin
 end;
 
 function TOnInterfaceStubExecuteParamsVariant.GetInNamed(
-  const aParamName: RawUTF8): variant;
+  const aParamName: RawUtf8): variant;
 var
   L, a, ndx: integer;
 begin
@@ -5284,17 +5309,17 @@ begin
     [aParamName]);
 end;
 
-function TOnInterfaceStubExecuteParamsVariant.GetInUTF8(
-  const ParamName: RawUTF8): RawUTF8;
+function TOnInterfaceStubExecuteParamsVariant.GetInUtf8(
+  const ParamName: RawUtf8): RawUtf8;
 var
   wasString: boolean;
 begin
   result := '';
-  VariantToUTF8(GetInNamed(ParamName), result, wasString);
+  VariantToUtf8(GetInNamed(ParamName), result, wasString);
 end;
 
 procedure TOnInterfaceStubExecuteParamsVariant.SetOutNamed(
-  const aParamName: RawUTF8; const Value: variant);
+  const aParamName: RawUtf8; const Value: variant);
 var
   L, a, ndx: integer;
 begin
@@ -5337,10 +5362,10 @@ begin
         if ValueDirection <> imdConst then
         begin
           if TVarData(fOutput[ndx]).VType = varEmpty then
-            AddDefaultJSON(W)
+            AddDefaultJson(W)
           else
           begin
-            W.AddVariant(fOutput[ndx], twJSONEscape);
+            W.AddVariant(fOutput[ndx], twJsonEscape);
             W.Add(',');
           end;
           inc(ndx);
@@ -5385,7 +5410,7 @@ begin
         val := InputAsDocVariant(pdvObjectFixed);
       SynLog.Log(aLevel, '%(%)',
         [fMethod^.InterfaceDotMethodName, _Safe(val)^.ToTextPairs(
-          '=', ',', twJSONEscape)], self);
+          '=', ',', twJsonEscape)], self);
     end;
 end;
 
@@ -5393,12 +5418,12 @@ end;
 { TInterfaceStub }
 
 constructor TInterfaceStub.Create(aFactory: TInterfaceFactory;
-  const aInterfaceName: RawUTF8);
+  const aInterfaceName: RawUtf8);
 var
   i: PtrInt;
 begin
   if aFactory = nil then
-    raise EInterfaceStub.CreateUTF8(
+    raise EInterfaceStub.CreateUtf8(
       '%.Create(%): Interface not registered - you could use ' +
       'TInterfaceFactory.RegisterInterfaces()', [self, aInterfaceName]);
   fInterface := aFactory;
@@ -5413,31 +5438,31 @@ var
   fake: TInterfacedObjectFake;
 begin
   fake := TInterfacedObjectFake.Create(fInterface, nil, [ifoJsonAsExtended,
-    ifoDontStoreVoidJSON], Invoke, InstanceDestroyed);
+    ifoDontStoreVoidJson], Invoke, InstanceDestroyed);
   pointer(aStubbedInterface) := @fake.fVTable;
   fake._AddRef;
   fLastInterfacedObjectFake := fake;
 end;
 
 function TInterfaceStub.InternalCheck(aValid, aExpectationFailed: boolean;
-  const aErrorMsgFmt: RawUTF8; const aErrorMsgArgs: array of const): boolean;
+  const aErrorMsgFmt: RawUtf8; const aErrorMsgArgs: array of const): boolean;
 begin
   result := aValid;
   if aExpectationFailed and
      not aValid then
-    raise EInterfaceStub.CreateUTF8('%.InternalCheck(%) failed: %', [self,
-      fInterface.fInterfaceName, FormatUTF8(aErrorMsgFmt, aErrorMsgArgs)]);
+    raise EInterfaceStub.CreateUtf8('%.InternalCheck(%) failed: %', [self,
+      fInterface.fInterfaceName, FormatUtf8(aErrorMsgFmt, aErrorMsgArgs)]);
 end;
 
-constructor TInterfaceStub.Create(const aInterfaceName: RawUTF8; out aStubbedInterface);
+constructor TInterfaceStub.Create(const aInterfaceName: RawUtf8; out aStubbedInterface);
 begin
   Create(TInterfaceFactory.Get(aInterfaceName), aInterfaceName);
   InternalGetInstance(aStubbedInterface);
 end;
 
-constructor TInterfaceStub.Create(const aGUID: TGUID; out aStubbedInterface);
+constructor TInterfaceStub.Create(const aGuid: TGUID; out aStubbedInterface);
 begin
-  Create(TInterfaceFactory.Get(aGUID), GUIDToRawUTF8(aGUID));
+  Create(TInterfaceFactory.Get(aGuid), GuidToRawUtf8(aGuid));
   InternalGetInstance(aStubbedInterface);
 end;
 
@@ -5449,12 +5474,12 @@ end;
 
 constructor TInterfaceStub.Create(aInterface: PRttiInfo);
 begin
-  Create(TInterfaceFactory.Get(aInterface), ToUTF8(aInterface^.RawName));
+  Create(TInterfaceFactory.Get(aInterface), ToUtf8(aInterface^.RawName));
 end;
 
-constructor TInterfaceStub.Create(const aGUID: TGUID);
+constructor TInterfaceStub.Create(const aGuid: TGUID);
 begin
-  Create(TInterfaceFactory.Get(aGUID), ToUTF8(aGUID));
+  Create(TInterfaceFactory.Get(aGuid), ToUtf8(aGuid));
 end;
 
 procedure TInterfaceStub.IntSetOptions(Options: TInterfaceStubOptions);
@@ -5483,11 +5508,11 @@ begin
     ioGreaterThanOrEqualTo:
       ok := aComputed >= aCount;
   else
-    raise EInterfaceStub.CreateUTF8(
+    raise EInterfaceStub.CreateUtf8(
       '%.IntCheckCount(): Unexpected % operator', [self, Ord(aOperator)]);
   end;
   InternalCheck(ok, True, 'ExpectsCount(''%'',%,%) failed: count=%',
-    [fInterface.Methods[aMethodIndex].URI, ToText(aOperator)^, aCount, aComputed]);
+    [fInterface.Methods[aMethodIndex].Uri, ToText(aOperator)^, aCount, aComputed]);
 end;
 
 procedure TInterfaceStub.InstanceDestroyed(aClientDrivenID: cardinal);
@@ -5524,7 +5549,7 @@ begin
                 InternalCheck(
                   ExpectedTraceHash = Hash32(IntGetLogAsText(asmndx, Params,
                     [wName, wParams, wResults], ',')), True,
-                  'ExpectsTrace(''%'') failed', [fInterface.Methods[m].URI]);
+                  'ExpectsTrace(''%'') failed', [fInterface.Methods[m].Uri]);
         end;
   finally
     if not (imoFakeInstanceWontReleaseTInterfaceStub in Options) then
@@ -5538,54 +5563,54 @@ begin
   result := self;
 end;
 
-function TInterfaceStub.Executes(const aMethodName, aParams: RawUTF8;
-  const aEvent: TOnInterfaceStubExecuteJSON; const aEventParams: RawUTF8): TInterfaceStub;
+function TInterfaceStub.Executes(const aMethodName, aParams: RawUtf8;
+  const aEvent: TOnInterfaceStubExecuteJson; const aEventParams: RawUtf8): TInterfaceStub;
 begin
-  fRules[fInterface.CheckMethodIndex(aMethodName)].AddRule(self, isExecutesJSON,
+  fRules[fInterface.CheckMethodIndex(aMethodName)].AddRule(self, isExecutesJson,
     aParams, aEventParams, TNotifyEvent(aEvent));
   result := self;
 end;
 
-function TInterfaceStub.Executes(const aMethodName: RawUTF8;
-  const aEvent: TOnInterfaceStubExecuteJSON; const aEventParams: RawUTF8): TInterfaceStub;
+function TInterfaceStub.Executes(const aMethodName: RawUtf8;
+  const aEvent: TOnInterfaceStubExecuteJson; const aEventParams: RawUtf8): TInterfaceStub;
 begin
   result := Executes(aMethodName, '', aEvent, aEventParams);
 end;
 
-function TInterfaceStub.Executes(const aMethodName: RawUTF8;
-  const aParams: array of const; const aEvent: TOnInterfaceStubExecuteJSON;
-  const aEventParams: RawUTF8): TInterfaceStub;
+function TInterfaceStub.Executes(const aMethodName: RawUtf8;
+  const aParams: array of const; const aEvent: TOnInterfaceStubExecuteJson;
+  const aEventParams: RawUtf8): TInterfaceStub;
 begin
-  result := Executes(aMethodName, JSONEncodeArrayOfConst(aParams, true),
+  result := Executes(aMethodName, JsonEncodeArrayOfConst(aParams, true),
     aEvent, aEventParams);
 end;
 
-function TInterfaceStub.Executes(const aMethodName, aParams: RawUTF8;
+function TInterfaceStub.Executes(const aMethodName, aParams: RawUtf8;
   const aEvent: TOnInterfaceStubExecuteVariant;
-  const aEventParams: RawUTF8): TInterfaceStub;
+  const aEventParams: RawUtf8): TInterfaceStub;
 begin
   fRules[fInterface.CheckMethodIndex(aMethodName)].AddRule(self,
     isExecutesVariant, aParams, aEventParams, TNotifyEvent(aEvent));
   result := self;
 end;
 
-function TInterfaceStub.Executes(const aMethodName: RawUTF8;
+function TInterfaceStub.Executes(const aMethodName: RawUtf8;
   const aEvent: TOnInterfaceStubExecuteVariant;
-  const aEventParams: RawUTF8): TInterfaceStub;
+  const aEventParams: RawUtf8): TInterfaceStub;
 begin
   result := Executes(aMethodName, '', aEvent, aEventParams);
 end;
 
-function TInterfaceStub.Executes(const aMethodName: RawUTF8;
+function TInterfaceStub.Executes(const aMethodName: RawUtf8;
   const aParams: array of const; const aEvent: TOnInterfaceStubExecuteVariant;
-  const aEventParams: RawUTF8): TInterfaceStub;
+  const aEventParams: RawUtf8): TInterfaceStub;
 begin
-  result := Executes(aMethodName, JSONEncodeArrayOfConst(aParams, true),
+  result := Executes(aMethodName, JsonEncodeArrayOfConst(aParams, true),
     aEvent, aEventParams);
 end;
 
 function TInterfaceStub.Executes(const aEvent: TOnInterfaceStubExecuteVariant;
-  const aEventParams: RawUTF8): TInterfaceStub;
+  const aEventParams: RawUtf8): TInterfaceStub;
 var
   i: PtrInt;
 begin
@@ -5614,7 +5639,7 @@ end;
 function TInterfaceStub.Executes(aLog: TSynLogClass; aLogLevel: TSynLogInfo;
   aKind: TInterfaceMethodParamsDocVariantKind): TInterfaceStub;
 var
-  tmp: RawUTF8;
+  tmp: RawUtf8;
 begin
   SetLength(tmp, SizeOf(TInterfaceStubExecutesToLog));
   with PInterfaceStubExecutesToLog(tmp)^ do
@@ -5627,13 +5652,13 @@ begin
   result := self;
 end;
 
-function TInterfaceStub.ExpectsCount(const aMethodName: RawUTF8;
+function TInterfaceStub.ExpectsCount(const aMethodName: RawUtf8;
   aOperator: TInterfaceStubRuleOperator; aValue: cardinal): TInterfaceStub;
 begin
   result := ExpectsCount(aMethodName, '', aOperator, aValue);
 end;
 
-function TInterfaceStub.ExpectsCount(const aMethodName, aParams: RawUTF8;
+function TInterfaceStub.ExpectsCount(const aMethodName, aParams: RawUtf8;
   aOperator: TInterfaceStubRuleOperator; aValue: cardinal): TInterfaceStub;
 var
   ndx: integer;
@@ -5649,11 +5674,11 @@ begin
   result := self;
 end;
 
-function TInterfaceStub.ExpectsCount(const aMethodName: RawUTF8;
+function TInterfaceStub.ExpectsCount(const aMethodName: RawUtf8;
   const aParams: array of const; aOperator: TInterfaceStubRuleOperator;
   aValue: cardinal): TInterfaceStub;
 begin
-  result := ExpectsCount(aMethodName, JSONEncodeArrayOfConst(aParams, true),
+  result := ExpectsCount(aMethodName, JsonEncodeArrayOfConst(aParams, true),
     aOperator, aValue);
 end;
 
@@ -5664,13 +5689,13 @@ begin
   result := self;
 end;
 
-function TInterfaceStub.ExpectsTrace(const aMethodName: RawUTF8;
+function TInterfaceStub.ExpectsTrace(const aMethodName: RawUtf8;
   aValue: cardinal): TInterfaceStub;
 begin
   result := ExpectsTrace(aMethodName, '', aValue);
 end;
 
-function TInterfaceStub.ExpectsTrace(const aMethodName, aParams: RawUTF8;
+function TInterfaceStub.ExpectsTrace(const aMethodName, aParams: RawUtf8;
   aValue: cardinal): TInterfaceStub;
 begin
   fRules[fInterface.CheckMethodIndex(aMethodName)].AddRule(
@@ -5680,109 +5705,109 @@ begin
   result := self;
 end;
 
-function TInterfaceStub.ExpectsTrace(const aMethodName: RawUTF8;
+function TInterfaceStub.ExpectsTrace(const aMethodName: RawUtf8;
   const aParams: array of const; aValue: cardinal): TInterfaceStub;
 begin
-  result := ExpectsTrace(aMethodName, JSONEncodeArrayOfConst(aParams, true), aValue);
+  result := ExpectsTrace(aMethodName, JsonEncodeArrayOfConst(aParams, true), aValue);
 end;
 
-function TInterfaceStub.ExpectsTrace(const aValue: RawUTF8): TInterfaceStub;
+function TInterfaceStub.ExpectsTrace(const aValue: RawUtf8): TInterfaceStub;
 begin
   result := ExpectsTrace(Hash32(aValue));
 end;
 
-function TInterfaceStub.ExpectsTrace(const aMethodName, aValue: RawUTF8): TInterfaceStub;
+function TInterfaceStub.ExpectsTrace(const aMethodName, aValue: RawUtf8): TInterfaceStub;
 begin
   result := ExpectsTrace(aMethodName, Hash32(aValue));
 end;
 
-function TInterfaceStub.ExpectsTrace(const aMethodName, aParams, aValue: RawUTF8):
+function TInterfaceStub.ExpectsTrace(const aMethodName, aParams, aValue: RawUtf8):
   TInterfaceStub;
 begin
   result := ExpectsTrace(aMethodName, aParams, Hash32(aValue));
 end;
 
-function TInterfaceStub.ExpectsTrace(const aMethodName: RawUTF8;
-  const aParams: array of const; const aValue: RawUTF8): TInterfaceStub;
+function TInterfaceStub.ExpectsTrace(const aMethodName: RawUtf8;
+  const aParams: array of const; const aValue: RawUtf8): TInterfaceStub;
 begin
   result := ExpectsTrace(aMethodName, aParams, Hash32(aValue));
 end;
 
-function TInterfaceStub.Fails(const aMethodName, aErrorMsg: RawUTF8): TInterfaceStub;
+function TInterfaceStub.Fails(const aMethodName, aErrorMsg: RawUtf8): TInterfaceStub;
 begin
   result := Fails(aMethodName, '', aErrorMsg);
 end;
 
 function TInterfaceStub.Fails(const aMethodName, aParams,
-  aErrorMsg: RawUTF8): TInterfaceStub;
+  aErrorMsg: RawUtf8): TInterfaceStub;
 begin
   fRules[fInterface.CheckMethodIndex(aMethodName)].AddRule(
     self, isFails, aParams, aErrorMsg);
   result := self;
 end;
 
-function TInterfaceStub.Fails(const aMethodName: RawUTF8;
-  const aParams: array of const; const aErrorMsg: RawUTF8): TInterfaceStub;
+function TInterfaceStub.Fails(const aMethodName: RawUtf8;
+  const aParams: array of const; const aErrorMsg: RawUtf8): TInterfaceStub;
 begin
-  result := Fails(aMethodName, JSONEncodeArrayOfConst(aParams, true), aErrorMsg);
+  result := Fails(aMethodName, JsonEncodeArrayOfConst(aParams, true), aErrorMsg);
 end;
 
-function TInterfaceStub.Raises(const aMethodName, aParams: RawUTF8;
+function TInterfaceStub.Raises(const aMethodName, aParams: RawUtf8;
   aException: ExceptClass; const aMessage: string): TInterfaceStub;
 begin
   fRules[fInterface.CheckMethodIndex(aMethodName)].AddRule(
-    self, isRaises, aParams, StringToUTF8(aMessage), nil, aException);
+    self, isRaises, aParams, StringToUtf8(aMessage), nil, aException);
   result := self;
 end;
 
-function TInterfaceStub.Raises(const aMethodName: RawUTF8;
+function TInterfaceStub.Raises(const aMethodName: RawUtf8;
   const aParams: array of const; aException: ExceptClass;
   const aMessage: string): TInterfaceStub;
 begin
-  result := Raises(aMethodName, JSONEncodeArrayOfConst(aParams, true),
+  result := Raises(aMethodName, JsonEncodeArrayOfConst(aParams, true),
     aException, aMessage);
 end;
 
-function TInterfaceStub.Raises(const aMethodName: RawUTF8;
+function TInterfaceStub.Raises(const aMethodName: RawUtf8;
   aException: ExceptClass; const aMessage: string): TInterfaceStub;
 begin
   result := Raises(aMethodName, '', aException, aMessage);
 end;
 
 function TInterfaceStub.Returns(const aMethodName, aParams, aExpectedResults:
-  RawUTF8): TInterfaceStub;
+  RawUtf8): TInterfaceStub;
 begin
   fRules[fInterface.CheckMethodIndex(aMethodName)].AddRule(
     self, isReturns, aParams, aExpectedResults);
   result := self;
 end;
 
-function TInterfaceStub.Returns(const aMethodName: RawUTF8;
+function TInterfaceStub.Returns(const aMethodName: RawUtf8;
   const aParams, aExpectedResults: array of const): TInterfaceStub;
 begin
-  result := Returns(aMethodName, JSONEncodeArrayOfConst(aParams, true),
-    JSONEncodeArrayOfConst(aExpectedResults, true));
+  result := Returns(aMethodName, JsonEncodeArrayOfConst(aParams, true),
+    JsonEncodeArrayOfConst(aExpectedResults, true));
 end;
 
 function TInterfaceStub.Returns(const aMethodName,
-  aExpectedResults: RawUTF8): TInterfaceStub;
+  aExpectedResults: RawUtf8): TInterfaceStub;
 begin
   result := Returns(aMethodName, '', aExpectedResults);
 end;
 
-function TInterfaceStub.Returns(const aMethodName: RawUTF8;
+function TInterfaceStub.Returns(const aMethodName: RawUtf8;
   const aExpectedResults: array of const): TInterfaceStub;
 begin
-  result := Returns(aMethodName, '', JSONEncodeArrayOfConst(aExpectedResults, true));
+  result := Returns(aMethodName, '', JsonEncodeArrayOfConst(aExpectedResults, true));
 end;
 
 function TInterfaceStub.Invoke(const aMethod: TInterfaceMethod;
-  const aParams: RawUTF8; aResult, aErrorMsg: PRawUTF8;
+  const aParams: RawUtf8; aResult, aErrorMsg: PRawUtf8;
   aClientDrivenID: PCardinal; aServiceCustomAnswer: PServiceCustomAnswer): boolean;
 var
   ndx: cardinal;
   rule: integer;
-  ExecutesCtxtJSON: TOnInterfaceStubExecuteParamsJSON;
+  ExecutesCtxtJSON: TOnInterfaceStubExecuteParamsJson;
   ExecutesCtxtVariant: TOnInterfaceStubExecuteParamsVariant;
   log: TInterfaceStubLog;
 begin
@@ -5813,8 +5838,8 @@ begin
           if imoReturnErrorIfNoRuleDefined in Options then
           begin
             result := false;
-            FormatUTF8('No stubbing rule defined for %.%',
-              [fInterface.fInterfaceName, aMethod.URI], log.CustomResults);
+            FormatUtf8('No stubbing rule defined for %.%',
+              [fInterface.fInterfaceName, aMethod.Uri], log.CustomResults);
           end
           else
             result := true;
@@ -5824,12 +5849,12 @@ begin
         begin
           inc(RulePassCount);
           case Kind of
-            isExecutesJSON:
+            isExecutesJson:
               begin
-                ExecutesCtxtJSON := TOnInterfaceStubExecuteParamsJSON.Create(
+                ExecutesCtxtJSON := TOnInterfaceStubExecuteParamsJson.Create(
                   self, @aMethod, aParams, Values);
                 try
-                  TOnInterfaceStubExecuteJSON(Execute)(ExecutesCtxtJSON);
+                  TOnInterfaceStubExecuteJson(Execute)(ExecutesCtxtJSON);
                   result := not ExecutesCtxtJSON.Failed;
                   log.CustomResults := ExecutesCtxtJSON.result;
                 finally
@@ -5853,7 +5878,7 @@ begin
                 end;
               end;
             isRaises:
-              raise ExceptionClass.Create(UTF8ToString(Values));
+              raise ExceptionClass.Create(Utf8ToString(Values));
             isReturns:
               begin
                 result := true;
@@ -5873,7 +5898,7 @@ begin
       if result then
       begin
         if aResult <> nil then
-          // make unique due to JSONDecode() by caller
+          // make unique due to JsonDecode() by caller
           if log.CustomResults = '' then
             FastSetString(aResult^, pointer(aMethod.DefaultResult), length(aMethod.DefaultResult))
           else
@@ -5892,7 +5917,7 @@ begin
     end;
 end;
 
-function TInterfaceStub.LogAsText(SepChar: AnsiChar): RawUTF8;
+function TInterfaceStub.LogAsText(SepChar: AnsiChar): RawUtf8;
 begin
   result := IntGetLogAsText(0, '', [wName, wParams, wResults], SepChar);
 end;
@@ -5902,8 +5927,8 @@ begin
   fLog.Clear;
 end;
 
-function TInterfaceStub.IntGetLogAsText(asmndx: integer; const aParams: RawUTF8;
-  aScope: TInterfaceStubLogLayouts; SepChar: AnsiChar): RawUTF8;
+function TInterfaceStub.IntGetLogAsText(asmndx: integer; const aParams: RawUtf8;
+  aScope: TInterfaceStubLogLayouts; SepChar: AnsiChar): RawUtf8;
 var
   i: integer;
   WR: TTextWriter;
@@ -5971,14 +5996,14 @@ begin
   fTestCase := aTestCase;
 end;
 
-constructor TInterfaceMock.Create(const aGUID: TGUID; out aMockedInterface;
+constructor TInterfaceMock.Create(const aGuid: TGUID; out aMockedInterface;
   aTestCase: TSynTestCase);
 begin
-  inherited Create(aGUID, aMockedInterface);
+  inherited Create(aGuid, aMockedInterface);
   fTestCase := aTestCase;
 end;
 
-constructor TInterfaceMock.Create(const aInterfaceName: RawUTF8;
+constructor TInterfaceMock.Create(const aInterfaceName: RawUtf8;
   out aMockedInterface; aTestCase: TSynTestCase);
 begin
   inherited Create(aInterfaceName, aMockedInterface);
@@ -5991,14 +6016,14 @@ begin
   fTestCase := aTestCase;
 end;
 
-constructor TInterfaceMock.Create(const aGUID: TGUID; aTestCase: TSynTestCase);
+constructor TInterfaceMock.Create(const aGuid: TGUID; aTestCase: TSynTestCase);
 begin
-  inherited Create(aGUID);
+  inherited Create(aGuid);
   fTestCase := aTestCase;
 end;
 
 function TInterfaceMock.InternalCheck(aValid, aExpectationFailed: boolean;
-  const aErrorMsgFmt: RawUTF8; const aErrorMsgArgs: array of const): boolean;
+  const aErrorMsgFmt: RawUtf8; const aErrorMsgArgs: array of const): boolean;
 begin
   if fTestCase = nil then
     result := inherited InternalCheck(
@@ -6009,7 +6034,7 @@ begin
     if aValid xor (imoMockFailsWillPassTestCase in Options) then
       fTestCase.Check(true)
     else
-      fTestCase.Check(false, UTF8ToString(FormatUTF8(aErrorMsgFmt, aErrorMsgArgs)));
+      fTestCase.Check(false, Utf8ToString(FormatUtf8(aErrorMsgFmt, aErrorMsgArgs)));
   end;
 end;
 
@@ -6017,7 +6042,7 @@ end;
 { TInterfaceMockSpy }
 
 constructor TInterfaceMockSpy.Create(aFactory: TInterfaceFactory;
-  const aInterfaceName: RawUTF8);
+  const aInterfaceName: RawUtf8);
 begin
   inherited Create(aFactory, aInterfaceName);
   include(fOptions, imoLogMethodCallsAndResults);
@@ -6029,20 +6054,20 @@ begin
   inherited IntSetOptions(Options);
 end;
 
-procedure TInterfaceMockSpy.Verify(const aMethodName: RawUTF8;
+procedure TInterfaceMockSpy.Verify(const aMethodName: RawUtf8;
   const aParams: array of const; aOperator: TInterfaceStubRuleOperator;
   aCount: cardinal);
 begin
-  Verify(aMethodName, JSONEncodeArrayOfConst(aParams, true), aOperator, aCount);
+  Verify(aMethodName, JsonEncodeArrayOfConst(aParams, true), aOperator, aCount);
 end;
 
-procedure TInterfaceMockSpy.Verify(const aMethodName: RawUTF8;
-  const aParams: array of const; const aTrace: RawUTF8);
+procedure TInterfaceMockSpy.Verify(const aMethodName: RawUtf8;
+  const aParams: array of const; const aTrace: RawUtf8);
 begin
-  Verify(aMethodName, JSONEncodeArrayOfConst(aParams, true), aTrace);
+  Verify(aMethodName, JsonEncodeArrayOfConst(aParams, true), aTrace);
 end;
 
-procedure TInterfaceMockSpy.Verify(const aMethodName: RawUTF8;
+procedure TInterfaceMockSpy.Verify(const aMethodName: RawUtf8;
   aOperator: TInterfaceStubRuleOperator; aCount: cardinal);
 var
   m: integer;
@@ -6051,7 +6076,7 @@ begin
   IntCheckCount(m, fRules[m].MethodPassCount, aOperator, aCount);
 end;
 
-procedure TInterfaceMockSpy.Verify(const aMethodName, aParams: RawUTF8;
+procedure TInterfaceMockSpy.Verify(const aMethodName, aParams: RawUtf8;
   aOperator: TInterfaceStubRuleOperator; aCount: cardinal);
 var
   asmndx, i: PtrInt;
@@ -6072,7 +6097,7 @@ begin
   IntCheckCount(asmndx - RESERVED_VTABLE_SLOTS, c, aOperator, aCount);
 end;
 
-procedure TInterfaceMockSpy.Verify(const aTrace: RawUTF8; aScope: TInterfaceMockSpyCheck);
+procedure TInterfaceMockSpy.Verify(const aTrace: RawUtf8; aScope: TInterfaceMockSpyCheck);
 const
   VERIFY_SCOPE: array[TInterfaceMockSpyCheck] of TInterfaceStubLogLayouts = (
     [wName], [wName, wParams], [wName, wParams, wResults]);
@@ -6081,7 +6106,7 @@ begin
     true, 'Verify(''%'',%) failed', [aTrace, ToText(aScope)^]);
 end;
 
-procedure TInterfaceMockSpy.Verify(const aMethodName, aParams, aTrace: RawUTF8);
+procedure TInterfaceMockSpy.Verify(const aMethodName, aParams, aTrace: RawUtf8);
 var
   m: integer;
 begin
@@ -6091,7 +6116,7 @@ begin
     true, 'Verify(''%'',''%'',''%'') failed', [aMethodName, aParams, aTrace]);
 end;
 
-procedure TInterfaceMockSpy.Verify(const aMethodName, aTrace: RawUTF8;
+procedure TInterfaceMockSpy.Verify(const aMethodName, aTrace: RawUtf8;
   aScope: TInterfaceMockSpyCheck);
 const
   VERIFY_SCOPE: array[TInterfaceMockSpyCheck] of TInterfaceStubLogLayouts = (
@@ -6126,7 +6151,7 @@ type
   // map TServiceRunningContext from mormot.rest.server.pas
   TPerThreadRunningContext = record
     Factory: TObject; // TServiceFactoryServer
-    Request: TObject; // TRestServerURIContext;
+    Request: TObject; // TRestServerUriContext;
     RunningThread: TThread;
   end;
   PPerThreadRunningContext = ^TPerThreadRunningContext;
@@ -6212,7 +6237,7 @@ var
 begin
   synch.Action := doInstanceRelease;
   if not instance.InheritsFrom(TInterfacedObject) then
-    raise EInterfaceFactory.CreateUTF8('BackgroundExecuteInstanceRelease(%)', [instance]);
+    raise EInterfaceFactory.CreateUtf8('BackgroundExecuteInstanceRelease(%)', [instance]);
   synch.Instance := TInterfacedObjectHooked(instance);
   BackGroundExecute(synch, backgroundThread);
 end;
@@ -6636,8 +6661,8 @@ var
 begin
   with fMethod^ do
   begin
-    if ArgsUsedCount[imvvRawUTF8] > 0 then
-      SetLength(fRawUTF8s, ArgsUsedCount[imvvRawUTF8]);
+    if ArgsUsedCount[imvvRawUtf8] > 0 then
+      SetLength(fRawUtf8s, ArgsUsedCount[imvvRawUtf8]);
     if ArgsUsedCount[imvvString] > 0 then
       SetLength(fStrings, ArgsUsedCount[imvvString]);
     if ArgsUsedCount[imvvWideString] > 0 then
@@ -6658,8 +6683,8 @@ begin
       case ValueVar of
         imvv64:
           Value^ := @fInt64s[IndexVar];
-        imvvRawUTF8:
-          Value^ := @fRawUTF8s[IndexVar];
+        imvvRawUtf8:
+          Value^ := @fRawUtf8s[IndexVar];
         imvvString:
           Value^ := @fStrings[IndexVar];
         imvvWideString:
@@ -6680,7 +6705,7 @@ begin
         imvvDynArray:
           Value^ := @fDynArrays[IndexVar].Value;
       else
-        raise EInterfaceFactory.CreateUTF8('I%.%:% ValueType=%',
+        raise EInterfaceFactory.CreateUtf8('I%.%:% ValueType=%',
           [InterfaceDotMethodName, ParamName^, ArgTypeName^, ord(ValueType)]);
       end;
       inc(Value);
@@ -6751,7 +6776,7 @@ begin
           if RegisterIdent > 0 then
             call.ParamRegs[RegisterIdent] := PtrInt(Value);
           if FPRegisterIdent > 0 then
-            raise EInterfaceFactory.CreateUTF8('Unexpected % FPReg=%',
+            raise EInterfaceFactory.CreateUtf8('Unexpected % FPReg=%',
               [ParamName^, FPRegisterIdent]); // should never happen
         end;
       end
@@ -6779,7 +6804,7 @@ begin
           {$endif CPUX86}
           if (RegisterIdent > 0) and
              (FPRegisterIdent > 0) then
-            raise EInterfaceFactory.CreateUTF8('Unexpected % reg=% FP=%',
+            raise EInterfaceFactory.CreateUtf8('Unexpected % reg=% FP=%',
               [ParamName^, RegisterIdent, FPRegisterIdent]); // should never happen
         end;
       end;
@@ -6856,7 +6881,7 @@ begin
             raise; // single caller expects exception to be propagated
           if fExecutedInstancesFailed = nil then // multiple Instances[] execution
             SetLength(fExecutedInstancesFailed, InstancesLast + 1);
-          fExecutedInstancesFailed[i] := ObjectToJSONDebug(Exc);
+          fExecutedInstancesFailed[i] := ObjectToJsonDebug(Exc);
         end;
       end;
     end;
@@ -6869,7 +6894,7 @@ begin
   begin
     fTempTextWriter := TTextWriter.CreateOwnedStream;
     fTempTextWriter.CustomOptions := fTempTextWriter.CustomOptions +
-      [twoForceJSONExtended, twoIgnoreDefaultInRecord]; // shorter
+      [twoForceJsonExtended, twoIgnoreDefaultInRecord]; // shorter
   end;
   result := fTempTextWriter;
 end;
@@ -6878,7 +6903,7 @@ procedure TInterfaceMethodExecute.AfterExecute;
 var
   i, a: PtrInt;
 begin
-  Finalize(fRawUTF8s);
+  Finalize(fRawUtf8s);
   Finalize(fStrings);
   Finalize(fWideStrings);
   with fMethod^ do
@@ -6913,7 +6938,7 @@ begin
 end;
 
 function TInterfaceMethodExecute.ExecuteJsonCallback(Instance: pointer;
-  const params: RawUTF8; output: PRawUTF8): boolean;
+  const params: RawUtf8; output: PRawUtf8): boolean;
 var
   fake: TInterfacedObjectFake;
   WR: TTextWriter;
@@ -6962,9 +6987,9 @@ begin
 end;
 
 function TInterfaceMethodExecute.ExecuteJsonFake(
-  Instance: pointer; params: PUTF8Char): boolean;
+  Instance: pointer; params: PUtf8Char): boolean;
 var
-  tmp: RawUTF8;
+  tmp: RawUtf8;
   len: integer;
 begin
   result := false;
@@ -6985,15 +7010,15 @@ begin
 end;
 
 function TInterfaceMethodExecute.ExecuteJson(const Instances: array of pointer;
-  Par: PUTF8Char; Res: TTextWriter; Error: PShortString; ResAsJSONObject: boolean): boolean;
+  Par: PUtf8Char; Res: TTextWriter; Error: PShortString; ResAsJsonObject: boolean): boolean;
 var
   a, a1: integer;
-  Val, Name: PUTF8Char;
+  Val, Name: PUtf8Char;
   NameLen: integer;
   EndOfObject: AnsiChar;
   opt: array[{smdVar=}boolean] of TTextWriterWriteObjectOptions;
   ParObjValuesUsed: boolean;
-  ParObjValues: array[0..MAX_METHOD_ARGS - 1] of PUTF8Char;
+  ParObjValues: array[0..MAX_METHOD_ARGS - 1] of PUtf8Char;
 begin
   result := false;
   BeforeExecute;
@@ -7024,11 +7049,11 @@ begin
               FillCharFast(ParObjValues, (ArgsInLast + 1) * SizeOf(pointer), 0);
               a1 := ArgsInFirst;
               repeat
-                Name := GetJSONPropName(Par, @NameLen);
+                Name := GetJsonPropName(Par, @NameLen);
                 if Name = nil then
                   exit; // invalid JSON object in input
                 Val := Par;
-                Par := GotoNextJSONItem(Par, 1, @EndOfObject);
+                Par := GotoNextJsonItem(Par, 1, @EndOfObject);
                 for a := a1 to ArgsInLast do
                 with Args[a] do
                   if ValueDirection <> imdOut then
@@ -7081,17 +7106,17 @@ begin
             if Assigned(OnCallback) then
               OnCallback(Par, ArgRtti, fInterfaces[IndexVar])
             else
-              raise EInterfaceFactory.CreateUTF8('OnCallback=nil for %(%: %)',
+              raise EInterfaceFactory.CreateUtf8('OnCallback=nil for %(%: %)',
                 [InterfaceDotMethodName, ParamName^, ArgTypeName^]);
           imvDynArray:
             begin
-              Par := fDynArrays[IndexVar].Wrapper.LoadFromJSON(Par);
+              Par := fDynArrays[IndexVar].Wrapper.LoadFromJson(Par);
               if Par = nil then
                 exit;
               IgnoreComma(Par);
             end;
         else
-          if not FromJSON(InterfaceDotMethodName, Par, fValues[a], Error,
+          if not FromJson(InterfaceDotMethodName, Par, fValues[a], Error,
              JSON_OPTIONS[optVariantCopiedByReference in Options]) then
             exit;
         end;
@@ -7104,39 +7129,41 @@ begin
       // handle custom content (not JSON array/object answer)
       if ArgsResultIsServiceCustomAnswer then
         with PServiceCustomAnswer(fValues[ArgsResultIndex])^ do
-          if Header <> '' then
-          begin
+        begin
+          if Header = '' then
+            // set to 'Content-Type: application/json; charset=UTF-8' by default
+            fServiceCustomAnswerHead := JSON_CONTENT_TYPE_HEADER_VAR
+          else
+            // implementation could override the Header content
             fServiceCustomAnswerHead := Header;
-            Res.ForceContent(Content);
-            if Status = 0 then
-              // Values[]=@Records[] is filled with 0 by default
-              fServiceCustomAnswerStatus := HTTP_SUCCESS
-            else
-              fServiceCustomAnswerStatus := Status;
-            result := true;
-            exit;
-          end;
+          Res.ForceContent(Content);
+          if Status = 0 then
+            // Values[]=@Records[] is filled with 0 by default
+            fServiceCustomAnswerStatus := HTTP_SUCCESS
+          else
+            fServiceCustomAnswerStatus := Status;
+          result := true;
+          exit;
+        end;
       // write the '{"result":[...' array or object
-      opt[{smdVar=}false] := DEFAULT_WRITEOPTIONS[optDontStoreVoidJSON in Options];
+      opt[{smdVar=}false] := DEFAULT_WRITEOPTIONS[optDontStoreVoidJson in Options];
       opt[{smdVar=}true] := []; // let var params override void/default values
       for a := ArgsOutFirst to ArgsOutLast do
         with Args[a] do
         if ValueDirection in [imdVar, imdOut, imdResult] then
         begin
-          if ResAsJSONObject then
+          if ResAsJsonObject then
             Res.AddPropName(ParamName^);
           case ValueType of
             imvDynArray:
-              begin
                 if vIsObjArray in ValueKindAsm then
-                  Res.AddObjArrayJSON(fValues[a]^, opt[ValueDirection = imdVar])
+                  Res.AddObjArrayJson(fValues[a]^, opt[ValueDirection = imdVar])
                 else
-                  Res.AddDynArrayJSON(fDynArrays[IndexVar].Wrapper);
-                Res.Add(',');
-              end;
+                  Res.AddDynArrayJson(fDynArrays[IndexVar].Wrapper);
           else
-            AddJSON(Res, fValues[a], opt[ValueDirection = imdVar]);
+            AddJson(Res, fValues[a], opt[ValueDirection = imdVar]);
           end;
+          Res.Add(',');
         end;
       Res.CancelLastComma;
     end;
@@ -7150,8 +7177,8 @@ end;
 { TInterfacedObjectFakeCallback }
 
 function TInterfacedObjectFakeCallback.FakeInvoke(
-  const aMethod: TInterfaceMethod; const aParams: RawUTF8;
-  aResult, aErrorMsg: PRawUTF8; aClientDrivenID: PCardinal;
+  const aMethod: TInterfaceMethod; const aParams: RawUtf8;
+  aResult, aErrorMsg: PRawUtf8; aClientDrivenID: PCardinal;
   aServiceCustomAnswer: PServiceCustomAnswer): boolean;
 begin
   if fLogClass <> nil then
@@ -7160,7 +7187,7 @@ begin
   if aMethod.ArgsOutputValuesCount > 0 then
   begin
     if aErrorMsg <> nil then
-      FormatUTF8('%.FakeInvoke [%]: % has out parameters',
+      FormatUtf8('%.FakeInvoke [%]: % has out parameters',
         [self, fName, aMethod.InterfaceDotMethodName], aErrorMsg^);
     result := false;
   end

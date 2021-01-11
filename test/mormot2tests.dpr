@@ -107,7 +107,11 @@ uses
   test.core.data           in '.\test.core.data.pas',
   test.core.crypto         in '.\test.core.crypto.pas',
   test.core.ecc            in '.\test.core.ecc.pas',
-  test.net.proto           in '.\test.net.proto.pas';
+  test.net.proto           in '.\test.net.proto.pas',
+  test.orm.core            in '.\test.orm.core.pas',
+  test.orm.sqlite3         in '.\test.orm.sqlite3.pas',
+  test.orm.extdb           in '.\test.orm.extdb.pas',
+  test.soa.network         in '.\test.soa.network.pas';
 
 
 { TIntegrationTests }
@@ -116,13 +120,31 @@ type
   TIntegrationTests = class(TSynTestsLogged)
   published
     procedure CoreUnits;
+    procedure ORM;
+    procedure SOA;
   end;
 
 procedure TIntegrationTests.CoreUnits;
 begin
-  AddCase([// 
+  AddCase([
   //
-  TTestCoreBase, TTestCoreProcess, TTestCoreCrypto, TTestCoreEcc, TTestCoreCompress, TNetworkProtocols
+  TTestCoreBase, TTestCoreProcess, TTestCoreCrypto, TTestCoreEcc, TTestCoreCompression, TNetworkProtocols
+  ]);
+end;
+
+procedure TIntegrationTests.ORM;
+begin
+  AddCase([
+    //
+    TTestOrmCore, TTestSqliteFile, TTestSqliteFileWAL, TTestSqliteMemory, TTestExternalDatabase
+  ]);
+end;
+
+procedure TIntegrationTests.SOA;
+begin
+  AddCase([
+    //
+    TTestBidirectionalRemoteConnection
   ]);
 end;
 

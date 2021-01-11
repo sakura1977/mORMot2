@@ -123,7 +123,7 @@ type
   /// idle method called by TSynBackgroundThreadAbstract in the caller thread
   // during remote blocking process in a background thread
   // - typical use is to run Application.ProcessMessages, e.g. for
-  // TRestClientURI.URI() to provide a responsive UI even in case of slow
+  // TRestClientUri.Uri() to provide a responsive UI even in case of slow
   // blocking remote access
   // - provide the time elapsed (in milliseconds) from the request start (can be
   // used e.g. to popup a temporary message to wait)
@@ -145,7 +145,7 @@ type
     fProcessEvent: TEvent;
     fOnBeforeExecute: TOnNotifyThread;
     fOnAfterExecute: TOnNotifyThread;
-    fThreadName: RawUTF8;
+    fThreadName: RawUtf8;
     fExecute: (exCreated, exRun, exFinished);
     fExecuteLoopPause: boolean;
     procedure SetExecuteLoopPause(dopause: boolean);
@@ -157,7 +157,7 @@ type
     // - you could define some callbacks to nest the thread execution, e.g.
     // assigned to TRestServer.BeginCurrentThread/EndCurrentThread, or
     // at least set OnAfterExecute to TSynLogFamily.OnThreadEnded
-    constructor Create(const aThreadName: RawUTF8;
+    constructor Create(const aThreadName: RawUtf8;
       const OnBeforeExecute: TOnNotifyThread = nil;
       const OnAfterExecute: TOnNotifyThread = nil;
       CreateSuspended: boolean = false); reintroduce;
@@ -217,7 +217,7 @@ type
   /// abstract TThread able to run a method in its own execution content
   // - typical use is a background thread for processing data or remote access,
   // while the UI will be still responsive by running OnIdle event in loop: see
-  // e.g. how TRestClientURI.OnIdle handle this in mormot.rest.client.pas unit
+  // e.g. how TRestClientUri.OnIdle handle this in mormot.rest.client.pas unit
   // - you should not use this class directly, but inherit from it and override
   // the Process method, or use either TSynBackgroundThreadEvent /
   // TSynBackgroundThreadMethod and provide a much more convenient callback
@@ -249,7 +249,7 @@ type
     // - you could define some callbacks to nest the thread execution, e.g.
     // assigned to TRestServer.BeginCurrentThread/EndCurrentThread
     constructor Create(const aOnIdle: TOnIdleSynBackgroundThread;
-      const aThreadName: RawUTF8; const OnBeforeExecute: TOnNotifyThread = nil;
+      const aThreadName: RawUtf8; const OnBeforeExecute: TOnNotifyThread = nil;
       const OnAfterExecute: TOnNotifyThread = nil); reintroduce;
     /// finalize the thread
     destructor Destroy; override;
@@ -310,7 +310,7 @@ type
     // the background process to finish until RunAndWait() will return
     constructor Create(const aOnProcess: TOnProcessSynBackgroundThread;
       const aOnIdle: TOnIdleSynBackgroundThread;
-      const aThreadName: RawUTF8); reintroduce;
+      const aThreadName: RawUtf8); reintroduce;
     /// provide a method handler to be execute in the background thread
     // - triggered by RunAndWait() method - which will wait until finished
     // - the OpaqueParam as specified to RunAndWait() will be supplied here
@@ -346,7 +346,7 @@ type
     // the background process to finish until RunAndWait() will return
     constructor Create(aOnProcess: TOnProcessSynBackgroundThreadProc;
       const aOnIdle: TOnIdleSynBackgroundThread;
-      const aThreadName: RawUTF8); reintroduce;
+      const aThreadName: RawUtf8); reintroduce;
     /// provide a procedure handler to be execute in the background thread
     // - triggered by RunAndWait() method - which will wait until finished
     // - the OpaqueParam as specified to RunAndWait() will be supplied here
@@ -379,7 +379,7 @@ type
     // - if aOnProcessMS is 0, will wait until ProcessEvent.SetEvent is called
     // - you could define some callbacks to nest the thread execution, e.g.
     // assigned to TRestServer.BeginCurrentThread/EndCurrentThread
-    constructor Create(const aThreadName: RawUTF8;
+    constructor Create(const aThreadName: RawUtf8;
       const aOnProcess: TOnSynBackgroundThreadProcess;
       aOnProcessMS: cardinal; const aOnBeforeExecute: TOnNotifyThread = nil;
       const aOnAfterExecute: TOnNotifyThread = nil;
@@ -412,14 +412,14 @@ type
   // - Msg is '' if there is no pending message in this task FIFO
   // - Msg is set for each pending message in this task FIFO
   TOnSynBackgroundTimerProcess = procedure(Sender: TSynBackgroundTimer;
-    Event: TWaitResult; const Msg: RawUTF8) of object;
+    Event: TWaitResult; const Msg: RawUtf8) of object;
 
   /// used by TSynBackgroundTimer internal registration list
   TSynBackgroundTimerTask = record
     OnProcess: TOnSynBackgroundTimerProcess;
     Secs: cardinal;
     NextTix: Int64;
-    FIFO: TRawUTF8DynArray;
+    FIFO: TRawUtf8DynArray;
   end;
 
   /// stores TSynBackgroundTimer internal registration list
@@ -442,13 +442,13 @@ type
       Event: TWaitResult);
     function Find(const aProcess: TMethod): integer;
     function Add(const aOnProcess: TOnSynBackgroundTimerProcess;
-      const aMsg: RawUTF8; aExecuteNow: boolean): boolean;
+      const aMsg: RawUtf8; aExecuteNow: boolean): boolean;
   public
     /// initialize the thread for a periodic task processing
     // - you could define some callbacks to nest the thread execution, e.g.
     // assigned to TRestServer.BeginCurrentThread/EndCurrentThread, as
     // made by TRestBackgroundTimer.Create
-    constructor Create(const aThreadName: RawUTF8;
+    constructor Create(const aThreadName: RawUtf8;
       const aOnBeforeExecute: TOnNotifyThread = nil;
       const aOnAfterExecute: TOnNotifyThread = nil;
       aStats: TSynMonitorClass = nil); reintroduce; virtual;
@@ -472,7 +472,7 @@ type
     // - aOnProcess should have been registered by a previous call to Enable() method
     // - returns true on success, false if the supplied task was not registered
     function EnQueue(const aOnProcess: TOnSynBackgroundTimerProcess;
-      const aMsg: RawUTF8; aExecuteNow: boolean = false): boolean; overload;
+      const aMsg: RawUtf8; aExecuteNow: boolean = false): boolean; overload;
     /// add a message to be processed during the next execution of a task
     // - supplied message will be added to the internal FIFO list associated
     // with aOnProcess, then supplied to as aMsg parameter for each call
@@ -480,7 +480,7 @@ type
     // - aOnProcess should have been registered by a previous call to Enable() method
     // - returns true on success, false if the supplied task was not registered
     function EnQueue(const aOnProcess: TOnSynBackgroundTimerProcess;
-      const aMsgFmt: RawUTF8; const Args: array of const;
+      const aMsgFmt: RawUtf8; const Args: array of const;
       aExecuteNow: boolean = false): boolean; overload;
     /// remove a message from the processing list
     // - supplied message will be searched in the internal FIFO list associated
@@ -488,7 +488,7 @@ type
     // - aOnProcess should have been registered by a previous call to Enable() method
     // - returns true on success, false if the supplied message was not registered
     function DeQueue(const aOnProcess: TOnSynBackgroundTimerProcess;
-      const aMsg: RawUTF8): boolean;
+      const aMsg: RawUtf8): boolean;
     /// execute a task without waiting for the next aOnProcessSecs occurence
     // - aOnProcess should have been registered by a previous call to Enable() method
     // - returns true on success, false if the supplied task was not registered
@@ -652,7 +652,7 @@ type
   // work into each thread
   TSynParallelProcess = class(TSynPersistentLock)
   protected
-    fThreadName: RawUTF8;
+    fThreadName: RawUtf8;
     fPool: array of TSynParallelProcessThread;
     fThreadPoolCount: integer;
     fParallelRunCount: integer;
@@ -665,7 +665,7 @@ type
     // saturating each CPU core)
     // - if ThreadPoolCount is 0, no thread would be created, and process
     // would take place in the current thread
-    constructor Create(ThreadPoolCount: integer; const ThreadName: RawUTF8;
+    constructor Create(ThreadPoolCount: integer; const ThreadName: RawUtf8;
       const OnBeforeExecute: TOnNotifyThread = nil;
       const OnAfterExecute: TOnNotifyThread = nil;
       MaxThreadPoolCount: integer = 32); reintroduce; virtual;
@@ -688,7 +688,7 @@ type
     property ThreadPoolCount: integer
       read fThreadPoolCount;
     /// some text identifier, used to distinguish each owned thread
-    property ThreadName: RawUTF8
+    property ThreadName: RawUtf8
       read fThreadName;
   end;
 
@@ -741,7 +741,6 @@ type
   TSynThreadPoolSubThread = class(TSynThread)
   protected
     fOwner: TSynThreadPool;
-    fNotifyThreadStartName: RawUTF8;
     fThreadNumber: integer;
     {$ifndef USE_WINIOCP}
     fProcessingContext: pointer;
@@ -775,7 +774,7 @@ type
     fContentionCount: cardinal;
     fContentionAbortDelay: integer;
     {$ifdef USE_WINIOCP}
-    fRequestQueue: THandle; // IOCSP has its own internal queue
+    fRequestQueue: THandle; // IOCP has its own internal queue
     {$else}
     fQueuePendingContext: boolean;
     fPendingContext: array of pointer;
@@ -984,7 +983,7 @@ end;
 
 { TSynBackgroundThreadAbstract }
 
-constructor TSynBackgroundThreadAbstract.Create(const aThreadName: RawUTF8;
+constructor TSynBackgroundThreadAbstract.Create(const aThreadName: RawUtf8;
   const OnBeforeExecute: TOnNotifyThread; const OnAfterExecute: TOnNotifyThread;
   CreateSuspended: boolean);
 begin
@@ -1101,7 +1100,7 @@ end;
 { TSynBackgroundThreadMethodAbstract }
 
 constructor TSynBackgroundThreadMethodAbstract.Create(
-  const aOnIdle: TOnIdleSynBackgroundThread; const aThreadName: RawUTF8;
+  const aOnIdle: TOnIdleSynBackgroundThread; const aThreadName: RawUtf8;
   const OnBeforeExecute, OnAfterExecute: TOnNotifyThread);
 begin
   fOnIdle := aOnIdle; // cross-platform may run Execute as soon as Create is called
@@ -1183,7 +1182,8 @@ begin
   try
     result := fPendingProcessFlag;
     if result = flagIdle then
-    begin // we just acquired the thread! congrats!
+    begin
+      // we just acquired the thread! congrats!
       fPendingProcessFlag := flagStarted; // atomic set "started" flag
       fCallerThreadID := ThreadID;
     end;
@@ -1226,7 +1226,7 @@ begin
     {$endif MSWINDOWS}
       fCallerEvent.WaitFor(INFINITE);
     if fPendingProcessFlag <> flagFinished then
-      ESynThread.CreateUTF8('%.WaitForFinished: flagFinished?', [self]);
+      ESynThread.CreateUtf8('%.WaitForFinished: flagFinished?', [self]);
     if fBackgroundException <> nil then
     begin
       E := fBackgroundException;
@@ -1295,7 +1295,7 @@ end;
 
 constructor TSynBackgroundThreadEvent.Create(
   const aOnProcess: TOnProcessSynBackgroundThread;
-  const aOnIdle: TOnIdleSynBackgroundThread; const aThreadName: RawUTF8);
+  const aOnIdle: TOnIdleSynBackgroundThread; const aThreadName: RawUtf8);
 begin
   inherited Create(aOnIdle, aThreadName);
   fOnProcess := aOnProcess;
@@ -1304,7 +1304,7 @@ end;
 procedure TSynBackgroundThreadEvent.Process;
 begin
   if not Assigned(fOnProcess) then
-    raise ESynThread.CreateUTF8('Invalid %.RunAndWait() call', [self]);
+    raise ESynThread.CreateUtf8('Invalid %.RunAndWait() call', [self]);
   fOnProcess(self, fParam);
 end;
 
@@ -1316,7 +1316,7 @@ var
   Method: ^TThreadMethod;
 begin
   if fParam = nil then
-    raise ESynThread.CreateUTF8('Invalid %.RunAndWait() call', [self]);
+    raise ESynThread.CreateUtf8('Invalid %.RunAndWait() call', [self]);
   Method := fParam;
   Method^();
 end;
@@ -1333,7 +1333,7 @@ end;
 
 constructor TSynBackgroundThreadProcedure.Create(
   aOnProcess: TOnProcessSynBackgroundThreadProc;
-  const aOnIdle: TOnIdleSynBackgroundThread; const aThreadName: RawUTF8);
+  const aOnIdle: TOnIdleSynBackgroundThread; const aThreadName: RawUtf8);
 begin
   inherited Create(aOnIdle, aThreadName);
   fOnProcess := aOnProcess;
@@ -1342,20 +1342,20 @@ end;
 procedure TSynBackgroundThreadProcedure.Process;
 begin
   if not Assigned(fOnProcess) then
-    raise ESynThread.CreateUTF8('Invalid %.RunAndWait() call', [self]);
+    raise ESynThread.CreateUtf8('Invalid %.RunAndWait() call', [self]);
   fOnProcess(fParam);
 end;
 
 
 { TSynBackgroundThreadProcess }
 
-constructor TSynBackgroundThreadProcess.Create(const aThreadName: RawUTF8;
+constructor TSynBackgroundThreadProcess.Create(const aThreadName: RawUtf8;
   const aOnProcess: TOnSynBackgroundThreadProcess; aOnProcessMS: cardinal;
   const aOnBeforeExecute, aOnAfterExecute: TOnNotifyThread;
   aStats: TSynMonitorClass; CreateSuspended: boolean);
 begin
   if not Assigned(aOnProcess) then
-    raise ESynException.CreateUTF8('%.Create(aOnProcess=nil)', [self]);
+    raise ESynException.CreateUtf8('%.Create(aOnProcess=nil)', [self]);
   if aStats <> nil then
     fStats := aStats.Create(aThreadName);
   fOnProcess := aOnProcess;
@@ -1412,7 +1412,7 @@ end;
 var
   ProcessSystemUse: TSystemUse;
 
-constructor TSynBackgroundTimer.Create(const aThreadName: RawUTF8;
+constructor TSynBackgroundTimer.Create(const aThreadName: RawUtf8;
   const aOnBeforeExecute, aOnAfterExecute: TOnNotifyThread; aStats: TSynMonitorClass);
 begin
   fTasks.Init(TypeInfo(TSynBackgroundTimerTaskDynArray), fTask);
@@ -1484,7 +1484,8 @@ begin
 end;
 
 function TSynBackgroundTimer.Find(const aProcess: TMethod): integer;
-begin // caller should have made fTaskLock.Lock;
+begin
+  // caller should have made fTaskLock.Lock;
   for result := length(fTask) - 1 downto 0 do
     with TMethod(fTask[result].OnProcess) do
       if (Code = aProcess.Code) and
@@ -1549,23 +1550,23 @@ end;
 
 function TSynBackgroundTimer.EnQueue(
   const aOnProcess: TOnSynBackgroundTimerProcess;
-  const aMsg: RawUTF8; aExecuteNow: boolean): boolean;
+  const aMsg: RawUtf8; aExecuteNow: boolean): boolean;
 begin
   result := Add(aOnProcess, aMsg, aExecuteNow);
 end;
 
 function TSynBackgroundTimer.EnQueue(
-  const aOnProcess: TOnSynBackgroundTimerProcess; const aMsgFmt: RawUTF8;
+  const aOnProcess: TOnSynBackgroundTimerProcess; const aMsgFmt: RawUtf8;
   const Args: array of const; aExecuteNow: boolean): boolean;
 var
-  msg: RawUTF8;
+  msg: RawUtf8;
 begin
-  FormatUTF8(aMsgFmt, Args, msg);
+  FormatUtf8(aMsgFmt, Args, msg);
   result := Add(aOnProcess, msg, aExecuteNow);
 end;
 
 function TSynBackgroundTimer.Add(
-  const aOnProcess: TOnSynBackgroundTimerProcess; const aMsg: RawUTF8;
+  const aOnProcess: TOnSynBackgroundTimerProcess; const aMsg: RawUtf8;
   aExecuteNow: boolean): boolean;
 var
   found: integer;
@@ -1585,7 +1586,7 @@ begin
         if aExecuteNow then
           NextTix := 0;
         if aMsg <> #0 then
-          AddRawUTF8(FIFO, aMsg);
+          AddRawUtf8(FIFO, aMsg);
       end;
       if aExecuteNow then
         ProcessEvent.SetEvent;
@@ -1597,7 +1598,7 @@ begin
 end;
 
 function TSynBackgroundTimer.DeQueue(
-  const aOnProcess: TOnSynBackgroundTimerProcess; const aMsg: RawUTF8): boolean;
+  const aOnProcess: TOnSynBackgroundTimerProcess; const aMsg: RawUtf8): boolean;
 var
   found: integer;
 begin
@@ -1611,7 +1612,7 @@ begin
     found := Find(TMethod(aOnProcess));
     if found >= 0 then
       with fTask[found] do
-        result := DeleteRawUTF8(FIFO, FindRawUTF8(FIFO, aMsg));
+        result := DeleteRawUtf8(FIFO, FindRawUtf8(FIFO, aMsg));
   finally
     fTaskLock.UnLock;
   end;
@@ -1875,14 +1876,14 @@ end;
 { TSynParallelProcess }
 
 constructor TSynParallelProcess.Create(ThreadPoolCount: integer;
-  const ThreadName: RawUTF8; const OnBeforeExecute, OnAfterExecute: TOnNotifyThread;
+  const ThreadName: RawUtf8; const OnBeforeExecute, OnAfterExecute: TOnNotifyThread;
   MaxThreadPoolCount: integer);
 var
   i: PtrInt;
 begin
   inherited Create;
   if ThreadPoolCount < 0 then
-    raise ESynThread.CreateUTF8('%.Create(%,%)',
+    raise ESynThread.CreateUtf8('%.Create(%,%)',
       [Self, ThreadPoolCount, ThreadName]);
   if ThreadPoolCount > MaxThreadPoolCount then
     ThreadPoolCount := MaxThreadPoolCount;
@@ -1891,7 +1892,7 @@ begin
   SetLength(fPool, fThreadPoolCount);
   for i := 0 to fThreadPoolCount - 1 do
     fPool[i] := TSynParallelProcessThread.Create(nil,
-      FormatUTF8('%#%/%', [fThreadName, i + 1, fThreadPoolCount]),
+      FormatUtf8('%#%/%', [fThreadName, i + 1, fThreadPoolCount]),
       OnBeforeExecute, OnAfterExecute);
 end;
 
@@ -1905,7 +1906,7 @@ procedure TSynParallelProcess.ParallelRunAndWait(const Method: TOnSynParallelPro
   MethodCount: integer; const OnMainThreadIdle: TNotifyEvent);
 var
   use, t, n, perthread: integer;
-  error: RawUTF8;
+  error: RawUtf8;
 begin
   if (MethodCount <= 0) or
      not Assigned(Method) then
@@ -1936,7 +1937,7 @@ begin
         case fPool[t].AcquireThread of
           flagDestroying:
             // should not happen
-            raise ESynThread.CreateUTF8(
+            raise ESynThread.CreateUtf8(
               '%.ParallelRunAndWait [%] destroying', [self, fPool[t].fThreadName]);
           flagIdle:
             // acquired (should always be the case)
@@ -1970,11 +1971,11 @@ begin
     except
       on E: Exception do
         // gather all errors from background thread
-        error := FormatUTF8('% % on thread % [%]',
+        error := FormatUtf8('% % on thread % [%]',
           [{%H-}error, E, fPool[t].fThreadName, E.Message]);
     end;
     if error <> '' then
-      raise ESynThread.CreateUTF8('%.ParallelRunAndWait: %',
+      raise ESynThread.CreateUtf8('%.ParallelRunAndWait: %',
         [self, error]);
   end;
 end;
@@ -2001,7 +2002,8 @@ begin
   if Terminated then
     exit;
   if MS < 32 then
-  begin // smaller than GetTickCount resolution (under Windows)
+  begin
+    // smaller than GetTickCount resolution (under Windows)
     SleepHiRes(MS);
     if Terminated then
       exit;
@@ -2055,10 +2057,9 @@ begin
   {$ifdef USE_WINIOCP}
   fRequestQueue := CreateIoCompletionPort(aOverlapHandle, 0, nil, NumberOfThreads);
   if fRequestQueue = INVALID_HANDLE_VALUE then
-  begin
     fRequestQueue := 0;
+  if fRequestQueue = 0 then
     exit;
-  end;
   {$else}
   InitializeCriticalSection(fSafe);
   fQueuePendingContext := aQueuePendingContext;
@@ -2077,11 +2078,13 @@ var
 begin
   fTerminated := true; // fSubThread[].Execute will check this flag
   try
+    {$ifdef USE_WINIOCP}
     // notify the threads we are shutting down
     for i := 0 to fSubThreadCount - 1 do
-      {$ifdef USE_WINIOCP}
       PostQueuedCompletionStatus(fRequestQueue, 0, nil, nil);
-      {$else}
+    {$else}
+    // notify the threads we are shutting down using the event
+    for i := 0 to fSubThreadCount - 1 do
       fSubThread[i].fEvent.SetEvent;
     // cleanup now any pending task (e.g. THttpServerSocket instance)
     for i := 0 to fPendingContextCount - 1 do
@@ -2095,11 +2098,11 @@ begin
     for i := 0 to fSubThreadCount - 1 do
       fSubThread[i].Free;
   finally
-  {$ifdef USE_WINIOCP}
-  CloseHandle(fRequestQueue);
-  {$else}
-  DeleteCriticalSection(fSafe);
-  {$endif USE_WINIOCP}
+    {$ifdef USE_WINIOCP}
+    CloseHandle(fRequestQueue);
+    {$else}
+    DeleteCriticalSection(fSafe);
+    {$endif USE_WINIOCP}
   end;
   inherited Destroy;
 end;
@@ -2109,7 +2112,8 @@ function TSynThreadPool.Push(aContext: pointer; aWaitOnContention: boolean): boo
 {$ifdef USE_WINIOCP}
 
   function Enqueue: boolean;
-  begin // IOCP has its own queue
+  begin
+    // IOCP has its own queue
     result := PostQueuedCompletionStatus(fRequestQueue, 0, nil, aContext);
   end;
 
@@ -2265,7 +2269,7 @@ begin
   {$ifndef USE_WINIOCP}
   fEvent := TEvent.Create(nil, false, false, '');
   {$endif USE_WINIOCP}
-  inherited Create(false);
+  inherited Create({suspended=}false);
 end;
 
 destructor TSynThreadPoolSubThread.Destroy;
@@ -2301,7 +2305,8 @@ begin
     repeat
       {$ifdef USE_WINIOCP}
       if (not GetQueuedCompletionStatus(fOwner.fRequestQueue,
-          dum1, dum2, ctxt, INFINITE) and fOwner.NeedStopOnIOError) or
+           dum1, dum2, ctxt, INFINITE) and
+          fOwner.NeedStopOnIOError) or
          fOwner.fTerminated then
         break;
       if ctxt <> nil then
@@ -2324,32 +2329,26 @@ begin
         LeaveCriticalSection(fOwner.fSafe);
       end;
      {$endif USE_WINIOCP}
-    until fOwner.fTerminated or Terminated;
+    until fOwner.fTerminated or
+          Terminated;
   finally
-    InterlockedDecrement(fOwner.fRunningThreads);
+    LockedDec32(@fOwner.fRunningThreads);
   end;
 end;
 
 procedure TSynThreadPoolSubThread.NotifyThreadStart(Sender: TSynThread);
 begin
   if Sender = nil then
-    raise ESynThread.CreateUTF8('%.NotifyThreadStart(nil)', [self]);
-{$ifdef FPC}
-{$ifdef LINUX}
-  if fNotifyThreadStartName = '' then
-  begin
-    FormatUTF8('Pool%-%', [fThreadNumber, PointerToHexShort(fOwner)],
-      fNotifyThreadStartName);
-    RawSetThreadName(fThreadID, fNotifyThreadStartName);
-  end;
-{$endif LINUX}
-{$endif FPC}
+    raise ESynThread.CreateUtf8('%.NotifyThreadStart(nil)', [self]);
   if Assigned(fOwner.fOnThreadStart) and
      not Assigned(Sender.fStartNotified) then
   begin
     fOwner.fOnThreadStart(Sender);
     Sender.fStartNotified := self;
   end;
+  if CurrentThreadName[0] = #0 then
+    SetCurrentThreadName('Pool%-%',
+      [fThreadNumber, PointerToHexShort(fOwner)]);
 end;
 
 

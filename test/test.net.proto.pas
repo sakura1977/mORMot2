@@ -31,26 +31,26 @@ type
   TNetworkProtocols = class(TSynTestCase)
   published
     /// RTSP over HTTP, as implemented in SynProtoRTSPHTTP unit
-    procedure RTSPOverHTTP;
+    procedure RtspOverHttp;
   end;
 
   
 implementation
 
-procedure RegressionTests(proxy: TRTSPOverHTTPServer; test: TSynTestCase;
+procedure RegressionTests(proxy: TRtspOverHttpServer; test: TSynTestCase;
   clientcount, steps: integer);
 type
   TReq = record
     get: THttpSocket;
     post: TCrtSocket;
     stream: TCrtSocket;
-    session: RawUTF8;
+    session: RawUtf8;
   end;
 var
   streamer: TCrtSocket;
   req: array of TReq;
   rmax, r, i: PtrInt;
-  text: RawUTF8;
+  text: RawUtf8;
   log: ISynLog;
 begin
   // here we follow the steps and content stated by https://goo.gl/CX6VA3
@@ -159,7 +159,7 @@ begin
   end;
 end;
 
-procedure TNetworkProtocols.RTSPOverHTTP;
+procedure TNetworkProtocols.RtspOverHttp;
 const
   {$ifdef DARWIN}
   N = 10;
@@ -167,9 +167,9 @@ const
   N = 100;
   {$endif DARWIN}
 var
-  proxy: TRTSPOverHTTPServer;
+  proxy: TRtspOverHttpServer;
 begin
-  proxy := TRTSPOverHTTPServer.Create(
+  proxy := TRtspOverHttpServer.Create(
     '127.0.0.1', '3999', '3998', TSynLog, nil, nil);
   try
     RegressionTests(proxy, self, N, 10);

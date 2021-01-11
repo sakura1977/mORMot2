@@ -57,7 +57,7 @@ const
 var
   /// global variable containing '127.0.0.1'
   // - defined as var not as const to use reference counting from TNetAddr.IP
-  IP4local: RawUTF8;
+  IP4local: RawUtf8;
 
 type
   /// the error codes returned by TNetSocket wrapper
@@ -114,9 +114,9 @@ type
     // opaque wrapper with len: sockaddr_un=110 (POSIX) or sockaddr_in6=28 (Win)
     Addr: array[0..SOCKADDR_SIZE - 1] of byte;
   public
-    function SetFrom(const address, addrport: RawUTF8; layer: TNetLayer): TNetResult;
+    function SetFrom(const address, addrport: RawUtf8; layer: TNetLayer): TNetResult;
     function Family: TNetFamily;
-    function IP(localasvoid: boolean = false): RawUTF8;
+    function IP(localasvoid: boolean = false): RawUtf8;
     function IPShort(withport: boolean = false): shortstring; overload;
       {$ifdef HASINLINE}inline;{$endif}
     procedure IPShort(out result: shortstring; withport: boolean = false); overload;
@@ -161,14 +161,14 @@ type
 
 
 /// create a new Socket connected or bound to a given ip:port
-function NewSocket(const address, port: RawUTF8; layer: TNetLayer;
+function NewSocket(const address, port: RawUtf8; layer: TNetLayer;
   dobind: boolean; connecttimeout, sendtimeout, recvtimeout, retry: integer;
   out netsocket: TNetSocket; netaddr: PNetAddr = nil): TNetResult;
 
 
 var
   /// contains the raw Socket API version, as returned by the Operating System
-  SocketAPIVersion: RawUTF8;
+  SocketApiVersion: RawUtf8;
 
   /// Queue length for completely established sockets waiting to be accepted,
   // a backlog parameter for listen() function. If queue overflows client count,
@@ -199,7 +199,7 @@ type
     /// this method is called once to attach the underlying socket
     // - should make the proper initial TLS handshake to create a session
     // - should raise an exception on error
-    procedure AfterConnection(aSocket: TNetSocket; const aServerAddress: RawUTF8);
+    procedure AfterConnection(aSocket: TNetSocket; const aServerAddress: RawUtf8);
     /// this method is called once to release the underlying socket
     // - should finalize the TLS session, before socket disconnection
     procedure BeforeDisconnection(aSocket: TNetSocket);
@@ -409,8 +409,8 @@ type
   TCrtSocket = class
   protected
     fSock: TNetSocket;
-    fServer: RawUTF8;
-    fPort: RawUTF8;
+    fServer: RawUtf8;
+    fPort: RawUtf8;
     fSockIn: PTextFile;
     fSockOut: PTextFile;
     fTimeOut: PtrInt;
@@ -423,7 +423,7 @@ type
     fSndBuf: RawByteString;
     fSndBufLen: integer;
     // set by AcceptRequest() from TVarSin
-    fRemoteIP: RawUTF8;
+    fRemoteIP: RawUtf8;
     // updated during UDP connection, accessed via PeerAddress/PeerPort
     fPeerAddr: TNetAddr;
     fSecure: INetTLS;
@@ -440,7 +440,7 @@ type
     /// connect to aServer:aPort
     // - you may ask for a TLS secured client connection (only available under
     // Windows by now, using the SChannel API)
-    constructor Open(const aServer, aPort: RawUTF8; aLayer: TNetLayer= nlTCP;
+    constructor Open(const aServer, aPort: RawUtf8; aLayer: TNetLayer= nlTCP;
       aTimeOut: cardinal = 10000; aTLS: boolean = false);
     /// bind to an address
     // - aAddr='1234' - bind to a port on all interfaces, the same as '0.0.0.0:1234'
@@ -448,13 +448,13 @@ type
     // - aAddr='unix:/path/to/file' - bind to unix domain socket, e.g. 'unix:/run/mormot.sock'
     // - aAddr='' - bind to systemd descriptor on linux. See
     // http://0pointer.de/blog/projects/socket-activation.html
-    constructor Bind(const aAddress: RawUTF8; aLayer: TNetLayer = nlTCP;
+    constructor Bind(const aAddress: RawUtf8; aLayer: TNetLayer = nlTCP;
       aTimeOut: integer = 10000);
     /// low-level internal method called by Open() and Bind() constructors
     // - raise an ENetSock exception on error
     // - you may ask for a TLS secured client connection (only available under
     // Windows by now, using the SChannel API)
-    procedure OpenBind(const aServer, aPort: RawUTF8; doBind: boolean;
+    procedure OpenBind(const aServer, aPort: RawUtf8; doBind: boolean;
       aSock: TNetSocket = TNetSocket(-1); aLayer: TNetLayer = nlTCP;
       aTLS: boolean = false);
     /// initialize the instance with the supplied accepted socket
@@ -558,7 +558,7 @@ type
     // - raise ENetSock exception on socket error
     // - by default, will handle #10 or #13#10 as line delimiter (as normal text
     // files), but you can delimit lines using #13 if CROnly is TRUE
-    procedure SockRecvLn(out Line: RawUTF8; CROnly: boolean = false); overload;
+    procedure SockRecvLn(out Line: RawUtf8; CROnly: boolean = false); overload;
     /// call readln(SockIn^) or simulate it with direct use of Recv(Sock, ..)
     // - char are read one by one
     // - use TimeOut milliseconds wait for incoming data
@@ -592,7 +592,7 @@ type
     // a custom header value set by a local proxy as retrieved by inherited
     // THttpServerSocket.GetRequest, searching the header named in
     // THttpServerGeneric.RemoteIPHeader (e.g. 'X-Real-IP' for nginx)
-    property RemoteIP: RawUTF8
+    property RemoteIP: RawUtf8
       read fRemoteIP write fRemoteIP;
     /// remote IP address of the last packet received (SocketLayer=slUDP only)
     function PeerAddress(LocalAsVoid: boolean = false): RawByteString;
@@ -641,13 +641,13 @@ type
     property SocketLayer: TNetLayer
       read fSocketLayer;
     /// IP address, initialized after Open() with Server name
-    property Server: RawUTF8
+    property Server: RawUtf8
       read fServer;
     /// contains Sock, but transtyped as number for log display
     property RawSocket: PtrInt
       read GetRawSocket;
     /// IP port, initialized after Open() with port number
-    property Port: RawUTF8
+    property Port: RawUtf8
       read fPort;
     /// if higher than 0, read loop will wait for incoming data till
     // TimeOut milliseconds (default value is 10000) - used also in SockSend()
@@ -669,9 +669,9 @@ type
   // - will decode standard HTTP/HTTPS urls or Unix sockets URI like
   // 'http://unix:/path/to/socket.sock:/url/path'
   {$ifdef USERECORDWITHMETHODS}
-  TURI = record
+  TUri = record
   {$else}
-  TURI = object
+  TUri = object
   {$endif USERECORDWITHMETHODS}
   public
     /// if the server is accessible via https:// and not plain http://
@@ -680,29 +680,29 @@ type
     Layer: TNetLayer;
     /// if the server is accessible via something else than http:// or https://
     // - e.g. 'ws' or 'wss' for ws:// or wss://
-    Scheme: RawUTF8;
+    Scheme: RawUtf8;
     /// the server name
     // - e.g. 'www.somewebsite.com' or 'path/to/socket.sock' Unix socket URI
-    Server: RawUTF8;
+    Server: RawUtf8;
     /// the server port
     // - e.g. '80'
-    Port: RawUTF8;
+    Port: RawUtf8;
     /// the resource address, including optional parameters
     // - e.g. '/category/name/10?param=1'
-    Address: RawUTF8;
+    Address: RawUtf8;
     /// fill the members from a supplied URI
     // - recognize e.g. 'http://Server:Port/Address', 'https://Server/Address',
     // 'Server/Address' (as http), or 'http://unix:/Server:/Address'
     // - returns TRUE is at least the Server has been extracted, FALSE on error
-    function From(aURI: RawUTF8; const DefaultPort: RawUTF8 = ''): boolean;
+    function From(aUri: RawUtf8; const DefaultPort: RawUtf8 = ''): boolean;
     /// compute the whole normalized URI
     // - e.g. 'https://Server:Port/Address' or 'http://unix:/Server:/Address'
-    function URI: RawUTF8;
+    function URI: RawUtf8;
     /// the server port, as integer value
     function PortInt: integer;
     /// compute the root resource Address, without any URI-encoded parameter
     // - e.g. '/category/name/10'
-    function Root: RawUTF8;
+    function Root: RawUtf8;
     /// reset all stored information
     procedure Clear;
   end;
@@ -711,13 +711,13 @@ type
 const
   /// the default TCP port used for HTTP = DEFAULT_PORT[false] or
   // HTTPS = DEFAULT_PORT[true]
-  DEFAULT_PORT: array[boolean] of RawUTF8 = (
+  DEFAULT_PORT: array[boolean] of RawUtf8 = (
     '80', '443');
 
 
 /// create a TCrtSocket, returning nil on error
 // (useful to easily catch socket error exception ENetSock)
-function Open(const aServer, aPort: RawUTF8;
+function Open(const aServer, aPort: RawUtf8;
   aTLS: boolean = false): TCrtSocket;
 
 
@@ -808,7 +808,7 @@ begin
   until false;
 end;
 
-procedure IP4Text(ip4addr: PByteArray; var result: RawUTF8);
+procedure IP4Text(ip4addr: PByteArray; var result: RawUtf8);
 var
   s: shortstring;
 begin
@@ -872,7 +872,7 @@ begin
   end;
 end;
 
-function TNetAddr.IP(localasvoid: boolean): RawUTF8;
+function TNetAddr.IP(localasvoid: boolean): RawUtf8;
 var
   tmp: ShortString;
 begin
@@ -963,7 +963,7 @@ end;
 
 { ******** TNetSocket Cross-Platform Wrapper }
 
-function NewSocket(const address, port: RawUTF8; layer: TNetLayer; dobind: boolean;
+function NewSocket(const address, port: RawUtf8; layer: TNetLayer; dobind: boolean;
   connecttimeout, sendtimeout, recvtimeout, retry: integer;
   out netsocket: TNetSocket; netaddr: PNetAddr): TNetResult;
 var
@@ -1382,7 +1382,7 @@ begin
   if result or
      (timeoutMS < 0) then
     exit;
-  InterlockedIncrement(fGettingOne);
+  LockedInc32(@fGettingOne);
   try
     byte(notif.events) := 0;
     if fTerminated then
@@ -1431,7 +1431,7 @@ begin
       result := GetOneWithinPending(notif); // retrieved from another thread?
     until result or fTerminated;
   finally
-    InterlockedDecrement(fGettingOne);
+    LockedDec32(@fGettingOne);
   end;
 end;
 
@@ -1484,7 +1484,7 @@ begin
   fTimeOut := aTimeOut;
 end;
 
-constructor TCrtSocket.Open(const aServer, aPort: RawUTF8; aLayer:
+constructor TCrtSocket.Open(const aServer, aPort: RawUtf8; aLayer:
   TNetLayer; aTimeOut: cardinal; aTLS: boolean);
 begin
   Create(aTimeOut); // default read timeout is 10 seconds
@@ -1492,8 +1492,8 @@ begin
   OpenBind(aServer, aPort, {dobind=}false, TNetSocket(-1), aLayer, aTLS);
 end;
 
-function SplitFromRight(const Text: RawUTF8; Sep: AnsiChar;
-  var Before, After: RawUTF8): boolean;
+function SplitFromRight(const Text: RawUtf8; Sep: AnsiChar;
+  var Before, After: RawUtf8): boolean;
 var
   i: PtrInt;
 begin
@@ -1515,10 +1515,10 @@ const
     'is a server available on this address:port?',
     'another process may be currently listening to this port!');
 
-constructor TCrtSocket.Bind(const aAddress: RawUTF8; aLayer: TNetLayer;
+constructor TCrtSocket.Bind(const aAddress: RawUtf8; aLayer: TNetLayer;
   aTimeOut: integer);
 var
-  s, p: RawUTF8;
+  s, p: RawUtf8;
   aSock: integer;
 begin
   Create(aTimeOut);
@@ -1556,7 +1556,7 @@ begin
   OpenBind(s{%H-}, p{%H-}, {dobind=}true, {%H-}TNetSocket(aSock), aLayer);
 end;
 
-procedure TCrtSocket.OpenBind(const aServer, aPort: RawUTF8;
+procedure TCrtSocket.OpenBind(const aServer, aPort: RawUtf8;
   doBind: boolean; aSock: TNetSocket; aLayer: TNetLayer; aTLS: boolean);
 var
   retry: integer;
@@ -1587,7 +1587,8 @@ begin
   begin
     fSock := aSock; // ACCEPT mode -> socket is already created by caller
     if TimeOut > 0 then
-    begin // set timout values for both directions
+    begin
+      // set timout values for both directions
       ReceiveTimeout := TimeOut;
       SendTimeout := TimeOut;
     end;
@@ -1713,12 +1714,14 @@ begin
   F.BufPos := 0;
   F.BufEnd := 0;
   if F.Mode = fmInput then
-  begin // ReadLn
+  begin
+    // ReadLn
     F.InOutFunc := @InputSock;
     F.FlushFunc := nil;
   end
   else
-  begin // WriteLn
+  begin
+    // WriteLn
     F.Mode := fmOutput;
     F.InOutFunc := @OutputSock;
     F.FlushFunc := @OutputSock;
@@ -1831,7 +1834,8 @@ begin
   {$ifdef LINUXNOTBSD}
   if fWasBind and
      (fPort = '') then
-  begin // binded on external socket
+  begin
+    // binded on external socket
     fSock := TNetSocket(-1);
     exit;
   end;
@@ -1884,11 +1888,12 @@ begin
         res := InputSock(PTextRec(SockIn)^);
         if res < 0 then
           ENetSock.CheckLastError('SockInRead', {forceraise=}true);
+        // loop until Timeout
       until Timeout = 0;
   // direct receiving of the remaining bytes from socket
   if Length > 0 then
   begin
-    SockRecv(Content, Length); // raise ECrtSocket if failed to read Length
+    SockRecv(Content, Length); // raise ENetSock if failed to read Length
     inc(result, Length);
   end;
 end;
@@ -2098,7 +2103,8 @@ begin
       exit; // raw socket error
     if available = 0 then // no data in the allowed timeout
       if result = '' then
-      begin // wait till something
+      begin
+        // wait till something
         SleepHiRes(1); // some delay in infinite loop
         continue;
       end
@@ -2142,7 +2148,8 @@ begin
       else
         res := fSock.Recv(Buffer, read);
       if res <> nrOK then
-      begin // no more to read, or socket issue?
+      begin
+        // no more to read, or socket issue?
         {$ifdef SYNCRTDEBUGLOW}
         TSynLog.Add.Log(sllCustom2, 'TrySockRecv: sock=% AsynchRecv=% %',
           [sock, read, SocketErrorMessage], self);
@@ -2187,9 +2194,9 @@ begin
   end;
 end;
 
-procedure TCrtSocket.SockRecvLn(out Line: RawUTF8; CROnly: boolean);
+procedure TCrtSocket.SockRecvLn(out Line: RawUtf8; CROnly: boolean);
 
-  procedure RecvLn(var Line: RawUTF8);
+  procedure RecvLn(var Line: RawUtf8);
   var
     P: PAnsiChar;
     LP, L: PtrInt;
@@ -2232,8 +2239,9 @@ var
   L, Error: PtrInt;
 begin
   if CROnly then
-  begin // slower but accurate version expecting #13 as line end
-  // SockIn^ expect either #10, either #13#10 -> a dedicated version is needed
+  begin
+    // slower but accurate version expecting #13 as line end
+    // SockIn^ expect either #10, either #13#10 -> a dedicated version is needed
     repeat
       SockRecv(@c, 1); // this is slow but works
       if c in [0, 13] then
@@ -2245,13 +2253,13 @@ begin
   end
   else if SockIn <> nil then
   begin
-  {$I-}
+    {$I-}
     readln(SockIn^, Line); // example: HTTP/1.0 200 OK
     Error := ioresult;
     if Error <> 0 then
       raise ENetSock.CreateFmt('SockRecvLn error %d after %d chars',
         [Error, Length(Line)]);
-  {$I+}
+    {$I+}
   end
   else
     RecvLn(Line); // slow under Windows -> use SockIn^ instead
@@ -2362,9 +2370,9 @@ begin
 end;
 
 
-{ TURI }
+{ TUri }
 
-function StartWith(p, up: PUTF8Char): boolean;
+function StartWith(p, up: PUtf8Char): boolean;
 // to avoid linking mormot.core.text for IdemPChar()
 var
   c, u: AnsiChar;
@@ -2389,23 +2397,23 @@ begin
   result := true;
 end;
 
-procedure TURI.Clear;
+procedure TUri.Clear;
 begin
   Https := false;
   layer := nlTCP;
   Finalize(self);
 end;
 
-function TURI.From(aURI: RawUTF8; const DefaultPort: RawUTF8): boolean;
+function TUri.From(aUri: RawUtf8; const DefaultPort: RawUtf8): boolean;
 var
   P, S: PAnsiChar;
 begin
   Clear;
   result := false;
-  aURI := TrimU(aURI);
-  if aURI = '' then
+  aUri := TrimU(aUri);
+  if aUri = '' then
     exit;
-  P := pointer(aURI);
+  P := pointer(aUri);
   S := P;
   while S^ in ['a'..'z', 'A'..'Z', '+', '-', '.', '0'..'9'] do
     inc(S);
@@ -2449,9 +2457,9 @@ begin
     result := true;
 end;
 
-function TURI.URI: RawUTF8;
+function TUri.Uri: RawUtf8;
 const
-  Prefix: array[boolean] of RawUTF8 = (
+  Prefix: array[boolean] of RawUtf8 = (
     'http://', 'https://');
 begin
   if layer = nlUNIX then
@@ -2464,12 +2472,12 @@ begin
     result := Prefix[Https] + Server + ':' + port + '/' + address;
 end;
 
-function TURI.PortInt: integer;
+function TUri.PortInt: integer;
 begin
   result := GetCardinal(pointer(port));
 end;
 
-function TURI.Root: RawUTF8;
+function TUri.Root: RawUtf8;
 var
   i: PtrInt;
 begin
@@ -2480,7 +2488,7 @@ begin
     Root := copy(address, 1, i - 1);
 end;
 
-function Open(const aServer, aPort: RawUTF8; aTLS: boolean): TCrtSocket;
+function Open(const aServer, aPort: RawUtf8; aTLS: boolean): TCrtSocket;
 begin
   try
     result := TCrtSocket.Open(aServer, aPort, nlTCP, 10000, aTLS);

@@ -152,11 +152,11 @@ type
     procedure SetAlgoID(Algorithm: integer);
     function GetAlgoID: integer;
       {$ifdef HASINLINE}inline;{$endif}
-    function GetUTF8FileName: boolean;
+    function GetUtf8FileName: boolean;
       {$ifdef HASINLINE}inline;{$endif}
-    procedure SetUTF8FileName;
+    procedure SetUtf8FileName;
       {$ifdef HASINLINE}inline;{$endif}
-    procedure UnSetUTF8FileName;
+    procedure UnSetUtf8FileName;
       {$ifdef HASINLINE}inline;{$endif}
   end;
 
@@ -387,7 +387,7 @@ function EventArchiveZip(const aOldLogFileName, aDestinationPath: TFileName): bo
 // - as expected by THttpSocket.RegisterCompress
 // - will use internaly a level compression of 1, i.e. fastest available (content
 // of 4803 bytes is compressed into 700, and time is 440 us instead of 220 us)
-function CompressGZip(var Data: RawByteString; Compress: boolean): RawUTF8;
+function CompressGZip(var Data: RawByteString; Compress: boolean): RawUtf8;
 
 /// (un)compress a data content using the Deflate algorithm (i.e. "raw deflate")
 // - as expected by THttpSocket.RegisterCompress
@@ -395,7 +395,7 @@ function CompressGZip(var Data: RawByteString; Compress: boolean): RawUTF8;
 // of 4803 bytes is compressed into 700, and time is 440 us instead of 220 us)
 // - deflate content encoding is pretty inconsistent in practice, so slightly
 // slower CompressGZip() is preferred - http://stackoverflow.com/a/9186091
-function CompressDeflate(var Data: RawByteString; Compress: boolean): RawUTF8;
+function CompressDeflate(var Data: RawByteString; Compress: boolean): RawUtf8;
 
 /// (un)compress a data content using the zlib algorithm
 // - as expected by THttpSocket.RegisterCompress
@@ -403,7 +403,7 @@ function CompressDeflate(var Data: RawByteString; Compress: boolean): RawUTF8;
 // of 4803 bytes is compressed into 700, and time is 440 us instead of 220 us)
 // - zlib content encoding is pretty inconsistent in practice, so slightly
 // slower CompressGZip() is preferred - http://stackoverflow.com/a/9186091
-function CompressZLib(var Data: RawByteString; Compress: boolean): RawUTF8;
+function CompressZLib(var Data: RawByteString; Compress: boolean): RawUtf8;
 
 
 { ************ TAlgoDeflate and TAlgoDeflate High-Level Compression Algorithms }
@@ -800,7 +800,8 @@ begin
 end;
 
 function TFileInfo.SameAs(aInfo: PFileInfo): boolean;
-begin // tolerate a time change through a network: zcrc32 is accurate enough
+begin
+  // tolerate a time change through a network: zcrc32 is accurate enough
   if (zzipSize = 0) or
      (aInfo.zzipSize = 0) then
     raise ESynZip.Create('SameAs() with crc+sizes in "data descriptor"');
@@ -819,18 +820,18 @@ begin
            (Algorithm and 15) shl 7; // proprietary flag for SynZipFiles.pas
 end;
 
-function TFileInfo.GetUTF8FileName: boolean;
+function TFileInfo.GetUtf8FileName: boolean;
 begin
   // from PKware appnote, Bit 11: Language encoding flag (EFS)
   result := (flags and (1 shl 11)) <> 0;
 end;
 
-procedure TFileInfo.SetUTF8FileName;
+procedure TFileInfo.SetUtf8FileName;
 begin
   flags := flags or (1 shl 11);
 end;
 
-procedure TFileInfo.UnSetUTF8FileName;
+procedure TFileInfo.UnSetUtf8FileName;
 begin
   flags := flags and not (1 shl 11);
 end;
@@ -876,12 +877,12 @@ begin
       {$else}  // intName := zipName -> error reference count under Delphi 6
       SetString(intName, PAnsiChar(pointer(zipName)), length(zipName));
       {$endif UNICODE}
-      fHr.fileInfo.UnSetUTF8FileName;
+      fHr.fileInfo.UnSetUtf8FileName;
     end
     else
     begin
-      intName := StringToUTF8(zipName);
-      fHr.fileInfo.SetUTF8FileName;
+      intName := StringToUtf8(zipName);
+      fHr.fileInfo.SetUtf8FileName;
     end;
     fHr.fileInfo.nameLen := length(intName);
     InternalWrite(fMagic, sizeof(fMagic));
@@ -1191,14 +1192,16 @@ begin
   for i := 1 to lhr^.totalFiles do
   begin
     if H^.signature + 1 <> ENTRY_SIGNATURE_INC then
-    begin // +1 to avoid match in exe
+    begin
+      // +1 to avoid match in exe
       fMap.UnMap;
       raise ESynZip.Create('ZIP format');
     end;
     lfhr := @BufZip[H^.localHeadOff];
     with lfhr^.fileInfo do
       if flags and (1 shl 3) <> 0 then
-      begin // crc+sizes in "data descriptor"
+      begin
+        // crc+sizes in "data descriptor"
         if (zcrc32 <> 0) or
            (zzipSize <> 0) or
            (zfullSize <> 0) then
@@ -1218,9 +1221,9 @@ begin
       for j := 0 to infoLocal^.nameLen - 1 do
         if storedName[j] = '/' then // normalize path delimiter
           PAnsiChar(Pointer(tmp))[j] := '\';
-      if infoLocal^.GetUTF8FileName then
+      if infoLocal^.GetUtf8FileName then
         // decode UTF-8 file name into native string/TFileName type
-        zipName := UTF8ToString(tmp)
+        zipName := Utf8ToString(tmp)
       else
         // legacy Windows-OEM encoding - from mormot.core.os
         zipName := OemToFileName(tmp);
@@ -1524,7 +1527,7 @@ end;
 const
   HTTP_LEVEL = 1; // 6 is standard, but 1 is enough and faster
 
-function CompressGZip(var Data: RawByteString; Compress: boolean): RawUTF8;
+function CompressGZip(var Data: RawByteString; Compress: boolean): RawUtf8;
 var
   L: integer;
   P: PAnsiChar;
@@ -1570,13 +1573,13 @@ begin
     Data := UnCompressZipString(pointer(tmp), DataLen, nil, ZLib, 0);
 end;
 
-function CompressDeflate(var Data: RawByteString; Compress: boolean): RawUTF8;
+function CompressDeflate(var Data: RawByteString; Compress: boolean): RawUtf8;
 begin
   CompressInternal(Data, Compress, {zlib=}false);
   result := 'deflate';
 end;
 
-function CompressZLib(var Data: RawByteString; Compress: boolean): RawUTF8;
+function CompressZLib(var Data: RawByteString; Compress: boolean): RawUtf8;
 begin
   CompressInternal(Data, Compress, {zlib=}true);
   result := 'zlib';

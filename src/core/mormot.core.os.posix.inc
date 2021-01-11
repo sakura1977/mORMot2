@@ -29,7 +29,7 @@ uses
   dl;
 
 {$ifdef UNICODE}
-  'mORMot assumes no UNICODE on POSIX, i.e. as TFileName = PChar = PUTF8Char'
+  'mORMot assumes no UNICODE on POSIX, i.e. as TFileName = PChar = PUtf8Char'
 {$endif UNICODE}
 
 
@@ -59,9 +59,9 @@ begin
 end;
 
 
-{ TICULibrary }
+{ TIcuLibrary }
 
-procedure TICULibrary.Done;
+procedure TIcuLibrary.Done;
 begin
   if icui18n <> nil then
     dlclose(icui18n);
@@ -75,7 +75,7 @@ begin
   @ucnv_open := nil;
 end;
 
-function TICULibrary.IsAvailable: boolean;
+function TIcuLibrary.IsAvailable: boolean;
 begin
   if not Loaded then
     DoLoad;
@@ -98,7 +98,7 @@ begin
   end;
 end;
 
-procedure TICULibrary.DoLoad(const LibName: TFileName; const Version: string);
+procedure TIcuLibrary.DoLoad(const LibName: TFileName; const Version: string);
 const
   NAMES: array[0..12] of string = (
     'ucnv_open', 'ucnv_close', 'ucnv_setSubstChars', 'ucnv_setFallback',
@@ -208,7 +208,7 @@ begin
   end;
 end;
 
-function TICULibrary.ForceLoad(const LibName: TFileName; const Version: string): boolean;
+function TIcuLibrary.ForceLoad(const LibName: TFileName; const Version: string): boolean;
 begin
   Done;
   Loaded := false;
@@ -216,7 +216,7 @@ begin
   result := Assigned(ucnv_open);
 end;
 
-function TICULibrary.ucnv(codepage: cardinal): pointer;
+function TIcuLibrary.ucnv(codepage: cardinal): pointer;
 var
   s: shortstring;
   err: SizeInt;
@@ -304,11 +304,11 @@ var
   cnv: pointer;
   err: SizeInt;
 begin
-  if codepage = CP_UTF8 then
+  if CodePage = CP_UTF8 then
     exit(Utf8ToUnicode(W, A, LA));
-  cnv := icu.ucnv(codepage);
+  cnv := icu.ucnv(CodePage);
   if cnv = nil then
-    exit(AnsiToWideRTL(codepage, A, W, LA));
+    exit(AnsiToWideRTL(CodePage, A, W, LA));
   err := 0;
   result := icu.ucnv_toUChars(cnv, W, LW, A, LA, err);
   if result < 0 then
@@ -334,7 +334,7 @@ var
   err: SizeInt;
 begin
   if CodePage = CP_UTF8 then
-    exit(UnicodeToUTF8(A, W, LW));
+    exit(UnicodeToUtf8(A, W, LW));
   cnv := icu.ucnv(CodePage);
   if cnv = nil then
     exit(WideToAnsiRTL(CodePage, W, A, LW));
@@ -425,7 +425,7 @@ begin
     inc(TempMonth, 3);
   result.Month := TempMonth;
   result.Year := YYear + (JulianDN * 100);
-  // initialize fake dayOfWeek - as used by FromGlobalTime RCU128
+  // initialize fake dayOfWeek - as used by FromGlobalTime Rcu128
   result.DayOfWeek := 0;
 end;
 
@@ -464,7 +464,8 @@ var
   mach_timenanosecond: boolean; // very likely to be TRUE on Intel CPUs
 
 procedure QueryPerformanceCounter(out Value: Int64);
-begin // returns time in nano second resolution
+begin
+  // returns time in nano second resolution
   Value := mach_absolute_time;
   if mach_timeinfo.Denom = 1 then
     if mach_timeinfo.Numer = 1 then
@@ -497,7 +498,7 @@ begin
   result := result div MILLION; // ns to ms
 end;
 
-function UnixTimeUTC: Int64;
+function UnixTimeUtc: Int64;
 var
   tz: timeval;
 begin
@@ -505,7 +506,7 @@ begin
   result := tz.tv_sec;
 end;
 
-function UnixMSTimeUTC: Int64;
+function UnixMSTimeUtc: Int64;
 var
   tz: timeval;
 begin
@@ -562,7 +563,7 @@ var
   // contains CLOCK_MONOTONIC_COARSE since kernel 2.6.32
   CLOCK_MONOTONIC_FAST: integer = CLOCK_MONOTONIC;
 
-function UnixMSTimeUTC: Int64;
+function UnixMSTimeUtc: Int64;
 var
   r: timespec;
 begin
@@ -571,7 +572,7 @@ begin
   result := PtrUInt(r.tv_nsec) div MILLION + (r.tv_sec * THOUSAND);
 end;
 
-function UnixTimeUTC: Int64;
+function UnixTimeUtc: Int64;
 var
   r: timespec;
 begin
@@ -609,9 +610,9 @@ end;
 
 {$endif DARWIN}
 
-function UnixMSTimeUTCFast: Int64;
+function UnixMSTimeUtcFast: Int64;
 begin
-  result := UnixMSTimeUTC;
+  result := UnixMSTimeUtc;
 end;
 
 var
@@ -656,7 +657,7 @@ begin
   {$endif LINUXNOTBSD}
 end;
 
-procedure RawSetThreadName(ThreadID: TThreadID; const Name: RawUTF8);
+procedure RawSetThreadName(ThreadID: TThreadID; const Name: RawUtf8);
 begin
   if ThreadID <> MainThreadID then // don't change the main process name
     SetUnixThreadName(ThreadID, Name); // call pthread_setname_np()
@@ -665,7 +666,7 @@ end;
 {$ifndef NOEXCEPTIONINTERCEPT}
 
 function TSynLogExceptionContext.AdditionalInfo(
-  out ExceptionNames: TPUTF8CharDynArray): cardinal;
+  out ExceptionNames: TPUtf8CharDynArray): cardinal;
 begin
   result := 0; // Windows/CLR specific by now
 end;
@@ -829,7 +830,7 @@ const
     190, 182, 167, 247, 184, 176, 168, 183, 185, 179, 178, 9632, 160);
 var
   len, i, c: PtrInt;
-  d: PUTF8Char;
+  d: PUtf8Char;
 begin
   len := length(oem);
   SetLength(result, len);
@@ -845,11 +846,11 @@ end;
 function OemToFileName(const oem: RawByteString): TFileName;
 begin
   // let's assume UTF-8 under Linux/POSIX
-  result := UTF8Encode(OemToUnicode(oem));
+  result := Utf8Encode(OemToUnicode(oem));
 end;
 
 {$I-}
-procedure DisplayFatalError(const title, msg: RawUTF8);
+procedure DisplayFatalError(const title, msg: RawUtf8);
 begin
   writeln(StdErr, title);
   writeln(StdErr, msg);
@@ -883,7 +884,7 @@ begin
   fpseterrno(error);
 end;
 
-function GetErrorText(error: integer): RawUTF8;
+function GetErrorText(error: integer): RawUtf8;
 begin
   result := StrError(error);
 end;
@@ -1016,10 +1017,7 @@ begin
       (integer(limit.rlim_max) = max)) or
      (not hard and
       (integer(limit.rlim_cur) = max)) then
-  begin
-    result := max; // already to the expected value
-    exit;
-  end;
+    exit(max); // already to the expected value
   if hard then
     limit.rlim_max := max
   else
@@ -1031,9 +1029,9 @@ end;
 
 {$ifdef LINUXNOTBSD} { the systemd API is Linux-specific }
 
-{ TSystemDAPI }
+{ TSystemD }
 
-procedure TSystemDAPI.DoLoad;
+procedure TSystemD.DoLoad;
 var
   p: PPointer;
   i, j: integer;
@@ -1070,14 +1068,14 @@ begin
   GlobalUnLock;
 end;
 
-function TSystemDAPI.IsAvailable: boolean;
+function TSystemD.IsAvailable: boolean;
 begin
   if not tested then
     DoLoad;
   result := Assigned(listen_fds);
 end;
 
-function TSystemDAPI.ProcessIsStartedBySystemd: boolean;
+function TSystemD.ProcessIsStartedBySystemd: boolean;
 begin
   result := IsAvailable and
     // note: for example on Ubuntu 20.04 INVOCATION_ID is always defined
@@ -1087,7 +1085,7 @@ begin
     (fpGetenv(ENV_INVOCATION_ID) <> nil);
 end;
 
-procedure TSystemDAPI.Done;
+procedure TSystemD.Done;
 begin
   if systemd <> nil then
   begin
@@ -1101,14 +1099,12 @@ end;
 
 // define some raw text functions, to avoid linking mormot.core.text
 
-function IdemPChar(p, up: PUTF8Char): boolean; inline;
+function IdemPChar(p, up: PUtf8Char): boolean; inline;
 var
   c, u: AnsiChar;
 begin
+  // we know that p<>nil and up<>nil within this unit
   result := false;
-  if (p = nil) or
-     (up = nil) then
-    exit;
   repeat
     u := up^;
     if u = #0 then
@@ -1116,16 +1112,21 @@ begin
     inc(up);
     c := p^;
     inc(p);
-    if (c >= 'a') and
-       (c <= 'z') then
-      dec(c, 32);
     if c <> u then
-      exit;
+      if (c >= 'a') and
+         (c <= 'z') then
+      begin
+        dec(c, 32);
+        if c <> u then
+          exit;
+      end
+      else
+        exit;
   until false;
   result := true;
 end;
 
-function IdemPChars(const s: RawUTF8; const up: array of PUTF8Char): boolean;
+function IdemPChars(const s: RawUtf8; const up: array of PUtf8Char): boolean;
 var
   i: PtrInt;
 begin
@@ -1136,9 +1137,9 @@ begin
   result := false;
 end;
 
-procedure FindNameValue(const s, up: RawUTF8; var res: RawUTF8);
+procedure FindNameValue(const s, up: RawUtf8; var res: RawUtf8);
 var
-  p: PUTF8Char;
+  p: PUtf8Char;
   L: PtrInt;
 begin
   p := pointer(s);
@@ -1182,7 +1183,7 @@ begin
   until false;
 end;
 
-function GetNextItem(var P: PAnsiChar): RawUTF8;
+function GetNextItem(var P: PAnsiChar): RawUtf8;
 var
   c: cardinal;
   S: PAnsiChar;
@@ -1200,7 +1201,7 @@ begin
   FastSetString(result, S, P - S);
 end;
 
-function PosChar(Str: PUTF8Char; Chr: AnsiChar): PUTF8Char; inline;
+function PosChar(Str: PUtf8Char; Chr: AnsiChar): PUtf8Char; inline;
 begin
   result := nil;
   repeat
@@ -1216,7 +1217,8 @@ end;
 // we bypass crt.pp since this unit cancels the SIGINT signal
 
 procedure AllocConsole;
-begin // nothing to do on Linux
+begin
+  // nothing to do on Linux
 end;
 
 {$I-}
@@ -1243,7 +1245,8 @@ begin
 end;
 
 procedure TextBackground(Color: TConsoleColor);
-begin // not implemented yet - but not needed either
+begin
+  // not implemented yet - but not needed either
 end;
 
 function UnixKeyPending: boolean;
@@ -1283,7 +1286,7 @@ begin
     result := 0;
 end;
 
-function Utf8ToConsole(const S: RawUTF8): RawByteString;
+function Utf8ToConsole(const S: RawUtf8): RawByteString;
 begin
   result := S; // expect a UTF-8 console under Linux/BSD
 end;
@@ -1363,18 +1366,21 @@ begin
     DecodeDate(fBuildDateTime, BuildYear, M, D);
 end;
 
-procedure GetUserHost(out User, Host: RawUTF8);
+procedure GetUserHost(out User, Host: RawUtf8);
 begin
-  Host := RawUTF8(GetHostName);
+  Host := RawUtf8(GetHostName);
   if Host = '' then
-    Host := RawUTF8(GetEnvironmentVariable('HOSTNAME'));
-  User := RawUTF8(GetEnvironmentVariable('LOGNAME')); // POSIX
+    Host := RawUtf8(GetEnvironmentVariable('HOSTNAME'));
+  User := RawUtf8(GetEnvironmentVariable('LOGNAME')); // POSIX
   if User = '' then
-    User := RawUTF8(GetEnvironmentVariable('USER'));
+    User := RawUtf8(GetEnvironmentVariable('USER'));
 end;
 
 var
-  _HomePath, _TempPath, _UserPath, _LogPath: TFileName;
+  _HomePath,
+  _TempPath,
+  _UserPath,
+  _LogPath: TFileName;
 
 function GetSystemPath(kind: TSystemPath): TFileName;
 begin
@@ -1441,7 +1447,7 @@ begin
   result := nil;
 end;
 
-function EnumProcessName(PID: cardinal): RawUTF8;
+function EnumProcessName(PID: cardinal): RawUtf8;
 begin
   result := '';
 end;
@@ -1467,14 +1473,14 @@ var
   e: pDirent;
   n: integer;
   pid: cardinal;
-  fn, status, tgid: RawUTF8;
+  fn, status, tgid: RawUtf8;
 begin
   result := nil;
   d := FpOpendir('/proc'); // alternative to FindFirst()
   if d = nil then
     exit;
   n := 0;
-  SetLength(result, 64);
+  SetLength(result, 128);
   repeat
     e := FpReaddir(d^);
     if e = nil then
@@ -1501,14 +1507,15 @@ end;
 var
   tryprocexe: boolean = true;
 
-function EnumProcessName(PID: cardinal): RawUTF8;
+function EnumProcessName(PID: cardinal): RawUtf8;
 var
   proc: TFileName;
-  cmdline: RawUTF8;
+  cmdline: RawUtf8;
 begin
   proc := '/proc/' + IntToStr(PID);
   if tryprocexe then
-  begin // need to be root to follow /proc/[pid]/exe
+  begin
+    // need to be root to follow /proc/[pid]/exe
     result := fpReadLink(proc + '/exe');
     if result <> '' then
       exit;
@@ -1552,7 +1559,7 @@ end;
 
 function TProcessInfo.PerSystem(out Idle, Kernel, User: single): boolean;
 var
-  P: PUTF8Char;
+  P: PUtf8Char;
   U, K, I, S: cardinal;
 begin
   // see http://www.linuxhowtos.org/System/procstat.htm
@@ -1591,7 +1598,7 @@ end;
 function GetMemoryInfo(out info: TMemoryInfo; withalloc: boolean): boolean;
 var
   si: TSysInfo; // Linuxism
-  P: PUTF8Char;
+  P: PUtf8Char;
   mu: PtrUInt;
 begin
   FillCharFast(info, SizeOf(info), 0);
@@ -1636,8 +1643,8 @@ const
 
 function GetDiskPartitions: TDiskPartitions;
 var
-  mounts, fs, mnt, typ: RawUTF8;
-  p: PUTF8Char;
+  mounts, fs, mnt, typ: RawUtf8;
+  p: PUtf8Char;
   fn: TFileName;
   n: integer;
   av, fr, tot: QWord;
@@ -2071,7 +2078,7 @@ function RunCommand(const cmd: TFileName; waitfor: boolean;
   const env: TFileName; envaddexisting: boolean;
   parsed: PParseCommands): integer;
 var
-  temp: RawUTF8;
+  temp: RawUtf8;
   err: TParseCommands;
   a: TParseCommandsArgs;
 begin
@@ -2102,10 +2109,10 @@ function getpagesize: integer; cdecl; external 'c';
 
 {$ifndef BSD}
 
-procedure SetLinuxDistrib(const release: RawUTF8);
+procedure SetLinuxDistrib(const release: RawUtf8);
 var
   distrib: TOperatingSystem;
-  rel, dist: RawUTF8;
+  rel, dist: RawUtf8;
 begin
   rel := UpperCase(release);
   for distrib := osArch to high(distrib) do
@@ -2127,13 +2134,13 @@ var
   tp: timespec;
   P: PAnsiChar;
 var
-  modname, beg: PUTF8Char;
+  modname, beg: PUtf8Char;
   uts: UtsName;
   {$ifdef BSD}
   temp: shortstring;
   {$else}
-  cpuinfo: PUTF8Char;
-  proccpuinfo, prod, prodver, release, dist: RawUTF8;
+  cpuinfo: PUtf8Char;
+  proccpuinfo, prod, prodver, release, dist: RawUtf8;
   SR: TSearchRec;
   {$endif BSD}
   c: cardinal;

@@ -61,13 +61,13 @@ type
   protected
     fOnIncomingFrame: TOnWebSocketProtocolChatIncomingFrame;
     procedure ProcessIncomingFrame(Sender: TWebSocketProcess;
-      var request: TWebSocketFrame; const info: RawUTF8); override;
+      var request: TWebSocketFrame; const info: RawUtf8); override;
   public
     /// initialize the chat protocol with an incoming frame callback
-    constructor Create(const aName, aURI: RawUTF8;
+    constructor Create(const aName, aUri: RawUtf8;
        const aOnIncomingFrame: TOnWebSocketProtocolChatIncomingFrame); overload;
     /// compute a new instance of the WebSockets protocol, with same parameters
-    function Clone(const aClientURI: RawUTF8): TWebSocketProtocol; override;
+    function Clone(const aClientUri: RawUtf8): TWebSocketProtocol; override;
     /// on the server side, allows to send a message over the wire to a
     // specified client connection
     // - a temporary copy of the Frame content will be made for safety
@@ -76,7 +76,7 @@ type
     // specified client connection
     // - the supplied JSON content is supplied as "var", since it may be
     // modified during execution, e.g. XORed for frame masking
-    function SendFrameJson(Sender: THttpServerResp; var JSON: RawUTF8): boolean;
+    function SendFrameJson(Sender: THttpServerResp; var Json: RawUtf8): boolean;
     /// you can assign an event to this property to be notified of incoming messages
     property OnIncomingFrame: TOnWebSocketProtocolChatIncomingFrame
       read fOnIncomingFrame write fOnIncomingFrame;
@@ -116,7 +116,7 @@ type
     function NotifyCallback(Ctxt: THttpServerRequest;
       aMode: TWebSocketProcessNotifyCallback): cardinal; virtual;
     /// the Sec-WebSocket-Protocol application protocol currently involved
-    // - TWebSocketProtocolJSON or TWebSocketProtocolBinary in the mORMot context
+    // - TWebSocketProtocolJson or TWebSocketProtocolBinary in the mORMot context
     // - could be nil if the connection is in standard HTTP/1.1 mode
     function WebSocketProtocol: TWebSocketProtocol;
     /// low-level WebSocket protocol processing instance
@@ -155,8 +155,8 @@ type
     // requests, and one thread will be maintained per keep-alive/websockets client
     // - by design, the KeepAliveTimeOut value is ignored with this server
     // once it has been upgraded to WebSockets
-    constructor Create(const aPort: RawUTF8;
-      const OnStart, OnStop: TOnNotifyThread; const ProcessName: RawUTF8;
+    constructor Create(const aPort: RawUtf8;
+      const OnStart, OnStop: TOnNotifyThread; const ProcessName: RawUtf8;
       ServerThreadPoolCount: integer = 2; KeepAliveTimeOut: integer = 30000;
       HeadersUnFiltered: boolean = false; CreateSuspended: boolean = false); override;
     /// close the server
@@ -215,13 +215,13 @@ type
     // - TWebSocketProtocolBinary will always be registered by this constructor
     // - if the encryption key text is not '', TWebSocketProtocolBinary will
     // use AES-CFB 256 bits encryption
-    // - if aWebSocketsAJAX is TRUE, it will also register TWebSocketProtocolJSON
+    // - if aWebSocketsAjax is TRUE, it will also register TWebSocketProtocolJson
     // so that AJAX applications would be able to connect to this server
     // - warning: WaitStarted should be called after Create() to check for
     // for actual port binding in the background thread
-    constructor Create(const aPort: RawUTF8; const OnStart, OnStop: TOnNotifyThread;
-      const aProcessName, aWebSocketsURI, aWebSocketsEncryptionKey: RawUTF8;
-      aWebSocketsAJAX: boolean = false); reintroduce; overload;
+    constructor Create(const aPort: RawUtf8; const OnStart, OnStop: TOnNotifyThread;
+      const aProcessName, aWebSocketsURI, aWebSocketsEncryptionKey: RawUtf8;
+      aWebSocketsAjax: boolean = false); reintroduce; overload;
     /// defines the WebSockets protocols to be used for this Server
     // - i.e. 'synopsebin' and optionally 'synopsejson' modes
     // - if aWebSocketsURI is '', any URI would potentially upgrade; you can
@@ -229,10 +229,10 @@ type
     // - TWebSocketProtocolBinary will always be registered by this constructor
     // - if the encryption key text is not '', TWebSocketProtocolBinary will
     // use AES-CFB 256 bits encryption
-    // - if aWebSocketsAJAX is TRUE, it will also register TWebSocketProtocolJSON
+    // - if aWebSocketsAjax is TRUE, it will also register TWebSocketProtocolJson
     // so that AJAX applications would be able to connect to this server
     procedure WebSocketsEnable(const aWebSocketsURI, aWebSocketsEncryptionKey:
-      RawUTF8; aWebSocketsAJAX: boolean = false; aWebSocketsCompressed: boolean = true);
+      RawUtf8; aWebSocketsAjax: boolean = false; aWebSocketsCompressed: boolean = true);
     /// server can send a request back to the client, when the connection has
     // been upgraded to WebSocket
     // - InURL/InMethod/InContent properties are input parameters (InContentType
@@ -256,23 +256,23 @@ implementation
 
 { TWebSocketProtocolChat }
 
-constructor TWebSocketProtocolChat.Create(const aName, aURI: RawUTF8;
+constructor TWebSocketProtocolChat.Create(const aName, aUri: RawUtf8;
   const aOnIncomingFrame: TOnWebSocketProtocolChatIncomingFrame);
 begin
-  inherited Create(aName, aURI);
+  inherited Create(aName, aUri);
   fOnIncomingFrame := aOnIncomingFrame;
 end;
 
-function TWebSocketProtocolChat.Clone(const aClientURI: RawUTF8): TWebSocketProtocol;
+function TWebSocketProtocolChat.Clone(const aClientUri: RawUtf8): TWebSocketProtocol;
 begin
-  result := TWebSocketProtocolChat.Create(fName, fURI);
+  result := TWebSocketProtocolChat.Create(fName, fUri);
   if fEncryption <> nil then
     TWebSocketProtocolChat(result).fEncryption := fEncryption.Clone;
   TWebSocketProtocolChat(result).OnIncomingFrame := OnIncomingFrame;
 end;
 
 procedure TWebSocketProtocolChat.ProcessIncomingFrame(Sender: TWebSocketProcess;
-  var request: TWebSocketFrame; const info: RawUTF8);
+  var request: TWebSocketFrame; const info: RawUtf8);
 begin
   if Assigned(OnInComingFrame) then
   try
@@ -305,7 +305,7 @@ begin
 end;
 
 function TWebSocketProtocolChat.SendFrameJson(Sender: THttpServerResp;
-  var JSON: RawUTF8): boolean;
+  var Json: RawUtf8): boolean;
 var
   frame: TWebSocketFrame;
 begin
@@ -318,7 +318,7 @@ begin
     exit;
   frame.opcode := focText;
   frame.content := [];
-  frame.payload := JSON;
+  frame.payload := Json;
   result := (Sender as TWebSocketServerResp).fProcess.SendFrame(frame)
 end;
 
@@ -341,10 +341,10 @@ end;
 function HttpServerWebSocketUpgrade(ClientSock: THttpServerSocket;
   Protocols: TWebSocketProtocolList; out Protocol: TWebSocketProtocol): integer;
 var
-  uri, version, prot, subprot, key, extin, extout, header: RawUTF8;
-  extins: TRawUTF8DynArray;
-  P: PUTF8Char;
-  Digest: TSHA1Digest;
+  uri, version, prot, subprot, key, extin, extout, header: RawUtf8;
+  extins: TRawUtf8DynArray;
+  P: PUtf8Char;
+  Digest: TSha1Digest;
 begin
   result := HTTP_BADREQUEST;
   try
@@ -367,8 +367,8 @@ begin
       until (P = nil) or
             (Protocol <> nil);
       if (Protocol <> nil) and
-         (Protocol.URI = '') and
-         not Protocol.ProcessHandshakeURI(uri) then
+         (Protocol.Uri = '') and
+         not Protocol.ProcessHandshakeUri(uri) then
       begin
         Protocol.Free;
         result := HTTP_UNAUTHORIZED;
@@ -377,10 +377,10 @@ begin
     end
     else
       // if no protocol is specified, try to match by URI
-      Protocol := Protocols.CloneByURI(uri);
+      Protocol := Protocols.CloneByUri(uri);
     if Protocol = nil then
       exit;
-    Protocol.UpgradeURI := uri;
+    Protocol.UpgradeUri := uri;
     Protocol.RemoteIP := ClientSock.HeaderGetValue('SEC-WEBSOCKET-REMOTEIP');
     if Protocol.RemoteIP = '' then
       Protocol.RemoteIP := ClientSock.RemoteIP;
@@ -388,7 +388,7 @@ begin
     extin := ClientSock.HeaderGetValue('SEC-WEBSOCKET-EXTENSIONS');
     if extin <> '' then
     begin
-      CSVToRawUTF8DynArray(pointer(extin), extins, ';', true);
+      CsvToRawUtf8DynArray(pointer(extin), extins, ';', true);
       if not Protocol.ProcessHandshake(extins, extout, nil) then
       begin
         Protocol.Free;
@@ -405,7 +405,7 @@ begin
     ComputeChallenge(key, Digest);
     if extout <> '' then
       extout := 'Sec-WebSocket-Extensions: ' + extout + #13#10;
-    FormatUTF8('HTTP/1.1 101 Switching Protocols'#13#10 +
+    FormatUtf8('HTTP/1.1 101 Switching Protocols'#13#10 +
       'Upgrade: websocket'#13#10'Connection: Upgrade'#13#10 +
       'Sec-WebSocket-Protocol: %'#13#10'%Sec-WebSocket-Accept: %'#13#10#13#10,
       [Protocol.Name, extout, BinToBase64Short(@Digest, sizeof(Digest))], header);
@@ -418,8 +418,9 @@ begin
     result := HTTP_SUCCESS; // connection upgraded: never back to HTTP/1.1
   finally
     if result <> HTTP_SUCCESS then
-    begin // notify upgrade failure to client
-      FormatUTF8('HTTP/1.0 % WebSocket Upgrade Error'#13#10 +
+    begin
+      // notify upgrade failure to client
+      FormatUtf8('HTTP/1.0 % WebSocket Upgrade Error'#13#10 +
         'Connection: Close'#13#10#13#10, [result], header);
       ClientSock.TrySndLow(pointer(header), length(header));
       ClientSock.KeepAliveClient := false;
@@ -430,8 +431,8 @@ end;
 
 { TWebSocketServer }
 
-constructor TWebSocketServer.Create(const aPort: RawUTF8;
-  const OnStart, OnStop: TOnNotifyThread; const ProcessName: RawUTF8;
+constructor TWebSocketServer.Create(const aPort: RawUtf8;
+  const OnStart, OnStop: TOnNotifyThread; const ProcessName: RawUtf8;
   ServerThreadPoolCount, KeepAliveTimeOut: integer; HeadersUnFiltered, CreateSuspended: boolean);
 begin
   // override with custom processing classes
@@ -514,7 +515,8 @@ function TWebSocketServer.IsActiveWebSocketThread(
 var
   i: integer;
   c: PWebSocketServerResp;
-begin // no need to optimize (not called often)
+begin
+  // no need to optimize with a hash table (not called often)
   result := nil;
   if Terminated or
      (ConnectionThread = nil) or
@@ -624,23 +626,23 @@ end;
 
 { TWebSocketServerRest }
 
-constructor TWebSocketServerRest.Create(const aPort: RawUTF8;
+constructor TWebSocketServerRest.Create(const aPort: RawUtf8;
   const OnStart, OnStop: TOnNotifyThread; const aProcessName, aWebSocketsURI,
-  aWebSocketsEncryptionKey: RawUTF8; aWebSocketsAJAX: boolean);
+  aWebSocketsEncryptionKey: RawUtf8; aWebSocketsAjax: boolean);
 begin
   Create(aPort, OnStart, OnStop, aProcessName);
-  WebSocketsEnable(aWebSocketsURI, aWebSocketsEncryptionKey, aWebSocketsAJAX);
+  WebSocketsEnable(aWebSocketsURI, aWebSocketsEncryptionKey, aWebSocketsAjax);
 end;
 
 procedure TWebSocketServerRest.WebSocketsEnable(const aWebSocketsURI,
-  aWebSocketsEncryptionKey: RawUTF8; aWebSocketsAJAX, aWebSocketsCompressed: boolean);
+  aWebSocketsEncryptionKey: RawUtf8; aWebSocketsAjax, aWebSocketsCompressed: boolean);
 begin
   if self = nil then
     exit;
   fProtocols.AddOnce(TWebSocketProtocolBinary.Create(aWebSocketsURI, true,
     aWebSocketsEncryptionKey, aWebSocketsCompressed));
-  if aWebSocketsAJAX then
-    fProtocols.AddOnce(TWebSocketProtocolJSON.Create(aWebSocketsURI));
+  if aWebSocketsAjax then
+    fProtocols.AddOnce(TWebSocketProtocolJson.Create(aWebSocketsURI));
 end;
 
 function TWebSocketServerRest.Callback(Ctxt: THttpServerRequest;
@@ -680,7 +682,7 @@ constructor TWebSocketServerResp.Create(aServerSock: THttpServerSocket;
   aServer: THttpServer);
 begin
   if not aServer.InheritsFrom(TWebSocketServer) then
-    raise EWebSockets.CreateUTF8('%.Create(%: TWebSocketServer?)', [self, aServer]);
+    raise EWebSockets.CreateUtf8('%.Create(%: TWebSocketServer?)', [self, aServer]);
   inherited Create(aServerSock, aServer);
 end;
 
@@ -717,11 +719,12 @@ function TWebSocketServerSocket.GetRequest(withBody: boolean;
   headerMaxTix: Int64): THttpServerSocketGetRequestResult;
 begin
   result := inherited GetRequest(withBody, headerMaxTix);
-  if (result = grHeaderReceived) and
+{  if (result = grHeaderReceived) and
      (hfConnectionUpgrade in HeaderFlags) and
-    KeepAliveClient and IdemPropNameU(Method, 'GET') and
-    IdemPropNameU(Upgrade, 'websocket') then
-    //writeln('!!');
+     KeepAliveClient and
+     IdemPropNameU(Method, 'GET') and
+     IdemPropNameU(Upgrade, 'websocket') then
+    result := grOwned; }
 end;
 
 

@@ -16,9 +16,9 @@
 
 {$ifdef ASMX64}
 
-procedure aesencryptasm(const ctxt: TAESContext; bi, bo: PWA4);
+procedure aesencryptasm(const ctxt: TAesContext; bi, bo: PWA4);
 {$ifdef FPC}nostackframe; assembler; asm{$else}
-asm // input: rcx/rdi=TAESContext, rdx/rsi=source, r8/rdx=dest
+asm // input: rcx/rdi=TAesContext, rdx/rsi=source, r8/rdx=dest
         .noframe
 {$endif}
         // rolled optimized encryption asm version by A. Bouchez
@@ -28,7 +28,7 @@ asm // input: rcx/rdi=TAESContext, rdx/rsi=source, r8/rdx=dest
         push    r12
         push    rbx
         push    rbp
-        {$ifdef win64}
+        {$ifdef MSWINDOWS}
         push    rdi
         push    rsi
         mov     r15, r8
@@ -37,8 +37,8 @@ asm // input: rcx/rdi=TAESContext, rdx/rsi=source, r8/rdx=dest
         mov     r15, rdx
         mov     rdx, rsi
         mov     r12, rdi
-        {$endif win64}
-        movzx   r13, byte ptr [r12].TAESContext.Rounds
+        {$endif MSWINDOWS}
+        movzx   r13, byte ptr [r12].TAesContext.Rounds
         mov     eax, dword ptr [rdx]
         mov     ebx, dword ptr [rdx + 4H]
         mov     ecx, dword ptr [rdx + 8H]
@@ -174,10 +174,10 @@ asm // input: rcx/rdi=TAESContext, rdx/rsi=source, r8/rdx=dest
         xor     r14d, r8d
         xor     r14d, dword ptr [r12 + 0CH]
         mov     dword ptr [r15 + 0CH], r14d
-        {$ifdef win64}
+        {$ifdef MSWINDOWS}
         pop     rsi
         pop     rdi
-        {$endif win64}
+        {$endif MSWINDOWS}
         pop     rbp
         pop     rbx
         pop     r12
@@ -1155,11 +1155,11 @@ end;
 // Synopse's x64 asm, optimized for both in+out-order pipelined CPUs
 procedure KeccakPermutationKernel(B, A, C: Pointer);
 {$ifdef FPC} nostackframe; assembler; asm {$else} asm .noframe {$endif}
-        {$ifndef win64}  // input: rcx=B, rdx=A, r8=C (Linux: rdi,rsi,rdx)
+        {$ifndef MSWINDOWS}  // input: rcx=B, rdx=A, r8=C (Linux: rdi,rsi,rdx)
         mov     r8, rdx
         mov     rdx, rsi
         mov     rcx, rdi
-        {$endif win64}
+        {$endif MSWINDOWS}
         push    rbx
         push    r12
         push    r13
@@ -1447,10 +1447,10 @@ procedure Sha256ExpandMessageBlocks(W, Buf: PIntegerArray);
 asm // W=rcx Buf=rdx
   .noframe
 {$endif}
-        {$ifndef win64}
+        {$ifndef MSWINDOWS}
         mov     rdx, rsi
         mov     rcx, rdi
-        {$endif win64}
+        {$endif MSWINDOWS}
         mov     rax, rcx
         push    rsi
         push    rdi
@@ -1537,7 +1537,7 @@ asm // W=rcx Buf=rdx
         pop     rsi
 end;
 
-procedure bswap256(s,d: PIntegerArray);
+procedure bswap256(s, d: PIntegerArray);
 {$ifdef FPC} nostackframe; assembler; asm {$else} asm .noframe {$endif}
         mov     eax, dword ptr[s]
         mov     r8d, dword ptr[s + 4]
@@ -1565,7 +1565,7 @@ procedure bswap256(s,d: PIntegerArray);
         mov     dword ptr[d + 28], r10d
 end;
 
-procedure bswap160(s,d: PIntegerArray);
+procedure bswap160(s, d: PIntegerArray);
 {$ifdef FPC} nostackframe; assembler; asm {$else} asm .noframe {$endif}
         mov     eax, dword ptr[s]
         mov     r8d, dword ptr[s + 4]
@@ -1586,7 +1586,7 @@ end;
 
 // see http://nicst.de/crc.pdf
 
-function gf2_multiply(x,y,m,bits: PtrUInt): PtrUInt;
+function gf2_multiply(x, y, m, bits: PtrUInt): PtrUInt;
 {$ifdef FPC} nostackframe; assembler; asm {$else} asm .noframe {$endif}
         mov     rax, x
         and     rax, 1
@@ -1601,17 +1601,17 @@ function gf2_multiply(x,y,m,bits: PtrUInt): PtrUInt;
         shr     x, 1
         mov     r10, rax
         xor     r10, y
-        {$ifdef win64}
+        {$ifdef MSWINDOWS}
         test    cl, 1
         {$else}
         test    dil, 1
-        {$endif}
+        {$endif MSWINDOWS}
         cmovne  rax, r10
         dec     bits
         jne     @s
 end;
 
-procedure MD5Transform(var buf: TMD5Buf; const in_: TMD5In);
+procedure MD5Transform(var buf: TMd5Buf; const in_: TMd5In);
 // see https://synopse.info/forum/viewtopic.php?id=4369 for asm numbers
 {
  MD5_Transform-x64
@@ -1633,10 +1633,10 @@ procedure MD5Transform(var buf: TMD5Buf; const in_: TMD5In);
  Taken from https://github.com/maximmasiutin/MD5_Transform-x64
 }
 {$ifdef FPC} nostackframe; assembler; asm {$else} asm .noframe {$endif}
-        {$ifndef win64} // W=rcx Buf=rdx
+        {$ifndef MSWINDOWS} // W=rcx Buf=rdx
         mov     rdx, rsi
         mov     rcx, rdi
-        {$endif win64}
+        {$endif MSWINDOWS}
         push    rbx
         push    rsi
         push    rdi
@@ -2671,12 +2671,12 @@ procedure MakeDecrKeyAesNi(Rounds: integer; RK: Pointer);
 @loop:  movups  xmm0, dqword ptr[RK]
         aesimc  xmm0, xmm0
         movups  dqword ptr[RK], xmm0
+        add     RK, 16
         dec     eax
-        lea     RK, [RK + 16]
         jnz     @loop
 end;
 
-procedure AesNiEncryptOFB_128(iv, aes, source, dest: pointer; blockcount: PtrUInt);
+procedure AesNiEncryptOfb128(iv, aes, source, dest: pointer; blockcount: PtrUInt);
 {$ifdef FPC} nostackframe; assembler; asm {$else} asm .noframe {$endif}
         mov     rax, blockcount  // on Win64 ABI, blockcount is not a register
         test    eax, eax
@@ -2715,7 +2715,7 @@ procedure AesNiEncryptOFB_128(iv, aes, source, dest: pointer; blockcount: PtrUIn
 @z:
 end;
 
-procedure AesNiEncryptOFB_256(iv, aes, source, dest: pointer; blockcount: PtrUInt);
+procedure AesNiEncryptOfb256(iv, aes, source, dest: pointer; blockcount: PtrUInt);
 {$ifdef FPC} nostackframe; assembler; asm {$else} asm .noframe {$endif}
         mov     rax, blockcount
         test    eax, eax
@@ -2924,14 +2924,15 @@ function crc32c_sse42_aesni(crc: PtrUInt; buf: PAnsiChar; len: PtrUInt): cardina
         // it is faster to use a direct 8-bytes loop for blocks < 64 bytes
         shr     len, 3
         jz      @2
-{$ifdef FPC}
+        {$ifdef FPC}
         align   16
         // hash 8 bytes per loop
-        @s:     crc32   rax, qword [buf]
-{$else} .align  16
+@s:     crc32   rax, qword [buf]
+        {$else}
+        .align  16
         // circumvent Delphi inline asm compiler bug
-        @s:     db $F2,$48,$0F,$38,$F1,$02
-{$endif FPC}
+@s:     db $F2, $48, $0F, $38, $F1, $02
+        {$endif FPC}
         add     buf, 8
         dec     len
         jnz     @s

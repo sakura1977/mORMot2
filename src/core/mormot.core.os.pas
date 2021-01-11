@@ -130,7 +130,7 @@ type
 const
   /// the recognized Windows versions, as plain text
   // - defined even outside MSWINDOWS to allow process e.g. from monitoring tools
-  WINDOWS_NAME: array[TWindowsVersion] of RawUTF8 = (
+  WINDOWS_NAME: array[TWindowsVersion] of RawUtf8 = (
     '', '2000', 'XP', 'XP 64bit', 'Server 2003', 'Server 2003 R2',
     'Vista', 'Vista 64bit', 'Server 2008', 'Server 2008 64bit',
     '7', '7 64bit', 'Server 2008 R2', 'Server 2008 R2 64bit',
@@ -145,7 +145,7 @@ const
      wTen, wServer2016];
 
   /// translate one operating system (and distribution) into a its common name
-  OS_NAME: array[TOperatingSystem] of RawUTF8 = (
+  OS_NAME: array[TOperatingSystem] of RawUtf8 = (
     'Unknown', 'Windows', 'Linux', 'OSX', 'BSD', 'POSIX',
     'Arch', 'Aurox', 'Debian', 'Fedora', 'Gentoo', 'Knoppix', 'Mint', 'Mandrake',
     'Mandriva', 'Novell', 'Ubuntu', 'Slackware', 'Solaris', 'Suse', 'Synology',
@@ -189,19 +189,20 @@ var
   /// the current Operating System version, as retrieved for the current process
   // - contains e.g. 'Windows Seven 64 SP1 (6.1.7601)' or
   // 'Ubuntu 16.04.5 LTS - Linux 3.13.0 110 generic#157 Ubuntu SMP Mon Feb 20 11:55:25 UTC 2017'
-  OSVersionText: RawUTF8;
+  OSVersionText: RawUtf8;
   /// some addition system information as text, e.g. 'Wine 1.1.5'
   // - also always appended to OSVersionText high-level description
-  OSVersionInfoEx: RawUTF8;
+  // - use if PosEx('Wine', OSVersionInfoEx) > 0 then to check for Wine presence
+  OSVersionInfoEx: RawUtf8;
   /// the current Operating System version, as retrieved for the current process
   // and computed by ToTextOS(OSVersionInt32)
   // - returns e.g. 'Windows Vista' or 'Ubuntu 5.4.0'
-  OSVersionShort: RawUTF8;
+  OSVersionShort: RawUtf8;
 
   /// some textual information about the current CPU
-  CpuInfoText: RawUTF8;
+  CpuInfoText: RawUtf8;
   /// some textual information about the current computer hardware, from BIOS
-  BiosInfoText: RawUTF8;
+  BiosInfoText: RawUtf8;
 
   /// the running Operating System
   OSVersion32: TOperatingSystemVersion;
@@ -210,18 +211,18 @@ var
 
 /// convert an Operating System type into its text representation
 // - returns e.g. 'Windows Vista' or 'Ubuntu'
-function ToText(const osv: TOperatingSystemVersion): RawUTF8; overload;
+function ToText(const osv: TOperatingSystemVersion): RawUtf8; overload;
 
 /// convert a 32-bit Operating System type into its full text representation
 // including the kernel revision (not the distribution version) on POSIX systems
 // - returns e.g. 'Windows Vista' or 'Ubuntu 5.4.0'
-function ToTextOS(osint32: integer): RawUTF8;
+function ToTextOS(osint32: integer): RawUtf8;
 
 
 const
   /// contains the Delphi/FPC Compiler Version as text
   // - e.g. 'Delphi 10.3 Rio', 'Delphi 2010' or 'Free Pascal 3.3.1'
-  COMPILER_VERSION: RawUTF8 =
+  COMPILER_VERSION: RawUtf8 =
   {$ifdef FPC}
     'Free Pascal'
     {$ifdef VER2_6_4} + ' 2.6.4'{$endif}
@@ -265,7 +266,7 @@ const
 {$ifndef PUREMORMOT2}
 
 /// deprecated function: use COMPILER_VERSION constant instead
-function GetDelphiCompilerVersion: RawUTF8; deprecated;
+function GetDelphiCompilerVersion: RawUtf8; deprecated;
 
 {$endif PUREMORMOT2}
 
@@ -330,10 +331,10 @@ var
     dwNumberOfProcessors: cardinal;
     // meaningful system information, as returned by fpuname()
     uts: record
-      sysname, release, version: RawUTF8;
+      sysname, release, version: RawUtf8;
     end;
     /// Linux Distribution release name, retrieved from /etc/*-release
-    release: RawUTF8;
+    release: RawUtf8;
   end;
   
 {$endif MSWINDOWS}
@@ -352,7 +353,7 @@ type
     fDetailed: string;
     fFileName: TFileName;
     fBuildDateTime: TDateTime;
-    fVersionInfo, fUserAgent: RawUTF8;
+    fVersionInfo, fUserAgent: RawUtf8;
     /// change the version (not to be used in most cases)
     procedure SetVersion(aMajor, aMinor, aRelease, aBuild: integer);
   public
@@ -370,25 +371,25 @@ type
     // - return "string" type, i.e. UnicodeString for Delphi 2009+
     Main: string;
     /// associated CompanyName string version resource
-    CompanyName: RawUTF8;
+    CompanyName: RawUtf8;
     /// associated FileDescription string version resource
-    FileDescription: RawUTF8;
+    FileDescription: RawUtf8;
     /// associated FileVersion string version resource
-    FileVersion: RawUTF8;
+    FileVersion: RawUtf8;
     /// associated InternalName string version resource
-    InternalName: RawUTF8;
+    InternalName: RawUtf8;
     /// associated LegalCopyright string version resource
-    LegalCopyright: RawUTF8;
+    LegalCopyright: RawUtf8;
     /// associated OriginalFileName string version resource
-    OriginalFilename: RawUTF8;
+    OriginalFilename: RawUtf8;
     /// associated ProductName string version resource
-    ProductName: RawUTF8;
+    ProductName: RawUtf8;
     /// associated ProductVersion string version resource
-    ProductVersion: RawUTF8;
+    ProductVersion: RawUtf8;
     /// associated Comments string version resource
-    Comments: RawUTF8;
+    Comments: RawUtf8;
     /// associated Language Translation string version resource
-    LanguageInfo: RawUTF8;
+    LanguageInfo: RawUtf8;
     /// retrieve application version from exe file name
     // - DefaultVersion32 is used if no information Version was included into
     // the executable resources (on compilation time)
@@ -407,16 +408,16 @@ type
     /// returns the version information of this exe file as text
     // - includes FileName (without path), Detailed and BuildDateTime properties
     // - e.g. 'myprogram.exe 3.1.0.123 (2016-06-14 19:07:55)'
-    function VersionInfo: RawUTF8;
+    function VersionInfo: RawUtf8;
     /// returns a ready-to-use User-Agent header with exe name, version and OS
     // - e.g. 'myprogram/3.1.0.123W32' for myprogram running on Win32
     // - here OS_INITIAL[] character is used to identify the OS, with '32'
     // appended on Win32 only (e.g. 'myprogram/3.1.0.2W', is for Win64)
-    function UserAgent: RawUTF8;
+    function UserAgent: RawUtf8;
     /// returns the version information of a specified exe file as text
     // - includes FileName (without path), Detailed and BuildDateTime properties
     // - e.g. 'myprogram.exe 3.1.0.123 2016-06-14 19:07:55'
-    class function GetVersionInfo(const aFileName: TFileName): RawUTF8;
+    class function GetVersionInfo(const aFileName: TFileName): RawUtf8;
   published
     /// version info of the exe file as '3.1.0.123'
     // - return "string" type, i.e. UnicodeString for Delphi 2009+
@@ -437,10 +438,10 @@ type
   TExeVersion = record
     /// the main executable name, without any path nor extension
     // - e.g. 'Test' for 'c:\pathto\Test.exe'
-    ProgramName: RawUTF8;
+    ProgramName: RawUtf8;
     /// the main executable details, as used e.g. by TSynLog
     // - e.g. 'C:\Dev\lib\SQLite3\exe\TestSQL3.exe 1.2.3.123 (2011-03-29 11:09:06)'
-    ProgramFullSpec: RawUTF8;
+    ProgramFullSpec: RawUtf8;
     /// the main executable file name (including full path)
     // - same as paramstr(0)
     ProgramFileName: TFileName;
@@ -454,9 +455,9 @@ type
     /// the current executable version
     Version: TFileVersion;
     /// the current computer host name
-    Host: RawUTF8;
+    Host: RawUtf8;
     /// the current computer user name
-    User: RawUTF8;
+    User: RawUtf8;
     /// some hash representation of this information
     // - the very same executable on the very same computer run by the very
     // same user will always have the same Hash value
@@ -481,7 +482,7 @@ procedure SetExecutableVersion(aMajor,aMinor,aRelease,aBuild: integer); overload
 
 /// initialize ExeVersion global variable, supplying the version as text
 // - e.g. SetExecutableVersion('7.1.2.512');
-procedure SetExecutableVersion(const aVersionText: RawUTF8); overload;
+procedure SetExecutableVersion(const aVersionText: RawUtf8); overload;
 
 type
   /// identify an operating system folder
@@ -532,7 +533,7 @@ type
     key: HKEY;
     /// start low-level read access to a Windows Registry node
     // - on success (returned true), ReadClose() should be called
-    function ReadOpen(root: TWinRegistryRoot; const keyname: RawUTF8;
+    function ReadOpen(root: TWinRegistryRoot; const keyname: RawUtf8;
       closefirst: boolean = false): boolean;
     /// finalize low-level read access to the Windows Registry after ReadOpen()
     procedure Close;
@@ -541,7 +542,7 @@ type
     // (return the first value of the multi-list)
     // - we don't use string here since it would induce a dependency to
     // mormot.core.unicode
-    function ReadString(const entry: SynUnicode; andtrim: boolean = true): RawUTF8;
+    function ReadString(const entry: SynUnicode; andtrim: boolean = true): RawUtf8;
     /// low-level read a Windows Registry content after ReadOpen()
     // - works with any kind of key, but was designed for REG_BINARY
     function ReadData(const entry: SynUnicode): RawByteString;
@@ -553,7 +554,7 @@ type
     // - just a wrapper around RegQueryValueExW() API call
     function ReadBuffer(const entry: SynUnicode; Data: pointer; DataLen: DWORD): boolean;
     /// low-level enumeration of all sub-entries names of a Windows Registry key
-    function ReadEnumEntries: TRawUTF8DynArray;
+    function ReadEnumEntries: TRawUtf8DynArray;
   end;
 
   /// TSynWindowsPrivileges enumeration synchronized with WinAPI
@@ -684,8 +685,8 @@ type
   HCRYPTKEY = pointer;
   HCRYPTHASH = pointer;
 
-  /// direct access to the Windows CryptoAPI
-  TWinCryptoAPI = object
+  /// direct access to the Windows CryptoApi
+  TWinCryptoApi = object
   private
     /// if the presence of this API has been tested
     Tested: boolean;
@@ -721,7 +722,7 @@ type
     // - since Windows Vista with Service Pack 1 (SP1), an AES counter-mode
     // based PRNG specified in NIST Special Publication 800-90 is used
     GenRandom: function(hProv: HCRYPTPROV; dwLen: DWORD; pbBuffer: Pointer): BOOL; stdcall;
-    /// try to load the CryptoAPI on this system
+    /// try to load the CryptoApi on this system
     function Available: boolean; {$ifdef HASINLINE}inline;{$endif}
   end;
 
@@ -729,8 +730,7 @@ const
   NO_ERROR = Windows.NO_ERROR;
   ERROR_ACCESS_DENIED = Windows.ERROR_ACCESS_DENIED;
   ERROR_INVALID_PARAMETER = Windows.ERROR_INVALID_PARAMETER;
-
-  INVALID_HANDLE_VALUE = DWORD(-1);
+  INVALID_HANDLE_VALUE = Windows.INVALID_HANDLE_VALUE;
   
   PROV_RSA_AES = 24;
   CRYPT_NEWKEYSET = 8;
@@ -752,7 +752,7 @@ const
   CRYPT_VERIFYCONTEXT = DWORD($F0000000);
 
 var
-  CryptoAPI: TWinCryptoAPI;
+  CryptoApi: TWinCryptoApi;
 
 /// protect some data for the current user, using Windows DPAPI
 // - the application can specify a secret salt text, which should reflect the
@@ -810,6 +810,9 @@ function GetCurrentThreadId: DWORD; stdcall;
 function GetCurrentProcessId: DWORD; stdcall;
 
 /// redefined in mormot.core.os to avoid dependency to Windows
+function WaitForSingleObject(hHandle: THandle; dwMilliseconds: DWORD): DWORD; stdcall;
+
+/// redefined in mormot.core.os to avoid dependency to Windows
 function GetEnvironmentStringsW: PWideChar; stdcall;
 
 /// redefined in mormot.core.os to avoid dependency to Windows
@@ -835,7 +838,7 @@ procedure LeaveCriticalSection(var cs: TRTLCriticalSection); stdcall;
 
 /// initialize IOCP instance
 // - redefined in mormot.core.os to avoid dependency to Windows
-function CreateIoCompletionPort(FileHandle: THandle; ExistingCompletionPort: THandle;
+function CreateIoCompletionPort(FileHandle, ExistingCompletionPort: THandle;
   CompletionKey: pointer; NumberOfConcurrentThreads: DWORD): THandle; stdcall;
 
 /// retrieve IOCP instance status
@@ -888,7 +891,7 @@ function SetFileOpenLimit(max: integer; hard: boolean = false): integer;
 
 type
   /// Low-level access to the ICU library installed on this system
-  TICULibrary = packed object
+  TIcuLibrary = packed object
   protected
     icu, icudata, icui18n: pointer;
     Loaded: boolean;
@@ -944,7 +947,7 @@ type
 
 var
   /// late-binding of the ICU library
-  icu: TICULibrary;
+  icu: TIcuLibrary;
 
 {$ifdef LINUXNOTBSD} { the systemd API is Linux-specific }
 
@@ -968,7 +971,7 @@ type
   // - about systemd: see https://www.freedesktop.org/wiki/Software/systemd
   // and http://0pointer.de/blog/projects/socket-activation.html - to get headers
   // on debian: `sudo apt install libsystemd-dev && cd /usr/include/systemd`
-  TSystemDAPI = packed object
+  TSystemD = packed object
   private
     systemd: pointer;
     tested: boolean;
@@ -991,7 +994,7 @@ type
     // - see https://www.freedesktop.org/software/systemd/man/notify.html
     // status notification sample: sd.notify(0, 'READY=1');
     // watchdog notification: sd.notify(0, 'WATCHDOG=1');
-    notify: function(unset_environment: integer; state: PUTF8Char): integer; cdecl;
+    notify: function(unset_environment: integer; state: PUtf8Char): integer; cdecl;
     /// check whether the service manager expects watchdog keep-alive
     // notifications from a service
     // - if result > 0 then usec contains the notification interval (app should
@@ -1009,7 +1012,7 @@ type
 
 var
   /// late-binding of the systemd library
-  sd: TSystemDAPI;
+  sd: TSystemD;
 
 {$endif LINUXNOTBSD}
 
@@ -1120,7 +1123,7 @@ procedure SetLastError(error: integer);
 
 /// returns a given error code as plain text
 // - calls FormatMessageW on Windows, or StrError() on POSIX
-function GetErrorText(error: integer): RawUTF8;
+function GetErrorText(error: integer): RawUtf8;
 
 /// retrieve the text corresponding to an error message for a given Windows module
 // - use RTL SysErrorMessage() as fallback
@@ -1199,31 +1202,31 @@ function GetTickCount64: Int64;
 
 /// returns the current UTC time
 // - will convert from clock_gettime(CLOCK_REALTIME_COARSE) if available
-function NowUTC: TDateTime;
+function NowUtc: TDateTime;
 
 /// returns the current UTC date/time as a second-based c-encoded time
 // - i.e. current number of seconds elapsed since Unix epoch 1/1/1970
-// - faster than NowUTC or GetTickCount64, on Windows or Unix platforms
+// - faster than NowUtc or GetTickCount64, on Windows or Unix platforms
 // (will use e.g. fast clock_gettime(CLOCK_REALTIME_COARSE) under Linux,
 // or GetSystemTimeAsFileTime under Windows)
 // - returns a 64-bit unsigned value, so is "Year2038bug" free
-function UnixTimeUTC: Int64;
+function UnixTimeUtc: Int64;
 
 /// returns the current UTC date/time as a millisecond-based c-encoded time
 // - i.e. current number of milliseconds elapsed since Unix epoch 1/1/1970
-// - faster and more accurate than NowUTC or GetTickCount64, on Windows or Unix
+// - faster and more accurate than NowUtc or GetTickCount64, on Windows or Unix
 // - will use e.g. fast clock_gettime(CLOCK_REALTIME_COARSE) under Linux,
 // or GetSystemTimeAsFileTime/GetSystemTimePreciseAsFileTime under Windows - the
 // later being more accurate, but slightly slower than the former, so you may
-// consider using UnixMSTimeUTCFast on Windows if its 10-16ms accuracy is enough
-function UnixMSTimeUTC: Int64;
+// consider using UnixMSTimeUtcFast on Windows if its 10-16ms accuracy is enough
+function UnixMSTimeUtc: Int64;
 
 /// returns the current UTC date/time as a millisecond-based c-encoded time
-// - under Linux/POSIX, is the very same than UnixMSTimeUTC (inlined call)
+// - under Linux/POSIX, is the very same than UnixMSTimeUtc (inlined call)
 // - under Windows 8+, will call GetSystemTimeAsFileTime instead of
 // GetSystemTimePreciseAsFileTime, which has higher precision, but is slower
 // - prefer it under Windows, if a dozen of ms resolution is enough for your task
-function UnixMSTimeUTCFast: Int64;
+function UnixMSTimeUtcFast: Int64;
   {$ifdef LINUX} inline; {$endif}
 
 {$ifndef NOEXCEPTIONINTERCEPT}
@@ -1247,7 +1250,7 @@ type
     /// = FPC's RaiseProc() FrameCount if EStack is Frame: PCodePointer
     EStackCount: integer;
     /// timestamp of this exception, as number of seconds since UNIX Epoch (TUnixTime)
-    // - UnixTimeUTC is faster than NowUTC or GetSystemTime
+    // - UnixTimeUtc is faster than NowUtc or GetSystemTime
     // - use UnixTimeToDateTime() to convert it into a regular TDateTime
     ETimestamp: Int64;
     /// the logging level corresponding to this exception
@@ -1255,7 +1258,7 @@ type
     ELevel: TSynLogInfo;
     /// retrieve some extended information about a given Exception
     // - on Windows, recognize most DotNet CLR Exception Names
-    function AdditionalInfo(out ExceptionNames: TPUTF8CharDynArray): cardinal;
+    function AdditionalInfo(out ExceptionNames: TPUtf8CharDynArray): cardinal;
   end;
 
   /// the global function signature expected by RawExceptionIntercept()
@@ -1342,7 +1345,7 @@ function OemToFileName(const oem: RawByteString): TFileName;
 // - in practice, text encoding is expected to be plain ASCII 
 // - on Windows, will call MessageBoxA()
 // - on POSIX, will use Writeln(StdErr)
-procedure DisplayFatalError(const title, msg: RawUTF8);
+procedure DisplayFatalError(const title, msg: RawUtf8);
 
 const
   /// operating-system dependent Line Feed characters
@@ -1576,7 +1579,7 @@ type
   TDiskPartition = packed record
     /// the name of this partition
     // - is the Volume name under Windows, or the Device name under POSIX
-    name: RawUTF8;
+    name: RawUtf8;
     /// where this partition has been mounted
     // - e.g. 'C:' or '/home'
     // - you can use GetDiskInfo(mounted) to retrieve current space information
@@ -1621,7 +1624,7 @@ function EnumAllProcesses(out Count: cardinal): TCardinalDynArray;
 // - under Windows, is a wrapper around QueryFullProcessImageNameW/GetModuleFileNameEx
 // PsAPI call
 // - on Linux, will query /proc/[pid]/exe or /proc/[pid]/cmdline pseudo-file
-function EnumProcessName(PID: cardinal): RawUTF8;
+function EnumProcessName(PID: cardinal): RawUtf8;
 
 /// return the system-wide time usage information
 // - under Windows, is a wrapper around GetSystemTimes() kernel API call
@@ -1688,7 +1691,7 @@ procedure AllocConsole;
 procedure TextColor(Color: TConsoleColor);
 
 /// write some text to the console using a given color
-procedure ConsoleWrite(const Text: RawUTF8; Color: TConsoleColor = ccLightGray;
+procedure ConsoleWrite(const Text: RawUtf8; Color: TConsoleColor = ccLightGray;
   NoLineFeed: boolean = false; NoColor: boolean = false); overload;
 
 /// change the console text background color
@@ -1715,7 +1718,7 @@ function ConsoleKeyPressed(ExpectedKey: Word): boolean;
 /// direct conversion of a UTF-8 encoded string into a console OEM-encoded string
 // - under Windows, will use the CP_OEMCP encoding
 // - under Linux, will expect the console to be defined with UTF-8 encoding
-function Utf8ToConsole(const S: RawUTF8): RawByteString;
+function Utf8ToConsole(const S: RawUtf8): RawByteString;
 
 var
   /// low-level handle used for console writing
@@ -1815,13 +1818,13 @@ type
     procedure SetUnlockedInt64(Index: integer; const Value: Int64);
     function GetPointer(Index: integer): Pointer;
     procedure SetPointer(Index: integer; const Value: Pointer);
-    function GetUTF8(Index: integer): RawUTF8;
-    procedure SetUTF8(Index: integer; const Value: RawUTF8);
+    function GetUtf8(Index: integer): RawUtf8;
+    procedure SetUtf8(Index: integer; const Value: RawUtf8);
   public
     /// internal padding data, also used to store up to 7 variant values
     // - this memory buffer will ensure no CPU cache line mixup occurs
     // - you should not use this field directly, but rather the Locked[],
-    // LockedInt64[], LockedUTF8[] or LockedPointer[] methods
+    // LockedInt64[], LockedUtf8[] or LockedPointer[] methods
     // - if you want to access those array values, ensure you protect them
     // using a Safe.Lock; try ... Padding[n] ... finally Safe.Unlock structure,
     // and maintain the PaddingUsedCount field accurately
@@ -1913,27 +1916,27 @@ type
       read fInitialized;
     /// safe locked access to a Variant value
     // - you may store up to 7 variables, using an 0..6 index, shared with
-    // LockedBool, LockedInt64, LockedPointer and LockedUTF8 array properties
+    // LockedBool, LockedInt64, LockedPointer and LockedUtf8 array properties
     // - returns null if the Index is out of range
     property Locked[Index: integer]: Variant
       read GetVariant write SetVariant;
     /// safe locked access to a Int64 value
     // - you may store up to 7 variables, using an 0..6 index, shared with
-    // Locked and LockedUTF8 array properties
+    // Locked and LockedUtf8 array properties
     // - Int64s will be stored internally as a varInt64 variant
     // - returns nil if the Index is out of range, or does not store a Int64
     property LockedInt64[Index: integer]: Int64
       read GetInt64 write SetInt64;
     /// safe locked access to a boolean value
     // - you may store up to 7 variables, using an 0..6 index, shared with
-    // Locked, LockedInt64, LockedPointer and LockedUTF8 array properties
+    // Locked, LockedInt64, LockedPointer and LockedUtf8 array properties
     // - value will be stored internally as a varboolean variant
     // - returns nil if the Index is out of range, or does not store a boolean
     property LockedBool[Index: integer]: boolean
       read GetBool write SetBool;
     /// safe locked access to a pointer/TObject value
     // - you may store up to 7 variables, using an 0..6 index, shared with
-    // Locked, LockedBool, LockedInt64 and LockedUTF8 array properties
+    // Locked, LockedBool, LockedInt64 and LockedUtf8 array properties
     // - pointers will be stored internally as a varUnknown variant
     // - returns nil if the Index is out of range, or does not store a pointer
     property LockedPointer[Index: integer]: Pointer
@@ -1943,30 +1946,30 @@ type
     // Locked and LockedPointer array properties
     // - UTF-8 string will be stored internally as a varString variant
     // - returns '' if the Index is out of range, or does not store a string
-    property LockedUTF8[Index: integer]: RawUTF8
-      read GetUTF8 write SetUTF8;
+    property LockedUtf8[Index: integer]: RawUtf8
+      read GetUtf8 write SetUtf8;
     /// safe locked in-place increment to an Int64 value
     // - you may store up to 7 variables, using an 0..6 index, shared with
-    // Locked and LockedUTF8 array properties
+    // Locked and LockedUtf8 array properties
     // - Int64s will be stored internally as a varInt64 variant
     // - returns the newly stored value
     // - if the internal value is not defined yet, would use 0 as default value
     function LockedInt64Increment(Index: integer; const Increment: Int64): Int64;
     /// safe locked in-place exchange of a Variant value
     // - you may store up to 7 variables, using an 0..6 index, shared with
-    // Locked and LockedUTF8 array properties
+    // Locked and LockedUtf8 array properties
     // - returns the previous stored value, or null if the Index is out of range
     function LockedExchange(Index: integer; const Value: variant): variant;
     /// safe locked in-place exchange of a pointer/TObject value
     // - you may store up to 7 variables, using an 0..6 index, shared with
-    // Locked and LockedUTF8 array properties
+    // Locked and LockedUtf8 array properties
     // - pointers will be stored internally as a varUnknown variant
     // - returns the previous stored value, nil if the Index is out of range,
     // or does not store a pointer
     function LockedPointerExchange(Index: integer; Value: pointer): pointer;
     /// unsafe access to a Int64 value
     // - you may store up to 7 variables, using an 0..6 index, shared with
-    // Locked and LockedUTF8 array properties
+    // Locked and LockedUtf8 array properties
     // - Int64s will be stored internally as a varInt64 variant
     // - returns nil if the Index is out of range, or does not store a Int64
     // - you should rather call LockedInt64[] property, or use this property
@@ -2045,29 +2048,29 @@ procedure SleepHiRes(ms: cardinal);
 
 /// low-level naming of a thread
 // - under Linux/FPC, calls pthread_setname_np API which truncates to 16 chars
-procedure RawSetThreadName(ThreadID: TThreadID; const Name: RawUTF8);
+procedure RawSetThreadName(ThreadID: TThreadID; const Name: RawUtf8);
 
 /// name the current thread so that it would be easily identified in the IDE debugger
 // - could then be retrieved by CurrentThreadName/GetCurrentThreadName
 // - just a wrapper around SetThreadName(GetCurrentThreadId, ...)
-procedure SetCurrentThreadName(const Format: RawUTF8; const Args: array of const); overload;
+procedure SetCurrentThreadName(const Format: RawUtf8; const Args: array of const); overload;
 
 /// name the current thread so that it would be easily identified in the IDE debugger
 // - could also be retrieved by CurrentThreadName/GetCurrentThreadName
 // - just a wrapper around SetThreadName(GetCurrentThreadId, ...)
-procedure SetCurrentThreadName(const Name: RawUTF8); overload;
+procedure SetCurrentThreadName(const Name: RawUtf8); overload;
 
 var
   /// name a thread so that it would be easily identified in the IDE debugger
   // - default implementation does nothing, unless mormot.core.log is included
   // - you can force this function to do nothing by setting the NOSETTHREADNAME
   // conditional, if you have issues with this feature when debugging your app
-  // - most meaningless patterns (like 'TSQL') are trimmed to reduce the
+  // - most meaningless patterns (like 'TSql') are trimmed to reduce the
   // resulting length - which is convenient e.g. with POSIX truncation to 16 chars
   // - you can retrieve the name later on using CurrentThreadName
   // - this method will register TSynLog.LogThreadName(), so threads calling it
   // should also call TSynLogFamily.OnThreadEnded/TSynLog.NotifyThreadEnded
-  SetThreadName: procedure(ThreadID: TThreadID; const Format: RawUTF8;
+  SetThreadName: procedure(ThreadID: TThreadID; const Format: RawUtf8;
     const Args: array of const);
 
 threadvar
@@ -2079,7 +2082,8 @@ threadvar
 
 /// retrieve the thread name, as set by SetThreadName()
 // - if possible, direct CurrentThreadName threadvar access is slightly faster
-function GetCurrentThreadName: RawUTF8;
+// - will return the CurrentThreadName value, truncated to 31 chars
+function GetCurrentThreadName: RawUtf8;
   {$ifdef HASINLINE}inline;{$endif}
 
 /// enter a process-wide giant lock for thread-safe shared process
@@ -2108,7 +2112,7 @@ type
   /// callback definition used to log some event
   // - defined as TMethod to avoid dependency with the mormot.core.log unit
   // - could be assigned from TSynLog.DoLog class procedure
-  TOnDaemonLog = procedure(Level: TSynLogInfo; const Fmt: RawUTF8;
+  TOnDaemonLog = procedure(Level: TSynLogInfo; const Fmt: RawUtf8;
     const Args: array of const; Instance: TObject = nil) of object;
 
 {$ifdef MSWINDOWS}
@@ -2249,7 +2253,7 @@ function StartServiceCtrlDispatcher(
 { *** high level classes to define and manage Windows Services }
 
 var
-  /// you can set this global variable to TSynLog or TSQLLog to enable logging
+  /// you can set this global variable to TSynLog or TSqlLog to enable logging
   // - default is nil, i.e. disabling logging, since it may interfere with the
   // logging process of the service itself
   // - can be assigned from TSynLog.DoLog class method for proper logging
@@ -2276,7 +2280,7 @@ type
     fSCHandle: THandle;
     fHandle: THandle;
     fStatus: TServiceStatus;
-    fName: RawUTF8;
+    fName: RawUtf8;
   protected
     function GetStatus: TServiceStatus;
     function GetState: TServiceState;
@@ -2658,8 +2662,8 @@ const
 // Windows parsing is not consistent by itself (e.g. double quoting or
 // escaping depends on the actual executable called) so returned flags
 // should be considered as indicative only with posix=false
-function ParseCommandArgs(const cmd: RawUTF8; argv: PParseCommandsArgs = nil;
-  argc: PInteger = nil; temp: PRawUTF8 = nil;
+function ParseCommandArgs(const cmd: RawUtf8; argv: PParseCommandsArgs = nil;
+  argc: PInteger = nil; temp: PRawUtf8 = nil;
   posix: boolean = {$ifdef MSWINDOWS} false {$else} true {$endif}): TParseCommands;
 
 /// like SysUtils.ExecuteProcess, but allowing not to wait for the process to finish
@@ -2697,7 +2701,7 @@ implementation
 
 { ****************** Gather Operating System Information }
 
-function ToText(const osv: TOperatingSystemVersion): RawUTF8;
+function ToText(const osv: TOperatingSystemVersion): RawUtf8;
 begin
   if osv.os = osWindows then
     result := 'Windows ' + WINDOWS_NAME[osv.win]
@@ -2705,7 +2709,7 @@ begin
     result := OS_NAME[osv.os];
 end;
 
-function ToTextOS(osint32: integer): RawUTF8;
+function ToTextOS(osint32: integer): RawUtf8;
 var
   osv: TOperatingSystemVersion absolute osint32;
 begin
@@ -2713,7 +2717,7 @@ begin
   if (osv.os >= osLinux) and
      (osv.utsrelease[2] <> 0) then
     // include the kernel number to the distribution name, e.g. 'Ubuntu 5.4.0'
-    result := RawUTF8(Format('%s %d.%d.%d', [result, osv.utsrelease[2],
+    result := RawUtf8(Format('%s %d.%d.%d', [result, osv.utsrelease[2],
       osv.utsrelease[1], osv.utsrelease[0]]));
 end;
 
@@ -2851,6 +2855,8 @@ end;
 
 procedure Unicode_WideToShort(W: PWideChar; LW, CodePage: PtrInt;
   var res: shortstring);
+var
+  i: PtrInt;
 begin
   if LW <= 0 then
     res[0] := #0
@@ -2858,19 +2864,22 @@ begin
           IsAnsiCompatibleW(W, LW) then
   begin
     res[0] := AnsiChar(LW);
+    i := 1;
     repeat
-      res[LW + 1] := AnsiChar(ord(W^)); // fast pure English content
+      res[i] := AnsiChar(W^); // fast pure English content
+      if i = LW then
+        break;
       inc(W);
-      dec(LW);
-    until LW = 0
+      inc(i);
+    until false;
   end
   else
     res[0] := AnsiChar(Unicode_WideToAnsi(W, PAnsiChar(@res[1]), LW, 255, CodePage));
 end;
 
-function NowUTC: TDateTime;
+function NowUtc: TDateTime;
 begin
-  result := UnixMSTimeUTC / MSecsPerDay + UnixDelta;
+  result := UnixMSTimeUtcFast / MSecsPerDay + UnixDelta;
 end;
 
 function DateTimeToWindowsFileTime(DateTime: TDateTime): integer;
@@ -2939,7 +2948,7 @@ function StringFromFile(const FileName: TFileName; HasNoSize: boolean): RawByteS
 var
   F: THandle;
   Read, Size, Chunk: integer;
-  P: PUTF8Char;
+  P: PUtf8Char;
   tmp: array[0..$7fff] of AnsiChar; // 32KB stack buffer
 begin
   result := '';
@@ -3031,7 +3040,8 @@ function TemporaryFileName: TFileName;
 var
   folder: TFileName;
   retry: integer;
-begin // fast cross-platform implementation
+begin
+  // fast cross-platform implementation
   folder := GetSystemPath(spTempFolder);
   if _TmpCounter = 0 then
     _TmpCounter := Random32;
@@ -3169,7 +3179,7 @@ begin
           ctxt.ELevel := sllExceptionOS
         else
           ctxt.ELevel := sllException;
-        ctxt.ETimestamp := UnixTimeUTC;
+        ctxt.ETimestamp := UnixTimeUtc;
         ctxt.EStack := pointer(Frame);
         ctxt.EStackCount := FrameCount;
         backuphandler(ctxt);
@@ -3467,13 +3477,14 @@ begin
 end;
 {$else}
 procedure ReserveExecutableMemoryPageAccess(Reserved: pointer; Exec: boolean);
-begin // nothing to be done
+begin
+  // nothing to be done
 end;
 {$endif UNIX}
 
 {$ifndef PUREMORMOT2}
 
-function GetDelphiCompilerVersion: RawUTF8;
+function GetDelphiCompilerVersion: RawUtf8;
 begin
   result := COMPILER_VERSION;
 end;
@@ -3504,7 +3515,7 @@ end;
 
 {$I-}
 
-procedure ConsoleWrite(const Text: RawUTF8; Color: TConsoleColor;
+procedure ConsoleWrite(const Text: RawUtf8; Color: TConsoleColor;
   NoLineFeed, NoColor: boolean);
 begin
   if not NoColor then
@@ -3630,20 +3641,20 @@ begin
     result := fDetailed;
 end;
 
-function TFileVersion.VersionInfo: RawUTF8;
+function TFileVersion.VersionInfo: RawUtf8;
 begin
   if self = nil then
     result := ''
   else
   begin
     if fVersionInfo = '' then
-      fVersionInfo := RawUTF8(Format('%s %s (%s)', [ExtractFileName(fFileName),
+      fVersionInfo := RawUtf8(Format('%s %s (%s)', [ExtractFileName(fFileName),
         DetailedOrVoid, BuildDateTimeString]));
     result := fVersionInfo;
   end;
 end;
 
-function TFileVersion.UserAgent: RawUTF8;
+function TFileVersion.UserAgent: RawUtf8;
 begin
   if self = nil then
     result := ''
@@ -3651,7 +3662,7 @@ begin
   begin
     if fUserAgent = '' then
     begin
-      fUserAgent := RawUTF8(Format('%s/%s%s', [GetFileNameWithoutExt(
+      fUserAgent := RawUtf8(Format('%s/%s%s', [GetFileNameWithoutExt(
         ExtractFileName(fFileName)), DetailedOrVoid, OS_INITIAL[OS_KIND]]));
       {$ifdef MSWINDOWS}
       if OSVersion in WINDOWS_32 then
@@ -3662,7 +3673,7 @@ begin
   end;
 end;
 
-class function TFileVersion.GetVersionInfo(const aFileName: TFileName): RawUTF8;
+class function TFileVersion.GetVersionInfo(const aFileName: TFileName): RawUtf8;
 begin
   with Create(aFileName, 0, 0, 0, 0) do
   try
@@ -3672,7 +3683,7 @@ begin
   end;
 end;
 
-procedure SetExecutableVersion(const aVersionText: RawUTF8);
+procedure SetExecutableVersion(const aVersionText: RawUtf8);
 var
   P: PAnsiChar;
   i: integer;
@@ -3702,7 +3713,7 @@ begin
         InstanceFileName := GetModuleName(HInstance)
       else
         InstanceFileName := ProgramFileName;
-      ProgramName := RawUTF8(GetFileNameWithoutExt(ExtractFileName(ProgramFileName)));
+      ProgramName := RawUtf8(GetFileNameWithoutExt(ExtractFileName(ProgramFileName)));
       GetUserHost(User, Host);
       if Host = '' then
         Host := 'unknown';
@@ -3713,7 +3724,7 @@ begin
     end
     else
       Version.SetVersion(aMajor, aMinor, aRelease, aBuild);
-    ProgramFullSpec := RawUTF8(Format('%s %s (%s)', [ProgramFileName,
+    ProgramFullSpec := RawUtf8(Format('%s %s (%s)', [ProgramFileName,
       Version.Detailed, Version.BuildDateTimeString]));
     Hash.c0 := Version.Version32;
     {$ifdef CPUINTEL}
@@ -3742,23 +3753,23 @@ begin
   LeaveCriticalSection(GlobalCriticalSection);
 end;
 
-procedure _SetThreadName(ThreadID: TThreadID; const Format: RawUTF8;
+procedure _SetThreadName(ThreadID: TThreadID; const Format: RawUtf8;
   const Args: array of const);
 begin
   // do nothing - properly implemented in mormot.core.log
 end;
 
-procedure SetCurrentThreadName(const Format: RawUTF8; const Args: array of const);
+procedure SetCurrentThreadName(const Format: RawUtf8; const Args: array of const);
 begin
   SetThreadName(GetCurrentThreadId, Format, Args);
 end;
 
-procedure SetCurrentThreadName(const Name: RawUTF8);
+procedure SetCurrentThreadName(const Name: RawUtf8);
 begin
   SetThreadName(GetCurrentThreadId, '%', [Name]);
 end;
 
-function GetCurrentThreadName: RawUTF8;
+function GetCurrentThreadName: RawUtf8;
 begin
   ShortStringToAnsi7String(CurrentThreadName, result);
 end;
@@ -3978,13 +3989,13 @@ begin
   end;
 end;
 
-function TSynLocker.GetUTF8(Index: integer): RawUTF8;
+function TSynLocker.GetUtf8(Index: integer): RawUtf8;
 begin
   if cardinal(Index) < cardinal(PaddingUsedCount) then
   try
     EnterCriticalSection(fSection);
     fLocked := true;
-    VariantStringToUTF8(variant(Padding[Index]), result);
+    VariantStringToUtf8(variant(Padding[Index]), result);
   finally
     fLocked := false;
     LeaveCriticalSection(fSection);
@@ -3993,7 +4004,7 @@ begin
     result := '';
 end;
 
-procedure TSynLocker.SetUTF8(Index: integer; const Value: RawUTF8);
+procedure TSynLocker.SetUtf8(Index: integer; const Value: RawUtf8);
 begin
   if cardinal(Index) <= high(Padding) then
   try
@@ -4001,7 +4012,7 @@ begin
     fLocked := true;
     if Index >= PaddingUsedCount then
       PaddingUsedCount := Index + 1;
-    RawUTF8ToVariant(Value, variant(Padding[Index]));
+    RawUtf8ToVariant(Value, variant(Padding[Index]));
   finally
     fLocked := false;
     LeaveCriticalSection(fSection);
@@ -4103,8 +4114,8 @@ end;
 
 { ****************** Unix Daemon and Windows Service Support }
 
-function ParseCommandArgs(const cmd: RawUTF8; argv: PParseCommandsArgs;
-  argc: PInteger; temp: PRawUTF8; posix: boolean): TParseCommands;
+function ParseCommandArgs(const cmd: RawUtf8; argv: PParseCommandsArgs;
+  argc: PInteger; temp: PRawUtf8; posix: boolean): TParseCommands;
 var
   n: PtrInt;
   state: set of (sWhite, sInArg, sInSQ, sInDQ, sSpecial, sBslash);
@@ -4299,9 +4310,6 @@ begin
       inc(D);
   until false;
 end;
-
-
-
 
 
 procedure FinalizeUnit;

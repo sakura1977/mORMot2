@@ -693,8 +693,6 @@ asm
         push    edi
         mov     edi, eax
         mov     eax, edx
-        nop
-        nop         // @s loop alignment
 @s:     sub     edi, 2
         cmp     eax, 100
         jb      @2
@@ -724,7 +722,7 @@ asm
         mov     [eax], dl
 end;
 
-procedure YearToPChar(Y: PtrUInt; P: PUTF8Char);
+procedure YearToPChar(Y: PtrUInt; P: PUtf8Char);
 {$ifdef FPC}nostackframe; assembler;{$endif}
 asm
         // eax=Y, edx=P
@@ -1005,6 +1003,27 @@ asm
         pop     ebx
 end;
 
+procedure LockedInc32(int32: PInteger);
+{$ifdef FPC}nostackframe; assembler;{$endif}
+asm
+   lock inc     dword ptr [int32]
+end;
+
+procedure LockedDec32(int32: PInteger);
+{$ifdef FPC}nostackframe; assembler;{$endif}
+asm
+   lock dec     dword ptr [int32]
+end;
+
+procedure LockedInc64(int64: PInt64);
+{$ifdef FPC}nostackframe; assembler;{$endif}
+asm
+   lock inc     dword ptr [int64]
+        jz      @h
+        ret
+@h:lock inc     dword ptr [int64 + 4] // collision is very unlikely
+end;
+
 function InterlockedIncrement(var I: integer): integer;
 {$ifdef FPC}nostackframe; assembler;{$endif}
 asm
@@ -1046,7 +1065,7 @@ asm
 @0:     sub     eax, edx
 end;
 
-function PosEx(const SubStr, S: RawUTF8; Offset: PtrUInt): integer;
+function PosEx(const SubStr, S: RawUtf8; Offset: PtrUInt): integer;
 {$ifdef FPC}nostackframe; assembler;{$endif}
 asm
         // eax=SubStr, edx=S, ecx=Offset
@@ -1231,7 +1250,7 @@ end;
 function SortDynArrayAnsiString(const A,B): integer;
 {$ifdef FPC}nostackframe; assembler;{$endif}
 asm
-        // x86 version optimized for AnsiString/RawUTF8/RawByteString types
+        // x86 version optimized for AnsiString/RawUtf8/RawByteString types
         mov     eax, [eax]
         mov     edx, [edx]
         cmp     eax, edx
@@ -1874,7 +1893,7 @@ end;
 {$ifdef CPU32DELPHI}
 
 // inspired by ValExt_JOH_PAS_8_a by John O'Harrow - calls Delphi System.@Pow10
-function GetExtended(P: PUTF8Char; out err: integer): TSynExtended;
+function GetExtended(P: PUtf8Char; out err: integer): TSynExtended;
 const
   Ten: double = 10.0;
 asm
