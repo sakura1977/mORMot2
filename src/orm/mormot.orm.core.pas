@@ -5357,7 +5357,6 @@ type
     /// the private copy of the processed data buffer
     // - available e.g. for Create constructor using aJson parameter,
     // or after the UpdateFrom() process
-    // - 16 more bytes will be allocated, to allow e.g. proper SSE4.2 process
     // - this buffer is not to be access directly: this won't be a valid JSON
     // content, but a processed buffer, on which fResults[] elements point to -
     // it will contain unescaped text and numerical values, ending with #0
@@ -16021,8 +16020,7 @@ begin
   end
   else
     result := true; // from Create() for better performance on single use
-  FastSetString(fPrivateCopy, nil, aLen + 16); // +16 for SSE4.2 read-ahead
-  MoveFast(pointer(aJson)^, pointer(fPrivateCopy)^, aLen + 1); // +1 for trailing #0
+  FastSetString(fPrivateCopy, pointer(aJson), aLen);
 end;
 
 function GetFieldCountExpanded(P: PUtf8Char): integer;
@@ -21487,7 +21485,7 @@ var
 begin
   if aRest = nil then
     EOrmException.CreateUtf8('%.Create', [self]);
-  fRest := aRest;
+  pointer(fRest) := pointer(aRest); // don't change IRestOrm reference count
   fModel := aRest.Model;
   SetLength(fCache, length(fModel.Tables));
   for i := 0 to length(fCache) - 1 do
@@ -21500,7 +21498,8 @@ var
 begin
   for i := 0 to length(fCache) - 1 do
     fCache[i].Done;
-  inherited;
+  pointer(fRest) := nil; // don't change reference count
+  inherited Destroy;
 end;
 
 function TRestCache.CachedEntries: cardinal;
