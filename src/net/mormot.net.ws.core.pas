@@ -200,6 +200,7 @@ type
     function FrameType(const frame: TWebSocketFrame): RawUtf8; virtual;
     function GetRemoteIP: RawUtf8;
     function GetEncrypted: boolean;
+      {$ifdef HASINLINE}inline;{$endif}
   public
     /// abstract constructor to initialize the protocol
     // - the protocol should be named, so that the client may be able to request
@@ -1217,7 +1218,7 @@ begin
     for i := 0 to High(Values) do
     begin
       WR.AddJsonEscape(Values[i]);
-      WR.Add(',');
+      WR.AddComma;
     end;
     WR.Add('"');
     WR.AddString(ContentType);

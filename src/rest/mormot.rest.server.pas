@@ -115,7 +115,7 @@ type
     Request: TRestServerUriContext;
     /// the thread which launched the request
     // - is set by TRestServer.BeginCurrentThread from multi-thread server
-    // handlers - e.g. TSqlite3HttpServer or TRestServerNamedPipeResponse
+    // handlers - e.g. TRestHttpServer
     RunningThread: TThread;
   end;
 
@@ -158,9 +158,10 @@ type
   // kind of custom routing or execution scheme
   // - instantiated by the TRestServer.Uri() method using its ServicesRouting
   // property
-  // - see TRestServerRoutingRest and TRestServerRoutingJsonRpc for working inherited
-  // classes - NEVER set this abstract TRestServerUriContext class to
-  // TRest.ServicesRouting property !
+  // - see TRestServerRoutingRest and TRestServerRoutingJsonRpc for workable
+  // classes - this abstract class will be rejected for TRest.ServicesRouting
+  // - on client side, see TRestClientRouting reciprocal class hierarchy and
+  // the ClientRouting class method - as defined in mormot.rest.client.pas
   TRestServerUriContext = class
   protected
     fInput: TRawUtf8DynArray; // even items are parameter names, odd are values
@@ -209,7 +210,7 @@ type
     procedure InternalSetTableFromTableIndex(Index: integer); virtual;
     procedure InternalSetTableFromTableName(TableName: PUtf8Char); virtual;
     procedure InternalExecuteSoaByInterface; virtual;
-    function IsRemoteIPBanned: boolean;
+    function IsRemoteIPBanned: boolean; // as method to avoid temp IP string
     /// retrieve RESTful URI routing
     // - should set URI, Table,TableIndex,TableRecordProps,TableEngine,
     // ID, UriBlobFieldName and Parameters members
@@ -584,6 +585,8 @@ type
     // - will be used e.g. by ClientOrmOptions to check if the
     // current remote client expects standard JSON in all cases
     function ClientKind: TRestServerUriContextClientKind;
+    /// the associated routing class on the client side
+    class function ClientRouting: TRestClientRoutingClass; virtual; abstract;
     /// identify if the request is about a Table containing nested objects or
     // arrays, which could be serialized as JSON objects or arrays, instead
     // of plain JSON string (as stored in the database)
@@ -592,6 +595,7 @@ type
     function ClientOrmOptions: TJsonSerializerOrmOptions;
     /// true if called from TRestServer.AdministrationExecute
     function IsRemoteAdministrationExecute: boolean;
+      {$ifdef FPC}inline;{$endif}
     /// compute the file name corresponding to the URI
     // - e.g. '/root/methodname/toto/index.html' will return 'toto\index.html'
     property ResourceFileName: TFileName
@@ -888,6 +892,10 @@ type
     // !  URL='root/Calculator.Add?+%5B+1%2C2+%5D' // decoded as ' [ 1,2 ]'
     // !  URL='root/Calculator.Add?n1=1&n2=2'      // in any order, even missing
     procedure ExecuteSoaByInterface; override;
+  public
+    /// the associated routing class on the client side
+    // - this overriden method returns TRestClientRoutingJsonRpc
+    class function ClientRouting: TRestClientRoutingClass; override;
   end;
 
   /// calling context for a TOnRestServerCallBack using JSON/RPC for
@@ -915,6 +923,10 @@ type
     // of a JSON object body:
     // $ {"method":"Add","params":[20,30],"id":1234}
     procedure ExecuteSoaByInterface; override;
+  public
+    /// the associated routing class on the client side
+    // - this overriden method returns TRestClientRoutingRest
+    class function ClientRouting: TRestClientRoutingClass; override;
   end;
 
   /// class used to define the Server side expected routing
@@ -924,7 +936,6 @@ type
   // - TRestServerRoutingJsonRpc and TRestServerRoutingRest classes
   // are provided in this unit, to allow RESTful and JSON/RPC protocols
   TRestServerUriContextClass = class of TRestServerUriContext;
-
 
 
 { ************ TAuthSession for In-Memory User Sessions }
@@ -1796,7 +1807,7 @@ type
   TRestServer = class(TRest)
   protected
     fHandleAuthentication: boolean;
-    fBypassORMAuthentication: TUriMethods;
+    fBypassOrmAuthentication: TUriMethods;
     /// the TAuthUser and TAuthGroup classes, as defined in model
     fAuthUserClass: TAuthUserClass;
     fAuthGroupClass: TAuthGroupClass;
@@ -2363,8 +2374,8 @@ type
     /// setting: but you could define some HTTP verb to this property, which
     // will by-pass the authentication - may be used e.g. for public GET
     // of the content by an AJAX client
-    property BypassORMAuthentication: TUriMethods
-      read fBypassORMAuthentication write fBypassORMAuthentication;
+    property BypassOrmAuthentication: TUriMethods
+      read fBypassOrmAuthentication write fBypassOrmAuthentication;
     /// read-only access to the high-level Server statistics
     // - see ServiceMethodStat[] for information about method-based services,
     // or TServiceFactoryServer.Stats / Stat[] for interface-based services
@@ -2701,7 +2712,7 @@ end;
 function TRestServerUriContext.UriDecodeRest: boolean;
 var
   i, j, slash: PtrInt;
-  Par: PUtf8Char;
+  Par, P: PUtf8Char;
 begin
   // expects 'ModelRoot[/TableName[/TableID][/UriBlobFieldName]][?param=...]' format
   // check root URI and Parameters
@@ -2725,18 +2736,18 @@ begin
     Parameters := @Call^.url[ParametersPos + 1];
   if Method = mPost then
   begin
-    fInputPostContentType := Call^.InBodyType(false);
+    Call^.InBodyType(fInputPostContentType, {guessjsonifnone=}false);
     if (Parameters = nil) and
        IdemPChar(pointer(fInputPostContentType), 'APPLICATION/X-WWW-FORM-URLENCODED') then
       Parameters := pointer(Call^.InBody);
   end;
   // compute URI without any root nor parameter
   inc(i, j + 2);
-  if ParametersPos = 0 then
-    Uri := copy(Call^.url, i, maxInt)
-  else
-    Uri := copy(Call^.url, i, ParametersPos - i);
   UriAfterRoot := PUtf8Char(pointer(Call^.url)) + i - 1;
+  if ParametersPos = 0 then
+    FastSetString(Uri, UriAfterRoot, length(Call^.url) - i + 1)
+  else
+    FastSetString(Uri, UriAfterRoot, ParametersPos - i);
   // compute Table, TableID and UriBlobFieldName
   slash := PosExChar('/', Uri);
   if slash > 0 then
@@ -2752,17 +2763,20 @@ begin
     else
       // URI like "ModelRoot/TableName/MethodName"
       TableID := -1;
-    UriBlobFieldName := Par;
     if Table <> nil then
     begin
-      j := PosExChar('/', UriBlobFieldName);
-      if j > 0 then
+      P := PosChar(Par, '/');
+      if P <> nil then
       begin
         // handle "ModelRoot/TableName/UriBlobFieldName/ID"
-        TableID := GetCardinalDef(pointer(PtrInt(UriBlobFieldName) + j), cardinal(-1));
-        SetLength(UriBlobFieldName, j - 1);
-      end;
-    end;
+        TableID := GetCardinalDef(P + 1, cardinal(-1));
+        FastSetString(UriBlobFieldName, Par, Par - P);
+      end
+      else
+        FastSetString(UriBlobFieldName, Par, StrLen(Par));
+    end
+    else
+      FastSetString(UriBlobFieldName, Par, StrLen(Par));
     SetLength(Uri, slash - 1);
   end
   else
@@ -2778,7 +2792,7 @@ begin
   if UriSessionSignaturePos = 0 then
     UriWithoutSignature := Call^.Url
   else
-    UriWithoutSignature := Copy(Call^.Url, 1, UriSessionSignaturePos - 1);
+    FastSetString(UriWithoutSignature, pointer(Call^.Url), UriSessionSignaturePos - 1);
   result := True;
 end;
 
@@ -2794,8 +2808,15 @@ begin
     MethodIndex := -1;
 end;
 
-var // as set by TRestServer.AdministrationExecute()
+var
+  // as set by TRestServer.AdministrationExecute()
   BYPASS_ACCESS_RIGHTS: TOrmAccessRights;
+
+function TRestServerUriContext.IsRemoteAdministrationExecute: boolean;
+begin
+  result := (self <> nil) and
+            (Call.RestAccessRights = @BYPASS_ACCESS_RIGHTS);
+end;
 
 function TRestServerUriContext.Authenticate: boolean;
 var
@@ -2803,11 +2824,22 @@ var
   a: ^TRestServerAuthentication;
   n: integer;
 begin
+  result := true;
   if Server.fHandleAuthentication and
      not IsRemoteAdministrationExecute then
   begin
     Session := CONST_AUTHENTICATION_SESSION_NOT_STARTED;
-    result := false;
+    if // /auth + /timestamp are e.g. allowed methods without signature
+       ((MethodIndex >= 0) and
+       Server.fPublishedMethod[MethodIndex].ByPassAuthentication) or
+       // you can allow a service to be called directly
+       ((Service <> nil) and
+       TServiceFactoryServerAbstract(Service).ByPassAuthentication) or
+       // allow by-pass for a set of HTTP verbs (e.g. mGET)
+       ((Table <> nil) and
+       (Method in Server.BypassOrmAuthentication)) then
+      // no need to check the sessions
+      exit;
     Server.fSessions.Safe.Lock;
     try
       a := pointer(Server.fSessionAuthentication);
@@ -2822,7 +2854,6 @@ begin
                (aSession.RemoteIP <> '127.0.0.1') then
               Log.Log(sllUserAuth, '%/% %', [aSession.User.LogonName,
                 aSession.ID, aSession.RemoteIP], self);
-            result := true;
             exit;
           end;
           inc(a);
@@ -2832,24 +2863,12 @@ begin
     finally
       Server.fSessions.Safe.UnLock;
     end;
-    // if we reached here, no session was found
-    if Service <> nil then
-      // you can allow a service to be called directly
-      result := TServiceFactoryServerAbstract(Service).ByPassAuthentication
-    else if MethodIndex >= 0 then
-        // /auth + /timestamp are e.g. allowed methods without signature
-        result := Server.fPublishedMethod[MethodIndex].ByPassAuthentication
-      else if (Table <> nil) and
-              (Method in Server.fBypassORMAuthentication) then
-        // allow by-pass for a set of HTTP verbs (e.g. mGET)
-        result := true;
+    // if we reached here, no session has been identified
+    result := false;
   end
   else
-  begin
     // default unique session if authentication is not enabled
     Session := CONST_AUTHENTICATION_NOT_USED;
-    result := true;
-  end;
 end;
 
 procedure TRestServerUriContext.AuthenticationFailed(
@@ -3079,7 +3098,7 @@ begin
       end;
       Stats.Processing := true;
     end;
-    if Parameters <> '' then
+    if Parameters <> nil then
       Server.InternalLog('% %', [Name, Parameters], sllServiceCall);
     CallBack(self);
     if Stats <> nil then
@@ -4438,12 +4457,6 @@ begin
   result := fClientKind;
 end;
 
-function TRestServerUriContext.IsRemoteAdministrationExecute: boolean;
-begin
-  result := (self <> nil) and
-            (Call.RestAccessRights = @BYPASS_ACCESS_RIGHTS);
-end;
-
 function TRestServerUriContext.ClientOrmOptions: TJsonSerializerOrmOptions;
 begin
   result := [];
@@ -4668,7 +4681,7 @@ begin
           AddJsonEscape(Values[i]);
           if i = h then
             break;
-          Add(',');
+          AddComma;
           inc(i);
         until false;
         Add(']');
@@ -4769,6 +4782,11 @@ end;
 { ************ TRestServerRoutingJsonRpc/TRestServerRoutingRest Requests Parsing Scheme }
 
 { TRestServerRoutingRest }
+
+class function TRestServerRoutingRest.ClientRouting: TRestClientRoutingClass;
+begin
+  result := TRestClientRoutingRest;
+end;
 
 procedure TRestServerRoutingRest.UriDecodeSoaByInterface;
 var
@@ -4908,6 +4926,11 @@ end;
 
 
 { TRestServerRoutingJsonRpc }
+
+class function TRestServerRoutingJsonRpc.ClientRouting: TRestClientRoutingClass;
+begin
+  result := TRestClientRoutingJsonRpc;
+end;
 
 procedure TRestServerRoutingJsonRpc.UriDecodeSoaByInterface;
 begin
@@ -5275,8 +5298,8 @@ end;
 
 { TRestServerAuthenticationUri }
 
-function TRestServerAuthenticationUri.RetrieveSession(Ctxt:
-  TRestServerUriContext): TAuthSession;
+function TRestServerAuthenticationUri.RetrieveSession(
+  Ctxt: TRestServerUriContext): TAuthSession;
 begin
   result := nil;
   if (Ctxt = nil) or
@@ -6624,7 +6647,7 @@ begin
   begin
     W.AddShort(',"cachedMemoryBytes":');
     W.AddU(fOrm.CacheOrNil.CachedMemory); // will also flush outdated JSON
-    W.Add(',');
+    W.AddComma;
   end;
   if (fRun.BackgroundTimer <> nil) and
      (fRun.BackgroundTimer.Stats <> nil) then
@@ -6632,7 +6655,7 @@ begin
     W.CancelLastComma;
     W.AddShort(',"backgroundTimer":');
     fRun.BackgroundTimer.Stats.ComputeDetailsTo(W);
-    W.Add(',');
+    W.AddComma;
   end;
   if withtables in Flags then
   begin
@@ -6929,7 +6952,7 @@ begin
       for i := 0 to fSessions.Count - 1 do
       begin
         W.WriteObject(fSessions.List[i]);
-        W.Add(',');
+        W.AddComma;
       end;
       W.CancelLastComma;
       W.Add(']');

@@ -1553,7 +1553,7 @@ const
   /// can be used to append to most English nouns to form a plural
   // - as used by the Plural() function
   PLURAL_FORM: array[boolean] of RawUtf8 = (
-    '','s');
+    '', 's');
 
 /// write count number and append 's' (if needed) to form a plural English noun
 // - for instance, Plural('row',100) returns '100 rows' with no heap allocation
@@ -7604,7 +7604,7 @@ begin
       Dest.Add('$');
       Dest.AddByteToHex(P^);
       inc(P);
-      Dest.Add(',');
+      Dest.AddComma;
     end;
     dec(Len,line);
   until Len = 0;

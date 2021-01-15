@@ -391,7 +391,8 @@ type
     // params should contain the incoming parameters as JSON CSV (without []),
     // and clientDriven ID should contain the optional Client ID value
     // - at output, should update the HTTP uri corresponding to the proper
-    // routing, and should return the corresponding HTTP body within sent
+    // routing, and should return the corresponding HTTP body/headers within
+    // sent/head parameters
     class procedure ClientSideInvoke(var uri: RawUtf8;
       ctxt: TRestClientSideInvoke;
       const method, params, clientDrivenID: RawUtf8;
@@ -404,6 +405,8 @@ type
   // kind of custom routing or execution scheme
   // - TRestClientRoutingRest and TRestClientRoutingJsonRpc classes are provided
   // in this unit, to allow RESTful and JSON/RPC protocols on Client side
+  // - you can retrieve the client class from the reciprocal server-side class
+  // using TRestServerUriContext.ClientRouting class method
   TRestClientRoutingClass = class of TRestClientRouting;
 
   /// client calling context using simple REST for interface-based services
@@ -620,7 +623,8 @@ type
     // (i.e. if the session was closed by the remote server, for any reason -
     // mostly a time out) if the OnAuthentificationFailed event handler is set
     function Uri(const url, method: RawUtf8; Resp: PRawUtf8 = nil;
-      Head: PRawUtf8 = nil; SendData: PRawUtf8 = nil; outStatus: PCardinal = nil): integer;
+      Head: PRawUtf8 = nil; SendData: PRawUtf8 = nil;
+      OutInternalState: PCardinal = nil): integer;
     /// wrapper to the protected URI method to call a method on the server, using
     // a ModelRoot/[TableName/[ID/]]MethodName RESTful GET request
     // - returns the HTTP error code (e.g. 200/HTTP_SUCCESS on success)
@@ -2158,7 +2162,7 @@ begin
 end;
 
 function TRestClientUri.Uri(const url, method: RawUtf8; Resp: PRawUtf8;
-  Head: PRawUtf8; SendData: PRawUtf8; outStatus: PCardinal): integer;
+  Head: PRawUtf8; SendData: PRawUtf8; OutInternalState: PCardinal): integer;
 var
   retry: integer;
   aUserName, aPassword: string;
@@ -2185,8 +2189,8 @@ var
     else
       OnBackgroundProcess({SenderThread=}nil, @Call);
     result := Call.OutStatus;
-    if outStatus <> nil then
-      outStatus^ := Call.OutInternalState;
+    if OutInternalState <> nil then
+      OutInternalState ^ := Call.OutInternalState;
     if Head <> nil then
       Head^ := Call.OutHead;
     if Resp <> nil then

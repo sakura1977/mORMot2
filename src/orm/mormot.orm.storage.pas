@@ -2252,7 +2252,7 @@ var
   W: TJsonSerializer absolute aDest;
 begin
   aRec.GetJsonValues(W);
-  W.Add(',');
+  W.AddComma;
 end;
 
 function TRestStorageInMemory.AdaptSqlForEngineList(var SQL: RawUtf8): boolean;
@@ -2617,7 +2617,7 @@ begin
         if Expand then
           W.AddCR; // for better readability
         fValue[ndx].GetJsonValues(W);
-        W.Add(',');
+        W.AddComma;
       end;
       result := KnownRowsCount;
     end
@@ -2640,7 +2640,7 @@ begin
                   if j >= 0 then
                   begin
                     fValue[j].GetJsonValues(W);
-                    W.Add(',');
+                    W.AddComma;
                     inc(result);
                     if (Stmt.Limit > 0) and
                        (result >= Stmt.Limit) then
@@ -2660,7 +2660,7 @@ begin
                 if TOrmPropInfoRttiRawBlob(Prop).IsNull(fValue[ndx]) = IsNull then
                 begin
                   fValue[ndx].GetJsonValues(W);
-                  W.Add(',');
+                  W.AddComma;
                   inc(result);
                   if (Stmt.Limit > 0) and
                     (result >= Stmt.Limit) then
@@ -2893,11 +2893,15 @@ begin
   end;
   if binary then
   begin
-    fMaxID := FindMaxID(pointer(fValue), fCount);
-    fUnSortedID := false; // by SaveToBinary design
+    // IDs are sorted by SaveToBinary design
+    if fCount = 0 then
+      fMaxID := 0
+    else
+      fMaxID := fValue[fCount - 1].IDValue;
+    fUnSortedID := false;
   end
   else
-  // JSON may have been tampered
+    // JSON may have been tampered, so we actually ensure IDs are sorted
     fMaxID := FindMaxIDAndCheckSorted(pointer(fValue), fCount, fUnSortedID);
   InternalLog('LoadFrom% % count=% load=% index=%',
     [_CALLER[binary], fStoredClass, fCount, loaded.Stop, timer.Stop]);
@@ -2958,7 +2962,7 @@ begin
         else
           j := ndx[i];
         fValue[j].GetJsonValues(W);
-        W.Add(',');
+        W.AddComma;
       end;
       W.EndJsonObject(fCount, fCount);
     finally
