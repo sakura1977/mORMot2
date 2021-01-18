@@ -333,6 +333,7 @@ type
   PPersistentDynArray = ^TPersistentDynArray;
   TPointerDynArray = array of pointer;
   PPointerDynArray = ^TPointerDynArray;
+  TPointerDynArrayDynArray = array of TPointerDynArray;
   TPPointerDynArray = array of PPointer;
   PPPointerDynArray = ^TPPointerDynArray;
   TMethodDynArray = array of TMethod;
@@ -412,8 +413,8 @@ type
   TRawByteStringArray = array[0 .. MaxInt div SizeOf(RawByteString) - 1 ] of RawByteString;
   PRawByteStringArray = ^TRawByteStringArray;
   PShortStringArray = array[0 .. MaxInt div SizeOf(pointer) - 1 ] of PShortString;
-  PointerArray = array [0 .. MaxInt div SizeOf(Pointer) - 1 ] of Pointer;
-  PPointerArray = ^PointerArray;
+  TPointerArray = array [0 .. MaxInt div SizeOf(Pointer) - 1 ] of Pointer;
+  PPointerArray = ^TPointerArray;
   TClassArray = array[0 .. MaxInt div SizeOf(TClass) - 1 ] of TClass;
   PClassArray = ^TClassArray;
   TObjectArray = array [0 .. MaxInt div SizeOf(TObject) - 1 ] of TObject;

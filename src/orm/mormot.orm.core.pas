@@ -9822,7 +9822,7 @@ end;
 function TOrmPropInfoRtti.GetRttiCustomProp(Instance: TObject): PRttiCustomProp;
 begin
   if (fRttiCustomProp = nil) and (Instance <> nil) then
-    fRttiCustomProp := Rtti.RegisterClass(PClass(Instance)^).Props.Find(Name);
+    fRttiCustomProp := Rtti.RegisterClass(Instance).Props.Find(Name);
   result := fRttiCustomProp;
 end;
 
@@ -10771,14 +10771,16 @@ begin
   // generic case: copy also class content (create instances)
   S := GetInstance(Source);
   D := TOrmPropInfoRttiObject(DestInfo).GetInstance(Dest);
-  if fPropRtti.ValueRTLClass = TCollection then
-    CopyCollection(TCollection(S), TCollection(D))
-  else if fPropRtti.ValueRTLClass = TStrings then
-    CopyStrings(TStrings(S), TStrings(D))
-  else
-  begin
-    D.Free; // release previous instance
-    TOrmPropInfoRttiObject(DestInfo).SetInstance(Dest, CopyObject(S));
+  case fPropRtti.ValueRtlClass of
+    vcCollection:
+      CopyCollection(TCollection(S), TCollection(D));
+    vcStrings:
+      CopyStrings(TStrings(S), TStrings(D));
+    else
+      begin
+        D.Free; // release previous instance
+        TOrmPropInfoRttiObject(DestInfo).SetInstance(Dest, CopyObject(S));
+      end;
   end;
 end;
 

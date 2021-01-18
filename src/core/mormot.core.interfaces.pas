@@ -12,6 +12,7 @@ unit mormot.core.interfaces;
     - TInterfaceResolver TInjectableObject for IoC / Dependency Injection
     - TInterfaceStub TInterfaceMock for Dependency Mocking
     - TInterfaceMethodExecute for Method Execution from JSON
+    - SetWeak and SetWeakZero Weak Interface Reference
 
   *****************************************************************************
 }
@@ -2141,6 +2142,27 @@ procedure BackgroundExecuteInstanceRelease(instance: TObject;
 function PerThreadRunningContextAddress: pointer;
 
 
+{ ************ SetWeak and SetWeakZero Weak Interface Reference }
+
+/// assign a Weak interface reference, to be used for circular references
+// - by default setting aInterface.Field := aValue will increment the internal
+// reference count of the implementation object: when underlying objects reference
+// each other via interfaces (e.g. as parent and children), what causes the
+// reference count to never reach zero, therefore resulting in memory leaks
+// - to avoid this issue, use this procedure instead
+procedure SetWeak(aInterfaceField: PInterface; const aValue: IInterface);
+  {$ifdef FPC}inline;{$endif} // raise Internal Error C2170 on some Delphis
+
+/// assign a Weak interface reference, which will be ZEROed (set to nil) when
+// the associated aObject and/or aValue will be released
+// - this function is slower than SetWeak, but will avoid any GPF, by
+// maintaining a list of per-instance weak interface field references, and
+// hook the TObject.FreeInstance virtual method for proper zeroings
+// - thread-safe implementation, using per-class locked lists
+procedure SetWeakZero(aObject: TObject; aObjectInterfaceField: PInterface;
+  const aValue: IInterface);
+
+
 implementation
 
 
@@ -2238,7 +2260,7 @@ begin
     TRttiJsonLoad(ArgRtti.JsonLoad)(V, ctxt);
   if not ctxt.Valid then
   begin
-    FormatShort('I% failed parsing %:% from input JSON',
+    FormatShort('I% failed parsing %: % from input JSON',
       [MethodName, ParamName^, ArgTypeName^], tmp);
     if Error = nil then
       raise EInterfaceFactory.CreateUtf8('%', [tmp]);
@@ -2265,7 +2287,8 @@ begin
   end
   else
     // fallback to raw record RTTI binary serialization with Base64 encoding
-    BinarySaveBase64(V, ArgRtti.Info, false, rkRecordTypes);
+    WR.BinarySaveBase64(V, ArgRtti.Info, rkRecordTypes,
+      {magic=}true, {NoCrc32=}false);
 end;
 
 procedure TInterfaceMethodArgument.AsJson(var DestValue: RawUtf8; V: pointer);
@@ -2356,7 +2379,7 @@ begin
       WR.AddShorter('[],');
     imvRecord:
       begin
-        WR.AddVoidRecordJson(ArgRtti);
+        WR.AddVoidRecordJson(ArgRtti.Info);
         WR.AddComma;
       end;
     imvVariant:
@@ -3377,12 +3400,12 @@ class function TInterfaceFactory.Get(constref aGuid: TGUID): TInterfaceFactory;
 class function TInterfaceFactory.Get(const aGuid: TGUID): TInterfaceFactory;
 {$endif FPC_HAS_CONSTREF}
 var
-  n: PtrInt;
+  n: integer;
   F: ^TInterfaceFactory;
-  g: THash128Rec absolute aGuid;
   {$ifdef CPUX86NOTPIC}
   cache: TSynObjectListLocked absolute InterfaceFactoryCache;
   {$else}
+  GL: QWord;
   cache: TSynObjectListLocked;
   {$endif CPUX86NOTPIC}
 begin
@@ -3392,18 +3415,24 @@ begin
   if cache <> nil then
   begin
     cache.Safe.Lock; // no GPF is expected within the loop -> no try...finally
+    {$ifndef CPUX86NOTPIC}
+    GL := PHash128Rec(@aGuid)^.L;
+    {$endif CPUX86NOTPIC}
     F := pointer(cache.List);
     n := cache.Count;
     if n > 0 then
       repeat
-        with PHash128Rec(@F^.fInterfaceIID)^ do
-          if (g.L = L) and
-             (g.H = H) then
-          begin
-            result := F^;
-            cache.Safe.UnLock;
-            exit;
-          end;
+        {$ifdef CPUX86NOTPIC}
+        if (PHash128Rec(@F^.fInterfaceIID)^.L = PHash128Rec(@aGuid)^.L) and
+        {$else}
+        if (PHash128Rec(@F^.fInterfaceIID)^.L = GL) and
+        {$endif CPUX86NOTPIC}
+           (PHash128Rec(@F^.fInterfaceIID)^.H = PHash128Rec(@aGuid)^.H) then
+        begin
+          result := F^;
+          cache.Safe.UnLock;
+          exit;
+        end;
         inc(F);
         dec(n);
       until n = 0;
@@ -3566,9 +3595,9 @@ begin
           FormatUtf8(' (%)', [ToText(ArgRtti.Info^.Kind)], ErrorMsg);
         end;
       imvObject:
-        if ArgRtti.ValueClass = TList then
-          ErrorMsg := ' - use TObjectList instead'
-        else if (ArgRtti.ValueRTLClass = TCollection) and
+        if ArgRtti.ValueRtlClass = vcList then
+          ErrorMsg := ' - use TObjectList or T*ObjArray instead'
+        else if (ArgRtti.ValueRtlClass = vcCollection) and
                 (ArgRtti.CollectionItem = nil) then
           ErrorMsg :=
             ' - inherit from TInterfacedCollection or call Rtti.RegisterCollection() first'
@@ -3718,10 +3747,10 @@ begin
         imvSet:
           begin
             SizeInStorage := ArgRtti.Cache.EnumInfo.SizeInStorageAsSet;
-            if SizeInStorage = 0 then
+            if not (SizeInStorage in [1, 2, 4]) then
               raise EInterfaceFactory.CreateUtf8(
-                '%.Create: % set invalid SizeInStorage=% in %.% method % parameter',
-                [self, ArgTypeName^, SizeInStorage, fInterfaceName, URI, ParamName^]);
+                '%.Create: invalid SizeInStorage=% in %.% method % parameter for % set',
+                [self, SizeInStorage, fInterfaceName, URI, ParamName^, ArgTypeName^]);
           end;
         imvRecord:
           if ArgRtti.Size <= POINTERBYTES then
@@ -4481,7 +4510,7 @@ end;
 function ObjectFromInterface(const aValue: IInterface): TObject;
 begin
   if aValue <> nil then
-    // calling the RTL is slower but always working
+    // calling the RTL is the standard way, and fast enough on FPC
     result := aValue as TObject
   else
     result := nil;
@@ -4493,8 +4522,10 @@ function ObjectFromInterface(const aValue: IInterface): TObject;
     TObjectFromInterfaceStub = packed record
       Stub: cardinal;
       case integer of
-        0: (ShortJmp: shortint);
-        1: (LongJmp:  integer)
+        0:
+          (ShortJmp: shortint);
+        1:
+          (LongJmp:  integer)
     end;
     PObjectFromInterfaceStub = ^TObjectFromInterfaceStub;
 begin
@@ -4504,12 +4535,12 @@ begin
       // check first asm opcodes of VMT[0] entry, i.e. QueryInterface()
       $04244483:
         begin
-          result := pointer(PtrInt(aValue)+ShortJmp);
+          result := pointer(PtrInt(aValue) + ShortJmp);
           exit;
         end;
       $04244481:
         begin
-          result := pointer(PtrInt(aValue)+LongJmp);
+          result := pointer(PtrInt(aValue) + LongJmp);
           exit;
         end;
       else if Stub = PCardinal(@TInterfacedObjectFake.FakeQueryInterface)^ then
@@ -7196,6 +7227,108 @@ begin
 end;
 
 
+{ ************ SetWeak and SetWeakZero Weak Interface Reference }
+
+procedure SetWeak(aInterfaceField: PInterface; const aValue: IInterface);
+begin
+  PPointer(aInterfaceField)^ := Pointer(aValue);
+end;
+
+
+{ TSetWeakZero maintains a per-instance reference list }
+
+type
+  TSetWeakZero = class(TSynDictionary)
+  protected
+    fHookedFreeInstance: PtrUInt;
+  public
+    constructor Create(aClass: TClass); reintroduce;
+  end;
+
+type
+  TFreeInstanceMethod = procedure(self: TObject);
+
+procedure HookedFreeInstance(self: TObject);
+var
+  inst: TSetWeakZero;
+  i: PtrInt;
+  fields: PPointerArray; // holds a TPointerDynArray but avoid try..finally
+begin
+  inst := Rtti.Find(PClass(self)^).GetPrivateSlot(TSetWeakZero);
+  fields := nil;
+  if inst.FindAndExtract(self, fields) and
+     (fields <> nil) then
+  begin
+    // zeroing of weak references in object fields
+    for i := 0 to PDALen(PAnsiChar(fields) - _DALEN)^ + (_DAOFF - 1) do
+      fields[i] := nil;
+    FastDynArrayClear(@fields, nil);
+  end;
+  TFreeInstanceMethod(inst.fHookedFreeInstance)(self); // CleanupInstance + FreeMem()
+end;
+
+constructor TSetWeakZero.Create(aClass: TClass);
+var
+  P: PPtrUInt;
+begin
+  // key = instance TObject, value = dynarray field(s) to be zeroed
+  inherited Create(TypeInfo(TPointerDynArray), TypeInfo(TPointerDynArrayDynArray));
+  P := pointer(PAnsiChar(aClass) + vmtFreeInstance);
+  if P^ = PtrUInt(@HookedFreeInstance) then
+    // hook once - Create may be done twice in GetWeakZero() for SetPrivateSlot
+    exit;
+  fHookedFreeInstance := P^;
+  PatchCodePtrUInt(P, PtrUInt(@HookedFreeInstance));
+end;
+
+function GetWeakZero(aClass: TClass; CreateIfNonExisting: boolean): TSetWeakZero;
+var
+  rc: TRttiCustom;
+begin
+  rc := Rtti.RegisterClass(aClass);
+  result := rc.GetPrivateSlot(TSetWeakZero);
+  if (result = nil) and
+     CreateIfNonExisting then
+    result := rc.SetPrivateSlot(TSetWeakZero.Create(aClass));
+end;
+
+procedure SetWeakZero(aObject: TObject; aObjectInterfaceField: PInterface;
+  const aValue: IInterface);
+var
+  c: TObject;
+  o, v: TSetWeakZero;
+begin
+  if (aObjectInterfaceField = nil) or
+     (aObject = nil) or
+     (aObjectInterfaceField^ = aValue) then
+    exit;
+  o := GetWeakZero(PClass(aObject)^, {createifneeded=}false);
+  if aObjectInterfaceField^ <> nil then
+  begin
+    if (aValue = nil) and
+       (o <> nil) then
+      o.DeleteInArray(aObject, aObjectInterfaceField, SortDynArrayPointer);
+    c := ObjectFromInterface(aObjectInterfaceField^);
+    v := GetWeakZero(PClass(c)^, {createifneeded=}false);
+    if v <> nil then
+      v.DeleteInArray(c, aObjectInterfaceField, SortDynArrayPointer);
+    PPointer(aObjectInterfaceField)^ := nil;
+    if aValue = nil then
+      exit;
+  end;
+  if o = nil then
+    o := GetWeakZero(PClass(aObject)^, {createifneeded=}true);
+  o.AddInArrayForced(aObject, aObjectInterfaceField, SortDynArrayPointer);
+  if aValue <> nil then
+  begin
+    c := ObjectFromInterface(aValue);
+    v := GetWeakZero(PClass(c)^, {createifneeded=}true);
+    v.AddInArrayForced(c, aObjectInterfaceField, SortDynArrayPointer);
+  end;
+  PPointer(aObjectInterfaceField)^ := pointer(aValue);
+end;
+
+
 procedure InitializeUnit;
 begin
   {$ifdef CPUARM}
@@ -7214,6 +7347,7 @@ begin
   GlobalInterfaceResolution := nil; // also cleanup Instance fields
   DeleteCriticalSection(GlobalInterfaceResolutionLock);
 end;
+
 
 initialization
   InitializeUnit;

@@ -111,10 +111,9 @@ type
   // - another possibility is to register a TCollection/TCollectionItem pair
   // via a call to Rtti.RegisterCollection()
   TInterfacedCollection = class(TCollection)
-  protected
+  public
     /// you shall override this abstract method
     class function GetClass: TCollectionItemClass; virtual; abstract;
-  public
     /// this constructor will call GetClass to initialize the collection
     constructor Create; reintroduce; virtual;
   end;
@@ -554,8 +553,7 @@ type
   end;
 
   /// add locking methods to a TSynObjectList
-  // - this class overrides the regular TSynObjectList, and do not share any
-  // code with the TObjectListHashedAbstract/TObjectListHashed classes
+  // - this class overrides the regular TSynObjectList
   // - you need to call the Safe.Lock/Unlock methods by hand to protect the
   // execution of index-oriented methods (like Delete/Items/Count...): the
   // list content may change in the background, so using indexes is thread-safe
@@ -589,6 +587,7 @@ type
     property Safe: TSynLocker
       read fSafe;
   end;
+
 
   /// abstract persistent class with a 64-bit TID field
   // - class is e.g. the parent of our TOrm ORM classes
@@ -896,7 +895,8 @@ function BinarySave(Data: pointer; Dest: PAnsiChar; Info: PRttiInfo;
 {$endif PUREMORMOT2}
 
 /// binary persistence of any value using RTTI, into a RawByteString buffer
-function BinarySave(Data: pointer; Info: PRttiInfo; Kinds: TRttiKinds): RawByteString; overload;
+function BinarySave(Data: pointer; Info: PRttiInfo; Kinds: TRttiKinds;
+  NoCrc32Trailer: boolean = true): RawByteString; overload;
 
 /// binary persistence of any value using RTTI, into a TBytes buffer
 function BinarySaveBytes(Data: pointer; Info: PRttiInfo; Kinds: TRttiKinds): TBytes;
@@ -907,7 +907,7 @@ procedure BinarySave(Data: pointer; Info: PRttiInfo; Dest: TBufferWriter); overl
 
 /// binary persistence of any value using RTTI, into a TSynTempBuffer buffer
 procedure BinarySave(Data: pointer; var Dest: TSynTempBuffer;
-  Info: PRttiInfo; Kinds: TRttiKinds); overload;
+  Info: PRttiInfo; Kinds: TRttiKinds; NoCrc32Trailer: boolean = true); overload;
 
 /// binary persistence of any value using RTTI, into a Base64-encoded text
 // - contains a trailing crc32c hash before the actual data, as with mORMot 1.18
@@ -1186,6 +1186,7 @@ type
       {$ifdef HASINLINE}inline;{$endif}
     function FindIndex(const Item; aIndex: PIntegerDynArray;
       aCompare: TDynArraySortCompare): PtrInt;
+      {$ifdef HASINLINE}inline;{$endif}
     /// faster than RTL + handle T*ObjArray + ensure unique
     procedure InternalSetLength(OldLength, NewLength: PtrUInt);
   public
@@ -1229,6 +1230,7 @@ type
     /// initialize the wrapper with a one-dimension dynamic array
     // - low-level method, as called by Init() and InitSpecific()
     // - can be called directly for a very fast TDynArray initialization
+    // - warning: caller should check that aInfo.Kind=rkDynArray
     procedure InitRtti(aInfo: TRttiCustom; var aValue; aCountPointer: PInteger); overload;
       {$ifdef HASINLINE}inline;{$endif}
     /// initialize the wrapper with a one-dimension dynamic array
@@ -1800,7 +1802,8 @@ type
     // - returns the number of duplicated values found
     function ReHash(forced, forceGrow: boolean): integer;
     /// compute the hash of a given item
-    function HashOne(Item: pointer): cardinal; {$ifdef FPC_OR_DELPHIXE4}inline;{$endif}
+    function HashOne(Item: pointer): cardinal;
+      {$ifdef FPC_OR_DELPHIXE4}inline;{$endif}
       { not inlined to circumvent Delphi 2007=C1632, 2010=C1872, XE3=C2130 }
     /// retrieve the low-level hash of a given item
     function GetHashFromIndex(aIndex: PtrInt): cardinal;
@@ -2883,7 +2886,7 @@ end;
 constructor TSynPersistent.Create;
 begin
   if PPointer(PPAnsiChar(self)^ + vmtAutoTable)^ = nil then
-    Rtti.RegisterClass(PClass(self)^); // ensure TRttiCustom is set
+    Rtti.RegisterClass(self); // ensure TRttiCustom is set
 end;
 
 class function TSynPersistent.RttiCustom: TRttiCustom;
@@ -5580,7 +5583,7 @@ begin
     exit;
   end;
   result := 0;
-  rA := Rtti.RegisterClass(PClass(A)^); // faster than RegisterType(Info)
+  rA := Rtti.RegisterClass(A); // faster than RegisterType(Info)
   pA := pointer(rA.Props.List);
   if PClass(B)^.InheritsFrom(PClass(A)^) then
     // same (or similar/inherited) class -> compare per exact properties
@@ -5594,7 +5597,7 @@ begin
   else
   begin
     // compare properties by name
-    rB := Rtti.RegisterClass(PPointer(B)^);
+    rB := Rtti.RegisterClass(B);
     for i := 1 to rA.Props.Count do
     begin
       if pA^.Name <> '' then
@@ -5735,7 +5738,7 @@ begin
 end;
 
 function BinarySave(Data: pointer; Info: PRttiInfo;
-  Kinds: TRttiKinds): RawByteString;
+  Kinds: TRttiKinds; NoCrc32Trailer: boolean): RawByteString;
 var
   W: TBufferWriter;
   temp: TTextWriterStackBuffer; // 8KB
@@ -5747,8 +5750,13 @@ begin
   begin
     W := TBufferWriter.Create(temp{%H-});
     try
+      if not NoCrc32Trailer then
+        W.Write4(0);
       save(Data, W, Info);
       result := W.FlushTo;
+      if not NoCrc32Trailer then
+        PCardinal(result)^ :=
+          crc32c(0, @PCardinalArray(result)[1], length(result) - 4);
     finally
       W.Free;
     end;
@@ -5781,7 +5789,7 @@ begin
 end;
 
 procedure BinarySave(Data: pointer; var Dest: TSynTempBuffer; Info: PRttiInfo;
-  Kinds: TRttiKinds);
+  Kinds: TRttiKinds; NoCrc32Trailer: boolean);
 var
   W: TBufferWriter;
   save: TRttiBinarySave;
@@ -5793,6 +5801,8 @@ begin
     W := TBufferWriter.Create(TRawByteStringStream, @Dest.tmp,
       SizeOf(Dest.tmp) - 16); // Dest.Init() reserves 16 additional bytes
     try
+      if not NoCrc32Trailer then
+        W.Write4(0);
       save(Data, W, Info);
       if W.Stream.Position = 0 then
         // only Dest.tmp buffer was used -> just set the proper size
@@ -5800,6 +5810,9 @@ begin
       else
         // more than 4KB -> temporary allocation through the temp RawByteString
         Dest.Init(W.FlushTo);
+      if not NoCrc32Trailer then
+        PCardinal(Dest.buf)^ :=
+          crc32c(0, @PCardinalArray(Dest.buf)[1], Dest.len  - 4);
     finally
       W.Free;
     end;
@@ -7708,7 +7721,7 @@ begin
   if PtrUInt(Item^) = 0 then
     result := 0
   else
-    result := Hasher(0, Pointer(Item^), length(Item^) * 2);
+    result := Hasher(0, Pointer(Item^), Length(Item^) * 2);
 end;
 
 function HashSynUnicodeI(Item: PSynUnicode; Hasher: THasher): cardinal;
@@ -7883,7 +7896,7 @@ const
     nil, nil, nil, nil, nil, nil),
    (nil, nil, @HashByte, @HashByte, @HashInteger, @HashInt64, @HashInt64,
     @HashExtended, @HashInt64, @HashInteger, @HashInt64, @HashAnsiString,
-    @HashAnsiStringI, @HashAnsiString, nil, @HashInteger,
+    @HashAnsiStringI, @HashAnsiStringI, nil, @HashInteger,
     {$ifdef UNICODE} @HashSynUnicodeI {$else} @HashAnsiStringI {$endif},
     @HashSynUnicodeI, @HashInt64, @HashInt64, @Hash128, @Hash128, @Hash256, @Hash512,
     @HashInt64, @HashInt64, @HashSynUnicodeI, @HashInt64, @HashInt64,
@@ -8152,7 +8165,7 @@ begin
     if ndx < 0 then
       break; // stop at void entry
     if n = high(indexes) then // paranoid (typical 0..23 range)
-      RaiseFatalCollision('HashDelete indexes overflow', aHashCode);
+      RaiseFatalCollision('HashDelete indexes[] overflow', aHashCode);
     indexes[n] := ndx;
     inc(n);
   until false;

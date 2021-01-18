@@ -768,7 +768,7 @@ type
     // - if withMagic is TRUE, will write as '"\uFFF0base64encodedbinary"'
     // - is a wrapper around BinarySave() and WrBase64()
     procedure BinarySaveBase64(Data: pointer; Info: PRttiInfo;
-      Kinds: TRttiKinds; withMagic: boolean);
+      Kinds: TRttiKinds; withMagic: boolean; NoCrc32Trailer: boolean = true);
     /// append some values at once
     // - text values (e.g. RawUtf8) will be escaped as JSON
     procedure Add(const Values: array of const); overload;
@@ -844,12 +844,12 @@ type
     // twoEnumSetsAsTextInRecord or twoEnumSetsAsBooleanInRecord is set in
     // the instance CustomOptions
     // - returns the element size
-    function AddRecordJson(Value: pointer; RecordInfo: TRttiCustom;
+    function AddRecordJson(Value: pointer; RecordInfo: PRttiInfo;
       WriteOptions: TTextWriterWriteObjectOptions = []): PtrInt;
     /// append a void record content as UTF-8 encoded JSON or custom serialization
     // - this method will first create a void record (i.e. filled with #0 bytes)
     // then save its content with default or custom serialization
-    procedure AddVoidRecordJson(RecordInfo: TRttiCustom;
+    procedure AddVoidRecordJson(RecordInfo: PRttiInfo;
       WriteOptions: TTextWriterWriteObjectOptions = []);
     /// append a dynamic array content as UTF-8 encoded JSON array
     // - typical content could be
@@ -1328,7 +1328,8 @@ type
     iaFindAndDelete,
     iaFindAndUpdate,
     iaFindAndAddIfNotExisting,
-    iaAdd);
+    iaAdd,
+    iaAddForced);
 
   /// event called by TSynDictionary.ForEach methods to iterate over stored items
   // - if the implementation method returns TRUE, will continue the loop
@@ -1496,6 +1497,14 @@ type
     // - this method is thread-safe, since it will lock the instance
     function AddInArray(const aKey, aArrayValue;
       aCompare: TDynArraySortCompare): boolean;
+    /// add aArrayValue item within a dynamic-array value associated via aKey
+    // - expect the stored value to be a dynamic array itself
+    // - would search for aKey as primary key, create the entry if not found,
+    //  then use TDynArray.Add to add aArrayValue to the associated dynamic array
+    // - returns FALSE if Values is not a tkDynArray
+    // - this method is thread-safe, since it will lock the instance
+    function AddInArrayForced(const aKey, aArrayValue;
+      aCompare: TDynArraySortCompare): boolean;
     /// add once aArrayValue within a dynamic-array value associated via aKey
     // - expect the stored value to be a dynamic array itself
     // - would search for aKey as primary key, then use
@@ -1509,8 +1518,8 @@ type
     // - expect the stored value to be a dynamic array itself
     // - would search for aKey as primary key, then use TDynArray.FindAndDelete
     // to delete any aArrayValue match in the associated dynamic array
-    // - returns FALSE if Values is not a tkDynArray, or if aKey or aArrayValue were
-    // not found
+    // - returns FALSE if Values is not a tkDynArray, or if aKey or aArrayValue
+    // were not found
     // - this method is thread-safe, since it will lock the instance
     function DeleteInArray(const aKey, aArrayValue;
       aCompare: TDynArraySortCompare): boolean;
@@ -1846,16 +1855,16 @@ type
     // - for a dynamic array, will customize the item serialization callbacks
     // - replace deprecated TJsonSerializer.RegisterCustomSerializer() method
     class function RegisterCustomSerializer(Info: PRttiInfo;
-      const Reader: TOnRttiJsonRead; const Writer: TOnRttiJsonWrite): TRttiJSON; overload;
-    /// register a custom callback for JSON serialization of a given class
-    // - replace deprecated TJsonSerializer.RegisterCustomSerializer() method
-    class function RegisterCustomSerializer(ObjectClass: TClass;
-      const Reader: TOnClassJsonRead; const Writer: TOnClassJsonWrite): TRttiJSON; overload;
+      const Reader: TOnRttiJsonRead; const Writer: TOnRttiJsonWrite): TRttiJSON;
     /// unregister any custom callback for JSON serialization of a given TypeInfo()
     // - will also work after RegisterFromText()
-    class function UnRegisterCustomSerializer(Info: PRttiInfo): TRttiJSON; overload;
+    class function UnRegisterCustomSerializer(Info: PRttiInfo): TRttiJSON;
+    /// register a custom callback for JSON serialization of a given class
+    // - replace deprecated TJsonSerializer.RegisterCustomSerializer() method
+    class function RegisterCustomSerializerClass(ObjectClass: TClass;
+      const Reader: TOnClassJsonRead; const Writer: TOnClassJsonWrite): TRttiJSON;
     /// unregister any custom callback for JSON serialization of a given class
-    class function UnRegisterCustomSerializer(ObjectClass: TClass): TRttiJSON; overload;
+    class function UnRegisterCustomSerializerClass(ObjectClass: TClass): TRttiJSON;
     /// register TypeInfo() custom JSON serialization for a given dynamic
     // array or record
     // - to be used instead of homonomous Rtti.RegisterFromText() to supply
@@ -5391,7 +5400,7 @@ begin
         begin
           // need to retrieve the RTTI
           c := v;
-          ctxt.Info := Rtti.RegisterClass(v);
+          ctxt.Info := Rtti.RegisterClass(TClass(v));
           save := ctxt.Info.JsonSave;
         end;
         // this is where each object is serialized
@@ -5910,11 +5919,11 @@ begin
 end;
 
 procedure TTextWriter.BinarySaveBase64(Data: pointer; Info: PRttiInfo;
-  Kinds: TRttiKinds; withMagic: boolean);
+  Kinds: TRttiKinds; withMagic, NoCrc32Trailer: boolean);
 var
   temp: TSynTempBuffer;
 begin
-  BinarySave(Data, temp, Info, Kinds);
+  BinarySave(Data, temp, Info, Kinds, NoCrc32Trailer);
   WrBase64(temp.buf, temp.len, withMagic);
   temp.Done;
 end;
@@ -6853,29 +6862,27 @@ begin
   Add('}');
 end;
 
-function TTextWriter.AddRecordJson(Value: pointer; RecordInfo: TRttiCustom;
+function TTextWriter.AddRecordJson(Value: pointer; RecordInfo: PRttiInfo;
   WriteOptions: TTextWriterWriteObjectOptions): PtrInt;
 var
   ctxt: TJsonSaveContext;
 begin
-  if rcfHasNestedProperties in RecordInfo.Flags then
-  begin
+  {%H-}ctxt.Init(self, WriteOptions, Rtti.RegisterType(RecordInfo));
+  if rcfHasNestedProperties in ctxt.Info.Flags then
     // we know the fields from text definition
-    {%H-}ctxt.Init(self, WriteOptions, RecordInfo);
-    TRttiJsonSave(ctxt.Info.JsonSave)(Value, ctxt);
-  end
+    TRttiJsonSave(ctxt.Info.JsonSave)(Value, ctxt)
   else
     // fallback to binary serialization, trailing crc32c and Base64 encoding
-    BinarySaveBase64(Value, RecordInfo.Info, rkRecordTypes, {magic=}true);
-  result := RecordInfo.Size;
+    BinarySaveBase64(Value, RecordInfo, rkRecordTypes, {magic=}true);
+  result := ctxt.Info.Size;
 end;
 
-procedure TTextWriter.AddVoidRecordJson(RecordInfo: TRttiCustom;
+procedure TTextWriter.AddVoidRecordJson(RecordInfo: PRttiInfo;
   WriteOptions: TTextWriterWriteObjectOptions);
 var
   tmp: TSynTempBuffer;
 begin
-  tmp.InitZero(RecordInfo.Size);
+  tmp.InitZero(RecordInfo.RecordSize);
   AddRecordJson(tmp.buf, RecordInfo, WriteOptions);
   tmp.Done;
 end;
@@ -6904,7 +6911,7 @@ end;
 procedure TTextWriter.AddDynArrayJson(var DynArray: TDynArrayHashed;
   WriteOptions: TTextWriterWriteObjectOptions);
 begin
-  // needed if UNDIRECTDYNARRAY is set (Delphi 2009+)
+  // needed if UNDIRECTDYNARRAY is defined (Delphi 2009+)
   AddDynArrayJson(PDynArray(@DynArray)^, WriteOptions);
 end;
 
@@ -6913,6 +6920,9 @@ function TTextWriter.AddDynArrayJson(Value: pointer; Info: TRttiCustom;
 var
   temp: TDynArray;
 begin
+  if Info.Kind <> rkDynArray then
+    raise EDynArray.CreateUtf8('%.AddDynArrayJson: % is %, expected rkDynArray',
+      [self, Info.Name, ToText(Info.Kind)^]);
   temp.InitRtti(Info, Value^);
   AddDynArrayJson(temp, WriteOptions);
   result := temp.Info.Cache.ItemSize;
@@ -8961,7 +8971,8 @@ function TSynDictionary.InArray(const aKey, aArrayValue;
   aAction: TSynDictionaryInArray; aCompare: TDynArraySortCompare): boolean;
 var
   nested: TDynArray;
-  ndx: integer;
+  ndx: PtrInt;
+  new: pointer;
 begin
   result := false;
   if (fValues.Info.ArrayRtti = nil) or
@@ -8972,7 +8983,13 @@ begin
   try
     ndx := fKeys.FindHashed(aKey);
     if ndx < 0 then
-      exit;
+      if aAction <> iaAddForced then
+        exit
+      else
+      begin
+        new := nil;
+        ndx := Add(aKey, new);
+      end;
     nested.InitRtti(fValues.Info.ArrayRtti, fValues.ItemPtr(ndx)^);
     nested.Compare := aCompare;
     case aAction of
@@ -8984,7 +9001,7 @@ begin
         result := nested.FindAndUpdate(aArrayValue) >= 0;
       iaFindAndAddIfNotExisting:
         result := nested.FindAndAddIfNotExisting(aArrayValue) >= 0;
-      iaAdd:
+      iaAdd, iaAddForced:
         result := nested.Add(aArrayValue) >= 0;
     end;
   finally
@@ -9034,6 +9051,12 @@ function TSynDictionary.AddInArray(const aKey, aArrayValue;
   aCompare: TDynArraySortCompare): boolean;
 begin
   result := InArray(aKey, aArrayValue, iaAdd, aCompare);
+end;
+
+function TSynDictionary.AddInArrayForced(const aKey, aArrayValue;
+  aCompare: TDynArraySortCompare): boolean;
+begin
+  result := InArray(aKey, aArrayValue, iaAddForced, aCompare);
 end;
 
 function TSynDictionary.AddOnceInArray(const aKey, aArrayValue;
@@ -9531,6 +9554,11 @@ begin
         fClassNewInstance := @_New_Component
       else if C = TInterfacedCollection then
       begin
+        if fValueClass <> C then
+        begin
+          fCollectionItem := TInterfacedCollectionClass(fValueClass).GetClass;
+          fCollectionItemRtti := Rtti.RegisterClass(fCollectionItem);
+        end;
         fClassNewInstance := @_New_InterfacedCollection;
         fJsonSave := @_JS_TCollection;
         fJsonLoad := @_JL_TCollection;
@@ -9559,13 +9587,15 @@ begin
       end;
       break;
     until false;
-    if fValueRTLClass = TStrings then
-    begin
-      fJsonSave := @_JS_TStrings;
-      fJsonLoad := @_JL_TStrings;
-    end
-    else if fValueRTLClass = TList then
-      fJsonSave := @_JS_TList;
+    case fValueRtlClass of
+      vcStrings:
+        begin
+          fJsonSave := @_JS_TStrings;
+          fJsonLoad := @_JL_TStrings;
+        end;
+      vcList:
+        fJsonSave := @_JS_TList;
+    end;
   end
   else if rcfBinary in Flags then
   begin
@@ -9666,7 +9696,7 @@ begin
     result.SetParserType(result.Parser, result.ParserComplex);
 end;
 
-class function TRttiJson.RegisterCustomSerializer(ObjectClass: TClass;
+class function TRttiJson.RegisterCustomSerializerClass(ObjectClass: TClass;
   const Reader: TOnClassJsonRead; const Writer: TOnClassJsonWrite): TRttiJson;
 begin
   // without {$M+} ObjectClasss.ClassInfo=nil -> ensure fake RTTI is available
@@ -9685,7 +9715,7 @@ begin
     result.SetParserType(result.Parser, result.ParserComplex);
 end;
 
-class function TRttiJson.UnRegisterCustomSerializer(ObjectClass: TClass): TRttiJSON;
+class function TRttiJson.UnRegisterCustomSerializerClass(ObjectClass: TClass): TRttiJSON;
 begin
   // without {$M+} ObjectClasss.ClassInfo=nil -> ensure fake RTTI is available
   result := Rtti.RegisterClass(ObjectClass) as TRttiJson;
@@ -9933,7 +9963,7 @@ var
 begin
   if pointer(ObjectInstance) = nil then
     raise ERttiException.Create('JsonToObject(nil)');
-  ctxt.Init(From, Rtti.RegisterClass(PPointer(ObjectInstance)^), Options,
+  ctxt.Init(From, Rtti.RegisterClass(TObject(ObjectInstance)), Options,
     nil, TObjectListItemClass);
   TRttiJsonLoad(Ctxt.Info.JsonLoad)(@ObjectInstance, ctxt);
   Valid := ctxt.Valid;

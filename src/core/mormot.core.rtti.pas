@@ -1624,6 +1624,7 @@ type
   PRttiParserType = ^TRttiParserType;
   TRttiParserTypes = set of TRttiParserType;
   PRttiParserComplexType = ^TRttiParserComplexType;
+  TRttiParserComplexTypes = set of TRttiParserComplexType;
 
 const
   /// map a PtrInt type to the TRttiParserType set
@@ -1966,6 +1967,16 @@ type
     eeCurly,
     eeEndKeyWord);
 
+  /// the recognized raw RTL classes as identified in TRttiCustom.ValueRtlClass
+  TRttiValueClass = (
+    vcNone,
+    vcCollection,
+    vcStrings,
+    vcObjectList,
+    vcList,
+    vcException);
+
+
   /// allow to customize the process of a given TypeInfo/PRttiInfo
   // - a global list of TRttiCustom instances mapping TypeInfo() is maintained
   // in Rtti: TRttiCustomList
@@ -1976,13 +1987,15 @@ type
     fParser: TRttiParserType;
     fParserComplex: TRttiParserComplexType;
     fFlags: TRttiCustomFlags;
-    fPrivate: pointer; // used e.g. by mormot.orm.base.pas or mormot.core.log.pas
+    fPrivateSlot: pointer;
+    fPrivateSlots: TObjectDynArray;
     fArrayRtti: TRttiCustom;
     fFinalize: TRttiFinalizer;
     fCopy: TRttiCopier;
     fName: RawUtf8;
     fProps: TRttiCustomProps;
     fOwnedRtti: array of TRttiCustom;
+    fValueRtlClass: TRttiValueClass;
     fArrayFirstField: TRttiParserType;
     // used by mormot.core.json.pas
     fBinarySize: integer;
@@ -1995,10 +2008,11 @@ type
     // used by NoRttiSetAndRegister()
     fNoRttiInfo: TByteDynArray;
     // customize class process
-    fValueClass, fValueRTLClass: TClass;
+    fValueClass: TClass;
     fObjArrayClass: TClass;
     fCollectionItem: TCollectionItemClass;
     fCollectionItemRtti: TRttiCustom;
+    procedure SetValueClass(aClass: TClass; aInfo: PRttiInfo);
     // for TRttiCustomList.RegisterObjArray/RegisterBinaryType/RegisterFromText
     function SetObjArray(Item: TClass): TRttiCustom;
     function SetBinaryType(BinarySize: integer): TRttiCustom;
@@ -2054,6 +2068,14 @@ type
       {$ifdef HASINLINE}inline;{$endif}
     /// reset all stored Props[] and associated flags
     procedure PropsClear;
+    /// register once an instance of a given class per RTTI
+    // - thread-safe returns aObject, or an existing object (freeing aObject)
+    // - just like PrivateSlot property, but for as many class as needed
+    function SetPrivateSlot(aObject: TObject): pointer;
+    /// retrieve an instance of a given class per RTTI
+    // - previously registered by SetPrivateSlot
+    function GetPrivateSlot(aClass: TClass): pointer;
+      {$ifdef HASINLINE}inline;{$endif}
     /// low-level RTTI kind, taken from Rtti property
     property Kind: TRttiKind
       read fCache.Kind;
@@ -2105,8 +2127,8 @@ type
       read fValueClass;
     /// identify most common RTL inherited classes for special handling
     // - recognize TCollection TStrings TObjectList TList parents
-    property ValueRTLClass: TClass
-      read fValueRTLClass;
+    property ValueRtlClass: TRttiValueClass
+      read fValueRtlClass;
     /// store the class of a T*ObjArray dynamic array
     // - shortcut to ArrayRtti.Info.RttiClass.RttiClass
     // - used when rcfObjArray is defined in Flags
@@ -2119,8 +2141,9 @@ type
     /// opaque private instance used by mormot.orm.base.pas or mormot.core.log.pas
     // - stores e.g. the TOrmProperties ORM information of a TOrm,
     // or the TSynLogFamily of a TSynLog instance
+    // - is owned, as TObject, by this TRttiCustom
     property PrivateSlot: pointer
-      read fPrivate write fPrivate;
+      read fPrivateSlot write fPrivateSlot;
     /// opaque TRttiJsonLoad callback used by mormot.core.json.pas
     property JsonLoad: pointer
       read fJsonLoad write fJsonLoad;
@@ -2147,6 +2170,8 @@ type
            array[0..RTTICUSTOMTYPEINFOHASH] of TPointerDynArray;
     // used to release memory used by registered customizations
     Instances: array of TRttiCustom;
+    function GetByClass(ObjectClass: TClass): TRttiCustom;
+      {$ifdef HASINLINE}inline;{$endif}
     // called by FindOrRegister() for proper inlining
     function DoRegister(Info: PRttiInfo): TRttiCustom; overload;
     function DoRegister(ObjectClass: TClass): TRttiCustom; overload;
@@ -2206,7 +2231,13 @@ type
     // - returns existing or new TRttiCustom
     // - please call RegisterCollection for TCollection
     // - will use the ObjectClass vmtAutoTable slot for very fast O(1) lookup
-    function RegisterClass(ObjectClass: TClass): TRttiCustom;
+    function RegisterClass(ObjectClass: TClass): TRttiCustom; overload;
+      {$ifdef HASINLINE}inline;{$endif}
+    /// register a given class type, using its RTTI
+    // - returns existing or new TRttiCustom
+    // - please call RegisterCollection for TCollection
+    // - will use the ObjectClass vmtAutoTable slot for very fast O(1) lookup
+    function RegisterClass(aObject: TObject): TRttiCustom; overload;
       {$ifdef HASINLINE}inline;{$endif}
     /// register one or several RTTI TypeInfo()
     // - to ensure that those classes will be recognized by text definition
@@ -2319,7 +2350,7 @@ type
     // - you can access or register one type by using this default property:
     // ! Rtti.ByClass[TMyClass].Props.NameChanges(['old', 'new'])
     property ByClass[C: TClass]: TRttiCustom
-      read RegisterClass;
+      read GetByClass;
   end;
 
 
@@ -2518,6 +2549,8 @@ begin
       result := sizeof(word)
     else if result < 32 then
       result := sizeof(cardinal)
+    else if result < 64 then
+      result := sizeof(QWord)
     else
       result := 0;
   end
@@ -5415,8 +5448,10 @@ begin
       result := ptByte;
     rkWChar:
       result := ptWord;
-    rkMethod, rkInterface:
+    rkMethod:
       result := ptPtrInt;
+    rkInterface:
+      result := ptInterface;
     rkInteger:
       case Info^.RttiOrd of
         roSByte, roUByte:
@@ -6299,6 +6334,28 @@ begin
   result := PtrInt(@Message);
 end;
 
+procedure TRttiCustom.SetValueClass(aClass: TClass; aInfo: PRttiInfo);
+begin
+  fValueClass := aClass;
+  // set vmtAutoTable slot for efficient Find(TClass) - to be done asap
+  ClassPropertiesAdd(aClass, self, {freexist=}false);
+  if aClass.InheritsFrom(TCollection) then
+    fValueRtlClass := vcCollection
+  else if aClass.InheritsFrom(TStrings) then
+    fValueRtlClass := vcStrings
+  else if aClass.InheritsFrom(TObjectList) then
+    fValueRtlClass := vcObjectList
+  else if aClass.InheritsFrom(TList) then
+    fValueRtlClass := vcList
+  else if aClass.InheritsFrom(Exception) then
+    fValueRtlClass := vcException;
+  fProps.AddFromClass(aInfo, {includeparents=}true);
+  if fProps.Count = 0 then
+    if fValueRtlClass = vcException then
+      // manual registration of the Exception.Message property
+      fProps.Add(TypeInfo(string), EHook(nil).MessageOffset, 'Message');
+end;
+
 constructor TRttiCustom.Create(aInfo: PRttiInfo);
 var
   dummy: integer;
@@ -6315,24 +6372,7 @@ begin
   aInfo^.ComputeCache(fCache);
   case fCache.Kind of
     rkClass:
-      begin
-        fValueClass := aInfo.RttiClass.RttiClass;
-        // set vmtAutoTable slot for efficient Find(TClass) - to be done asap
-        ClassPropertiesAdd(fValueClass, self, {freexist=}false);
-        if fValueClass.InheritsFrom(TCollection) then
-          fValueRTLClass := TCollection
-        else if fValueClass.InheritsFrom(TStrings) then
-          fValueRTLClass := TStrings
-        else if fValueClass.InheritsFrom(TObjectList) then
-          fValueRTLClass := TObjectList
-        else if fValueClass.InheritsFrom(TList) then
-          fValueRTLClass := TList;
-        fProps.AddFromClass(aInfo, {includeparents=}true);
-        if fProps.Count = 0 then
-          if fValueClass.InheritsFrom(Exception) then
-            // manual registration of the Exception.Message property
-            fProps.Add(TypeInfo(string), EHook(nil).MessageOffset, 'Message');
-      end;
+      SetValueClass(aInfo.RttiClass.RttiClass, aInfo);
     rkRecord:
       fProps.SetFromRecordExtendedRtti(aInfo); // only for Delphi 2010+
     rkLString:
@@ -6386,7 +6426,8 @@ destructor TRttiCustom.Destroy;
 begin
   inherited Destroy;
   ObjArrayClear(fOwnedRtti);
-  TObject(fPrivate).Free;
+  TObject(fPrivateSlot).Free;
+  ObjArrayClear(fPrivateSlots);
 end;
 
 constructor TRttiCustom.CreateFromText(const RttiDefinition: RawUtf8);
@@ -6839,6 +6880,35 @@ begin
     include(fFlags, rcfHasNestedManagedProperties);
 end;
 
+function TRttiCustom.GetPrivateSlot(aClass: TClass): pointer;
+var
+  i: PtrInt;
+begin
+  for i := 0 to length(fPrivateSlots) - 1 do
+  begin
+    result := fPrivateSlots[i];
+    if PClass(result)^ = aClass then
+      exit;
+  end;
+  result := nil;
+end;
+
+function TRttiCustom.SetPrivateSlot(aObject: TObject): pointer;
+begin
+  Rtti.DoLock;
+  try
+    result := GetPrivateSlot(PClass(aObject)^);
+    if result = nil then
+    begin
+      ObjArrayAdd(fPrivateSlots, aObject);
+      result := aObject;
+    end
+    else
+      aObject.Free;
+  finally
+    Rtti.DoUnLock;
+  end;
+end;
 
 
 { TRttiCustomList }
@@ -7016,9 +7086,7 @@ begin
     EnterCriticalSection(Lock);
     try
       result := GlobalClass.Create(nil);
-      result.fValueClass := ObjectClass;
-      if ObjectClass.InheritsFrom(Exception) then
-        result.Props.Add(TypeInfo(string), EHook(nil).MessageOffset, 'Message');
+      result.SetValueClass(ObjectClass, nil);
       result.NoRttiSetAndRegister(ptClass, ToText(ObjectClass), nil, {noreg=}false);
       GetTypeData(result.fCache.Info)^.ClassType := ObjectClass;
     finally
@@ -7090,6 +7158,18 @@ begin
   result := PPointer(PAnsiChar(ObjectClass) + vmtAutoTable)^;
   if result = nil then
     result := DoRegister(ObjectClass);
+end;
+
+function TRttiCustomList.GetByClass(ObjectClass: TClass): TRttiCustom;
+begin
+  result := RegisterClass(ObjectClass);
+end;
+
+function TRttiCustomList.RegisterClass(aObject: TObject): TRttiCustom;
+begin
+  result := PPointer(PPAnsiChar(aObject)^ + vmtAutoTable)^;
+  if result = nil then
+    result := DoRegister(PClass(aObject)^);
 end;
 
 procedure TRttiCustomList.RegisterClasses(const ObjectClass: array of TClass);
@@ -7280,17 +7360,17 @@ begin
      (aTo <> nil) then
   begin
     cf := Rtti.RegisterClass(PClass(aFrom)^);
-    if (cf.ValueRTLClass = TCollection) and
+    if (cf.ValueRtlClass = vcCollection) and
        (PClass(aFrom)^ = PClass(aTo)^)  then
       // specific process of TCollection items
       CopyCollection(TCollection(aFrom), TCollection(aTo))
-    else if (cf.ValueRTLClass = TStrings) and
+    else if (cf.ValueRtlClass = vcStrings) and
             PClass(aTo)^.InheritsFrom(TStrings) then
       // specific process of TStrings items using VCL-style copy
       TStrings(aTo).Assign(TStrings(aFrom))
     else if PClass(aTo)^.InheritsFrom(PClass(aFrom)^) then
       // fast copy from RTTI properties of the common (or same) hierarchy
-      cf.Props.CopyProperties(pointer(aFrom), pointer(aTo))
+      cf.Props.CopyProperties(pointer(aTo), pointer(aFrom))
     else
     begin
       // no common inheritance -> slower lookup by property name
