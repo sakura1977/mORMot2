@@ -896,7 +896,7 @@ function BinarySave(Data: pointer; Dest: PAnsiChar; Info: PRttiInfo;
 
 /// binary persistence of any value using RTTI, into a RawByteString buffer
 function BinarySave(Data: pointer; Info: PRttiInfo; Kinds: TRttiKinds;
-  NoCrc32Trailer: boolean = true): RawByteString; overload;
+  WithCrc: boolean = false): RawByteString; overload;
 
 /// binary persistence of any value using RTTI, into a TBytes buffer
 function BinarySaveBytes(Data: pointer; Info: PRttiInfo; Kinds: TRttiKinds): TBytes;
@@ -907,14 +907,12 @@ procedure BinarySave(Data: pointer; Info: PRttiInfo; Dest: TBufferWriter); overl
 
 /// binary persistence of any value using RTTI, into a TSynTempBuffer buffer
 procedure BinarySave(Data: pointer; var Dest: TSynTempBuffer;
-  Info: PRttiInfo; Kinds: TRttiKinds; NoCrc32Trailer: boolean = true); overload;
+  Info: PRttiInfo; Kinds: TRttiKinds; WithCrc: boolean = false); overload;
 
 /// binary persistence of any value using RTTI, into a Base64-encoded text
-// - contains a trailing crc32c hash before the actual data, as with mORMot 1.18
-// RecordSaveBase64() - so is not the WrBase64() regular format, unless
-// NoCrc32Trailer is set to true
+// - contains a trailing crc32c hash before the actual data
 function BinarySaveBase64(Data: pointer; Info: PRttiInfo; UriCompatible: boolean;
-  Kinds: TRttiKinds; NoCrc32Trailer: boolean = false): RawUtf8;
+  Kinds: TRttiKinds; WithCrc: boolean = true): RawUtf8;
 
 /// unserialize any value from BinarySave() memory buffer, using RTTI
 function BinaryLoad(Data: pointer; Source: PAnsiChar; Info: PRttiInfo;
@@ -926,11 +924,10 @@ function BinaryLoad(Data: pointer; const Source: RawByteString; Info: PRttiInfo;
   Kinds: TRttiKinds; TryCustomVariants: PDocVariantOptions = nil): boolean; overload;
 
 /// unserialize any value from BinarySaveBase64() encoding, using RTTI
-// - contains a trailing crc32c hash before the actual data - so is not
-// the WrBase64() regular format, unless NoCrc32Trailer is true
+// - optionally contains a trailing crc32c hash before the actual data
 function BinaryLoadBase64(Source: PAnsiChar; Len: PtrInt; Data: pointer;
   Info: PRttiInfo; UriCompatible: boolean; Kinds: TRttiKinds;
-  NoCrc32Trailer: boolean = false; TryCustomVariants: PDocVariantOptions = nil): boolean;
+  WithCrc: boolean = true; TryCustomVariants: PDocVariantOptions = nil): boolean;
 
 
 /// check equality of two records by content
@@ -1236,11 +1233,12 @@ type
     /// initialize the wrapper with a one-dimension dynamic array
     // - low-level method, as called by Init() and InitSpecific()
     // - can be called directly for a very fast TDynArray initialization
+    // - warning: caller should check that aInfo.Kind=rkDynArray
     procedure InitRtti(aInfo: TRttiCustom; var aValue); overload;
       {$ifdef HASINLINE}inline;{$endif}
     /// fast initialize a wrapper for an existing dynamic array of the same type
     // - is slightly faster than
-    // ! Init(aAnother.ArrayType,aValue,nil);
+    // ! InitRtti(aAnother.Info, aValue, nil);
     procedure InitFrom(aAnother: PDynArray; var aValue);
       {$ifdef HASINLINE}inline;{$endif}
     /// define the reference to an external count integer variable
@@ -1321,7 +1319,8 @@ type
     function IndexOf(const Item; CaseInSensitive: boolean = true): PtrInt;
     /// search for an element value inside the dynamic array
     // - this method will use the Compare property function, or the supplied
-    // aCompare for the search; call IndexOf() if you want to use RTTI search
+    // aCompare for the search; if none of them are set, it will fallback to
+    // IndexOf() to perform a default case-sensitive RTTI search
     // - return the index found (0..Count-1), or -1 if Item was not found
     // - if the array is sorted, it will use fast O(log(n)) binary search
     // - if the array is not sorted, it will use slower O(n) iterating search
@@ -1329,22 +1328,20 @@ type
     // and must be a reference to a variable (you can't write Find(i+10) e.g.)
     function Find(const Item; aCompare: TDynArraySortCompare = nil): PtrInt; overload;
     /// search for an element value inside the dynamic array, from an external
-    // indexed lookup table
+    // aIndex[] lookup table - e.g. created by CreateOrderedIndex()
     // - return the index found (0..Count-1), or -1 if Item was not found
-    // - this method will use a custom comparison function, with an external
-    // integer table, as created by the CreateOrderedIndex() method: it allows
-    // multiple search orders in the same dynamic array content
     // - if an indexed lookup is supplied, it must already be sorted:
-    // this function will then use fast O(log(n)) binary search
-    // - if an indexed lookup is not supplied (i.e aIndex=nil),
-    // this function will use slower but accurate O(n) iterating search
-    // - warning; the lookup index should be synchronized if array content
-    // is modified (in case of adding or deletion)
+    // this function will then use fast O(log(n)) binary search over aCompare
+    // - if the indexed lookup is not correct (e.g. aIndex=nil), iterate O(n)
+    // using aCompare - it won't fallback to IndexOf() RTTI search
+    // - warning: the lookup aIndex[] should be synchronized if array content
+    // is modified (in case of addition or deletion)
     function Find(const Item; const aIndex: TIntegerDynArray;
       aCompare: TDynArraySortCompare): PtrInt; overload;
     /// search for an element value, then fill all properties if match
     // - this method will use the Compare property function for the search,
-    // or the supplied indexed lookup table and its associated compare function
+    // or the supplied indexed lookup table and its associated compare function,
+    // and fallback to case-sensitive RTTI search if none is defined
     // - if Item content matches, all Item fields will be filled with the record
     // - can be used e.g. as a simple dictionary: if Compare will match e.g. the
     // first string field (i.e. set to SortDynArrayString), you can fill the
@@ -1358,7 +1355,8 @@ type
       aCompare: TDynArraySortCompare = nil): integer;
     /// search for an element value, then delete it if match
     // - this method will use the Compare property function for the search,
-    // or the supplied indexed lookup table and its associated compare function
+    // or the supplied indexed lookup table and its associated compare function,
+    // and fallback to case-sensitive RTTI search if none is defined
     // - if Item content matches, this item will be deleted from the array
     // - can be used e.g. as a simple dictionary: if Compare will match e.g. the
     // first string field (i.e. set to SortDynArrayString), you can fill the
@@ -1372,7 +1370,8 @@ type
       aCompare: TDynArraySortCompare = nil): integer;
     /// search for an element value, then update the item if match
     // - this method will use the Compare property function for the search,
-    // or the supplied indexed lookup table and its associated compare function
+    // or the supplied indexed lookup table and its associated compare function,
+    // and fallback to case-sensitive RTTI search if none is defined
     // - if Item content matches, this item will be updated with the supplied value
     // - can be used e.g. as a simple dictionary: if Compare will match e.g. the
     // first string field (i.e. set to SortDynArrayString), you can fill the
@@ -1386,7 +1385,8 @@ type
       aCompare: TDynArraySortCompare = nil): integer;
     /// search for an element value, then add it if none matched
     // - this method will use the Compare property function for the search,
-    // or the supplied indexed lookup table and its associated compare function
+    // or the supplied indexed lookup table and its associated compare function,
+    // and fallback to case-sensitive RTTI search if none is defined
     // - if no Item content matches, the item will added to the array
     // - can be used e.g. as a simple dictionary: if Compare will match e.g. the
     // first string field (i.e. set to SortDynArrayString), you can fill the
@@ -5374,13 +5374,19 @@ end;
 
 function _BC_Record(A, B: pointer; Info: PRttiInfo; out Compared: integer): PtrInt;
 begin
-  Compared := _RecordCompare(A, B, Info, {caseinsens=}false);
+  if A = B then
+    Compared := 0
+  else
+    Compared := _RecordCompare(A, B, Info, {caseinsens=}false);
   result := Info^.RecordSize;
 end;
 
 function _BCI_Record(A, B: pointer; Info: PRttiInfo; out Compared: integer): PtrInt;
 begin
-  Compared := _RecordCompare(A, B, Info, {caseinsens=}true);
+  if A = B then
+    Compared := 0
+  else
+    Compared := _RecordCompare(A, B, Info, {caseinsens=}true);
   result := Info^.RecordSize;
 end;
 
@@ -5559,13 +5565,19 @@ end;
 
 function _BC_Variant(A, B: PVarData; Info: PRttiInfo; out Compared: integer): PtrInt;
 begin
-  Compared := SortDynArrayVariantComp(A^, B^, {caseinsens=}false);
+  if A = B then
+    Compared := 0
+  else
+    Compared := SortDynArrayVariantComp(A^, B^, {caseinsens=}false);
   result := SizeOf(variant);
 end;
 
 function _BCI_Variant(A, B: PVarData; Info: PRttiInfo; out Compared: integer): PtrInt;
 begin
-  Compared := SortDynArrayVariantComp(A^, B^, {caseinsens=}true);
+  if A = B then
+    Compared := 0
+  else
+    Compared := SortDynArrayVariantComp(A^, B^, {caseinsens=}true);
   result := SizeOf(variant);
 end;
 
@@ -5644,22 +5656,17 @@ var
   size, comp: integer;
   cmp: TRttiCompare;
 begin
-  if A <> B then
+  cmp := RTTI_COMPARE[CaseInSensitive, Info^.Kind];
+  if Assigned(cmp) and
+     (Info^.Kind in Kinds) then
   begin
-    cmp := RTTI_COMPARE[CaseInSensitive, Info^.Kind];
-    if Assigned(cmp) and
-       (Info^.Kind in Kinds) then
-    begin
-      size := cmp(A, B, Info, comp);
-      if PSize <> nil then
-        PSize^ := size; // warning: PSize not set if RTTI_COMPARE[] not available
-      result := comp = 0;
-    end
-    else
-      result := false; // no fair comparison possible
+    size := cmp(A, B, Info, comp);
+    if PSize <> nil then
+      PSize^ := size;
+    result := comp = 0;
   end
   else
-    result := true; // A=B at pointer level
+    result := false; // no fair comparison possible
 end;
 
 function BinaryCompare(A, B: pointer; Info: PRttiInfo;
@@ -5667,13 +5674,17 @@ function BinaryCompare(A, B: pointer; Info: PRttiInfo;
 var
   cmp: TRttiCompare;
 begin
-  result := 0; // A=B at pointer level, or no fair comparison possible
-  if (A = B) or
-     (Info = nil) then
-    exit;
-  cmp := RTTI_COMPARE[CaseInSensitive, Info^.Kind];
-  if Assigned(cmp) then
-    cmp(A, B, Info, result);
+  if (A <> B) and
+     (Info <> nil) then
+  begin
+    cmp := RTTI_COMPARE[CaseInSensitive, Info^.Kind];
+    if Assigned(cmp) then
+      cmp(A, B, Info, result)
+    else
+      result := ComparePointer(A, B);
+  end
+  else
+    result := 0;
 end;
 
 {$ifndef PUREMORMOT2}
@@ -5738,7 +5749,7 @@ begin
 end;
 
 function BinarySave(Data: pointer; Info: PRttiInfo;
-  Kinds: TRttiKinds; NoCrc32Trailer: boolean): RawByteString;
+  Kinds: TRttiKinds; WithCrc: boolean): RawByteString;
 var
   W: TBufferWriter;
   temp: TTextWriterStackBuffer; // 8KB
@@ -5750,11 +5761,11 @@ begin
   begin
     W := TBufferWriter.Create(temp{%H-});
     try
-      if not NoCrc32Trailer then
+      if WithCrc then
         W.Write4(0);
       save(Data, W, Info);
       result := W.FlushTo;
-      if not NoCrc32Trailer then
+      if WithCrc then
         PCardinal(result)^ :=
           crc32c(0, @PCardinalArray(result)[1], length(result) - 4);
     finally
@@ -5789,7 +5800,7 @@ begin
 end;
 
 procedure BinarySave(Data: pointer; var Dest: TSynTempBuffer; Info: PRttiInfo;
-  Kinds: TRttiKinds; NoCrc32Trailer: boolean);
+  Kinds: TRttiKinds; WithCrc: boolean);
 var
   W: TBufferWriter;
   save: TRttiBinarySave;
@@ -5801,7 +5812,7 @@ begin
     W := TBufferWriter.Create(TRawByteStringStream, @Dest.tmp,
       SizeOf(Dest.tmp) - 16); // Dest.Init() reserves 16 additional bytes
     try
-      if not NoCrc32Trailer then
+      if WithCrc then
         W.Write4(0);
       save(Data, W, Info);
       if W.Stream.Position = 0 then
@@ -5810,7 +5821,7 @@ begin
       else
         // more than 4KB -> temporary allocation through the temp RawByteString
         Dest.Init(W.FlushTo);
-      if not NoCrc32Trailer then
+      if WithCrc then
         PCardinal(Dest.buf)^ :=
           crc32c(0, @PCardinalArray(Dest.buf)[1], Dest.len  - 4);
     finally
@@ -5822,7 +5833,7 @@ begin
 end;
 
 function BinarySaveBase64(Data: pointer; Info: PRttiInfo; UriCompatible: boolean;
-  Kinds: TRttiKinds; NoCrc32Trailer: boolean): RawUtf8;
+  Kinds: TRttiKinds; WithCrc: boolean): RawUtf8;
 var
   W: TBufferWriter;
   temp: TTextWriterStackBuffer; // 8KB
@@ -5837,7 +5848,7 @@ begin
   begin
     W := TBufferWriter.Create(temp{%H-});
     try
-      if not NoCrc32Trailer then
+      if WithCrc then
         // placeholder for the trailing crc32c
         W.Write4(0);
       save(Data, W, Info);
@@ -5851,7 +5862,7 @@ begin
         tmp := W.FlushTo;
         P := pointer(tmp);
       end;
-      if not NoCrc32Trailer then
+      if WithCrc then
         // as mORMot 1.18 RecordSaveBase64()
         PCardinal(P)^ := crc32c(0, P + 4, len - 4);
       if UriCompatible then
@@ -5907,7 +5918,7 @@ end;
 
 function BinaryLoadBase64(Source: PAnsiChar; Len: PtrInt; Data: pointer;
   Info: PRttiInfo; UriCompatible: boolean; Kinds: TRttiKinds;
-  NoCrc32Trailer: boolean; TryCustomVariants: PDocVariantOptions): boolean;
+  WithCrc: boolean; TryCustomVariants: PDocVariantOptions): boolean;
 var
   temp: TSynTempBuffer;
   tempend: pointer;
@@ -5921,13 +5932,13 @@ begin
       result := Base64ToBin(Source, Len, temp);
     tempend := PAnsiChar(temp.buf) + temp.len;
     if result then
-      if NoCrc32Trailer then
-        result := (BinaryLoad(Data, temp.buf, Info, nil, tempend,
-            Kinds, TryCustomVariants) = tempend)
-      else
+      if WithCrc then
         result := (temp.len >= 4) and
           (crc32c(0, PAnsiChar(temp.buf) + 4, temp.len - 4) = PCardinal(temp.buf)^) and
           (BinaryLoad(Data, PAnsiChar(temp.buf) + 4, Info, nil, tempend,
+            Kinds, TryCustomVariants) = tempend)
+      else
+        result := (BinaryLoad(Data, temp.buf, Info, nil, tempend,
             Kinds, TryCustomVariants) = tempend);
     temp.Done;
   end
@@ -5982,7 +5993,7 @@ end;
 
 function RecordSaveBase64(const Rec; TypeInfo: PRttiInfo; UriCompatible: boolean): RawUtf8;
 begin
-  result := BinarySaveBase64(@Rec, TypeInfo, UriCompatible, rkRecordTYpes);
+  result := BinarySaveBase64(@Rec, TypeInfo, UriCompatible, rkRecordTypes);
 end;
 
 function RecordLoad(var Rec; Source: PAnsiChar; TypeInfo: PRttiInfo;
@@ -6005,7 +6016,7 @@ function RecordLoadBase64(Source: PAnsiChar; Len: PtrInt; var Rec;
   TypeInfo: PRttiInfo; UriCompatible: boolean; TryCustomVariants: PDocVariantOptions): boolean;
 begin
   result := BinaryLoadBase64(Source, Len, @Rec, TypeInfo, UriCompatible,
-    rkRecordTypes, {notrailer=}false, TryCustomVariants);
+    rkRecordTypes, {withcrc=}true, TryCustomVariants);
 end;
 
 
@@ -6645,6 +6656,57 @@ begin
   result := -1;
 end;
 
+function TDynArray.Find(const Item; aCompare: TDynArraySortCompare): PtrInt;
+var
+  n, L: PtrInt;
+  cmp: integer;
+  P: PAnsiChar;
+begin
+  n := GetCount;
+  if not Assigned(aCompare) then
+    aCompare := fCompare;
+  if n > 0 then
+    if Assigned(aCompare) then
+    begin
+      dec(n);
+      P := fValue^;
+      if fSorted and
+         (@aCompare = @fCompare) and
+         (n > 10) then
+      begin
+        // array is sorted -> use fast O(log(n)) binary search
+        L := 0;
+        repeat
+          result := (L + n) shr 1;
+          cmp := aCompare(P[result * fInfo.Cache.ItemSize], Item);
+          if cmp = 0 then
+            exit;
+          if cmp < 0 then
+            L := result + 1
+          else
+            n := result - 1;
+        until L > n;
+      end
+      else
+      begin
+        // array is very small, or not sorted -> O(n) iterative search
+        L := fInfo.Cache.ItemSize;
+        for result := 0 to n do
+          if aCompare(P^, Item) = 0 then
+            exit
+          else
+            inc(P, L);
+      end;
+    end
+    else
+    begin
+      // aCompare/fCompare not set -> fallback to case-sensitive IndexOf()
+      result := IndexOf(Item, {caseinsens=}false);
+      exit;
+    end;
+  result := -1;
+end;
+
 function TDynArray.FindIndex(const Item; aIndex: PIntegerDynArray;
   aCompare: TDynArraySortCompare): PtrInt;
 begin
@@ -6658,7 +6720,8 @@ function TDynArray.FindAndFill(var Item; aIndex: PIntegerDynArray;
   aCompare: TDynArraySortCompare): integer;
 begin
   result := FindIndex(Item, aIndex, aCompare);
-  if result >= 0 then // if found, fill Item with the matching item
+  if result >= 0 then
+    // if found, fill Item with the matching item
     ItemCopy(PAnsiChar(fValue^) + (result * fInfo.Cache.ItemSize), @Item);
 end;
 
@@ -6667,6 +6730,7 @@ function TDynArray.FindAndDelete(const Item; aIndex: PIntegerDynArray;
 begin
   result := FindIndex(Item, aIndex, aCompare);
   if result >= 0 then
+    // if found, delete the item from the array
     Delete(result);
 end;
 
@@ -6674,7 +6738,8 @@ function TDynArray.FindAndUpdate(const Item; aIndex: PIntegerDynArray;
   aCompare: TDynArraySortCompare): integer;
 begin
   result := FindIndex(Item, aIndex, aCompare);
-  if result >= 0 then // if found, fill Elem with the matching item
+  if result >= 0 then
+    // if found, fill Elem with the matching item
     ItemCopy(@Item, PAnsiChar(fValue^) + (result * fInfo.Cache.ItemSize));
 end;
 
@@ -6683,52 +6748,8 @@ function TDynArray.FindAndAddIfNotExisting(const Item; aIndex: PIntegerDynArray;
 begin
   result := FindIndex(Item, aIndex, aCompare);
   if result < 0 then
-    Add(Item); // -1 will mark success
-end;
-
-function TDynArray.Find(const Item; aCompare: TDynArraySortCompare): PtrInt;
-var
-  n, L: PtrInt;
-  cmp: integer;
-  P: PAnsiChar;
-begin
-  n := GetCount;
-  if not Assigned(aCompare) then
-    aCompare := fCompare;
-  if Assigned(aCompare) and
-     (n > 0) then
-  begin
-    dec(n);
-    P := fValue^;
-    if fSorted and
-       (@aCompare = @fCompare) and
-       (n > 10) then
-    begin
-      // array is sorted -> use fast O(log(n)) binary search
-      L := 0;
-      repeat
-        result := (L + n) shr 1;
-        cmp := aCompare(P[result * fInfo.Cache.ItemSize], Item);
-        if cmp = 0 then
-          exit;
-        if cmp < 0 then
-          L := result + 1
-        else
-          n := result - 1;
-      until L > n;
-    end
-    else
-    begin
-      // array is very small, or not sorted
-      L := fInfo.Cache.ItemSize;
-      for result := 0 to n do
-        if aCompare(P^, Item) = 0 then // O(n) search
-          exit
-        else
-          inc(P, L);
-    end;
-  end;
-  result := -1;
+    // -1 will mark success
+    Add(Item);
 end;
 
 function TDynArray.FindAllSorted(const Item;

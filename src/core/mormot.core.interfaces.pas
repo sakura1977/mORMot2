@@ -1832,7 +1832,7 @@ type
     optNoLogInput,
     optNoLogOutput,
     optErrorOnMissingParam,
-    optForceStandardJSON,
+    optForceStandardJson,
     optDontStoreVoidJson,
     optIgnoreException);
 
@@ -1866,7 +1866,7 @@ type
   // is defined to reject the call
   // - by default, it wil check for the client user agent, and use extended
   // JSON if none is found (e.g. from WebSockets), or if it contains 'mORMot':
-  // you can set optForceStandardJSON to ensure standard JSON is always returned
+  // you can set optForceStandardJson to ensure standard JSON is always returned
   // - optDontStoreVoidJson will reduce the JSON object verbosity by not writing
   // void (e.g. 0 or '') properties when serializing objects and records
   // - any exceptions will be propagated during execution, unless
@@ -2254,7 +2254,7 @@ begin
               (ctxt.Value <> nil) and
               (PCardinal(ctxt.Value)^ and $ffffff = JSON_BASE64_MAGIC_C) and
               BinaryLoadBase64(pointer(ctxt.Value + 3), ctxt.ValueLen - 3,
-                V, ctxt.Info.Info, {uri=}false, rkRecordTypes)
+                V, ctxt.Info.Info, {uri=}false, rkRecordTypes, {withcrc=}false)
   else
     // use direct TRttiJson unserialization
     TRttiJsonLoad(ArgRtti.JsonLoad)(V, ctxt);
@@ -2288,7 +2288,7 @@ begin
   else
     // fallback to raw record RTTI binary serialization with Base64 encoding
     WR.BinarySaveBase64(V, ArgRtti.Info, rkRecordTypes,
-      {magic=}true, {NoCrc32=}false);
+      {magic=}true, {withcrc=}false);
 end;
 
 procedure TInterfaceMethodArgument.AsJson(var DestValue: RawUtf8; V: pointer);
@@ -5838,7 +5838,7 @@ function TInterfaceStub.Invoke(const aMethod: TInterfaceMethod;
 var
   ndx: cardinal;
   rule: integer;
-  ExecutesCtxtJSON: TOnInterfaceStubExecuteParamsJson;
+  ExecutesCtxtJson: TOnInterfaceStubExecuteParamsJson;
   ExecutesCtxtVariant: TOnInterfaceStubExecuteParamsVariant;
   log: TInterfaceStubLog;
 begin
@@ -5882,14 +5882,14 @@ begin
           case Kind of
             isExecutesJson:
               begin
-                ExecutesCtxtJSON := TOnInterfaceStubExecuteParamsJson.Create(
+                ExecutesCtxtJson := TOnInterfaceStubExecuteParamsJson.Create(
                   self, @aMethod, aParams, Values);
                 try
-                  TOnInterfaceStubExecuteJson(Execute)(ExecutesCtxtJSON);
-                  result := not ExecutesCtxtJSON.Failed;
-                  log.CustomResults := ExecutesCtxtJSON.result;
+                  TOnInterfaceStubExecuteJson(Execute)(ExecutesCtxtJson);
+                  result := not ExecutesCtxtJson.Failed;
+                  log.CustomResults := ExecutesCtxtJson.result;
                 finally
-                  ExecutesCtxtJSON.Free;
+                  ExecutesCtxtJson.Free;
                 end;
               end;
             isExecutesVariant:
@@ -7261,7 +7261,7 @@ begin
   begin
     // zeroing of weak references in object fields
     for i := 0 to PDALen(PAnsiChar(fields) - _DALEN)^ + (_DAOFF - 1) do
-      fields[i] := nil;
+      PPointer(fields[i])^ := nil;
     FastDynArrayClear(@fields, nil);
   end;
   TFreeInstanceMethod(inst.fHookedFreeInstance)(self); // CleanupInstance + FreeMem()
@@ -7307,23 +7307,23 @@ begin
   begin
     if (aValue = nil) and
        (o <> nil) then
-      o.DeleteInArray(aObject, aObjectInterfaceField, SortDynArrayPointer);
+      o.DeleteInArray(aObject, aObjectInterfaceField);
     c := ObjectFromInterface(aObjectInterfaceField^);
     v := GetWeakZero(PClass(c)^, {createifneeded=}false);
     if v <> nil then
-      v.DeleteInArray(c, aObjectInterfaceField, SortDynArrayPointer);
+      v.DeleteInArray(c, aObjectInterfaceField);
     PPointer(aObjectInterfaceField)^ := nil;
     if aValue = nil then
       exit;
   end;
   if o = nil then
     o := GetWeakZero(PClass(aObject)^, {createifneeded=}true);
-  o.AddInArrayForced(aObject, aObjectInterfaceField, SortDynArrayPointer);
+  o.AddInArrayForced(aObject, aObjectInterfaceField);
   if aValue <> nil then
   begin
     c := ObjectFromInterface(aValue);
     v := GetWeakZero(PClass(c)^, {createifneeded=}true);
-    v.AddInArrayForced(c, aObjectInterfaceField, SortDynArrayPointer);
+    v.AddInArrayForced(c, aObjectInterfaceField);
   end;
   PPointer(aObjectInterfaceField)^ := pointer(aValue);
 end;

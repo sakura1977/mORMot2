@@ -159,11 +159,11 @@ begin
   if CheckFailed(Resp <> nil) then
     exit;
   try
-    Check(Resp.InheritsFrom(TOrmTableJSON));
+    Check(Resp.InheritsFrom(TOrmTableJson));
     CheckEqual(Resp.RowCount, 11011);
-    CheckHash(TOrmTableJSON(Resp).PrivateInternalCopy, 4045204160);
-    //FileFromString(TOrmTableJSON(Resp).PrivateInternalCopy, 'internalfull2.parsed');
-    //FileFromString(Resp.GetODSDocument,'people.ods');
+    CheckHash(TOrmTableJson(Resp).PrivateInternalCopy, 4045204160);
+    //FileFromString(TOrmTableJson(Resp).PrivateInternalCopy, 'internalfull2.parsed');
+    //FileFromString(Resp.GetODSDocument, WorkDir + 'people.ods');
   finally
     Resp.Free;
   end;
@@ -190,7 +190,7 @@ begin
     Server := TRestHttpServer.Create(HTTP_DEFAULTPORT, [DataBase], '+',
       HTTP_DEFAULT_MODE, 16, secSynShaAes);
     fRunConsole := fRunConsole + 'using ' + UTF8ToString(Server.HttpServer.APIVersion);
-    Database.NoAJAXJSON := true; // expect not expanded JSON from now on
+    Database.NoAjaxJson := true; // expect not expanded JSON from now on
   except
     on E: Exception do
       Check(false, E.Message);
@@ -260,8 +260,8 @@ begin
   if CheckFailed(Resp <> nil) then
     exit;
   CheckEqual(Resp.RowCount, 113);
-  CheckHash(TOrmTableJSON(Resp).PrivateInternalCopy, $8D727024);
-  onelen := length(TOrmTableJSON(Resp).PrivateInternalCopy);
+  CheckHash(TOrmTableJson(Resp).PrivateInternalCopy, $8D727024);
+  onelen := length(TOrmTableJson(Resp).PrivateInternalCopy);
   CheckEqual(onelen, 4818);
   Resp.Free;
 {$ifdef WTIME}
@@ -340,10 +340,10 @@ begin
     if CheckFailed(Resp <> nil) then
       exit;
     try
-      Check(Resp.InheritsFrom(TOrmTableJSON));
+      Check(Resp.InheritsFrom(TOrmTableJson));
       // every answer contains 113 rows, for a total JSON size of 4803 bytes
       CheckEqual(Resp.RowCount, 113);
-      CheckHash(TOrmTableJSON(Resp).PrivateInternalCopy, $8D727024);
+      CheckHash(TOrmTableJson(Resp).PrivateInternalCopy, $8D727024);
     finally
       Resp.Free;
     end;
@@ -439,7 +439,7 @@ begin
       begin
         Model := TOrmModel.Create([TOrmPeople], 'root' + Int32ToUtf8(i));
         DataBase := TRestServerDB.Create(Model, SQLITE_MEMORY_DATABASE_NAME);
-        Database.NoAJAXJSON := true; // expect not expanded JSON from now on
+        Database.NoAjaxJson := true; // expect not expanded JSON from now on
         DataBase.Server.CreateMissingTables;
       end;
     // launch one HTTP server for all TRestServerDB instances
@@ -526,7 +526,7 @@ begin
     DataBase.DB, TRestServerTest);
   ClientTest;
   Client.CallBackGet('stat', ['withall', true], stats);
-  FileFromString(JSONReformat(stats), 'statsClientServer.json');
+  FileFromString(JSONReformat(stats), WorkDir + 'statsClientServer.json');
   FreeAndNil(Client);
 end;
 

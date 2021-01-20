@@ -1773,7 +1773,7 @@ begin
     if StatusCodeIsSuccess(ErrorCode) then
       fLastErrorMessage := ''
     else
-      fLastErrorMessage := StatusCodeToReason(ErrorCode);
+      StatusCodeToReason(ErrorCode, fLastErrorMessage);
   end
   else
   begin
@@ -2270,7 +2270,7 @@ begin
     end;
     if not StatusCodeIsSuccess(Call.OutStatus) then
     begin
-      StatusMsg := StatusCodeToReason(Call.OutStatus);
+      StatusCodeToReason(Call.OutStatus, StatusMsg);
       if Call.OutBody = '' then
         fLastErrorMessage := StatusMsg
       else
@@ -2472,7 +2472,7 @@ var
   json: RawUtf8;
 begin
   result := (CallBackGet('stat', ['findservice', aServiceName], json) = HTTP_SUCCESS) and
-    (DynArrayLoadJson(URI, pointer(json), TypeInfo(TRestServerUriDynArray)) <> nil);
+    (DynArrayLoadJson(URI, pointer({%H-}json), TypeInfo(TRestServerUriDynArray)) <> nil);
 end;
 
 function TRestClientUri.ServiceRetrieveAssociated(const aInterface: TGUID;

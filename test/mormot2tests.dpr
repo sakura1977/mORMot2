@@ -112,6 +112,7 @@ uses
   test.orm.sqlite3         in '.\test.orm.sqlite3.pas',
   test.orm.extdb           in '.\test.orm.extdb.pas',
   test.orm.network         in '.\test.orm.network.pas',
+  test.soa.core            in '.\test.soa.core.pas',
   test.soa.network         in '.\test.soa.network.pas';
 
 
@@ -127,34 +128,38 @@ type
 
 procedure TIntegrationTests.CoreUnits;
 begin
+  //exit;
   AddCase([
   //
-  TTestCoreBase, TTestCoreProcess, TTestCoreCrypto, TTestCoreEcc, TTestCoreCompression, TNetworkProtocols
+  TTestCoreBase, TTestCoreProcess, TTestCoreCrypto, TTestCoreEcc,
+  TTestCoreCompression, TNetworkProtocols
   ]);
 end;
 
 procedure TIntegrationTests.ORM;
 begin
+  //exit;
   AddCase([
     //
-    TTestOrmCore, TTestSqliteFile, TTestSqliteFileWAL, TTestSqliteMemory,
-    TTestExternalDatabase, TTestClientServerAccess
-    //
+    TTestOrmCore, TTestSqliteFile, TTestSqliteFileWAL, TTestSqliteFileMemoryMap,
+    TTestSqliteMemory, TTestExternalDatabase, TTestClientServerAccess
   ]);
 end;
 
 procedure TIntegrationTests.SOA;
 begin
+  //exit;
   AddCase([
     //
-    TTestBidirectionalRemoteConnection
+    TTestServiceOrientedArchitecture, TTestBidirectionalRemoteConnection
   ]);
 end;
 
-
-
 begin
-  TIntegrationTests.RunAsConsole('mORMot2 Regression Tests', LOG_VERBOSE);
+  TIntegrationTests.RunAsConsole('mORMot2 Regression Tests',
+    //LOG_VERBOSE,
+    LOG_FILTER[lfExceptions],
+    [], ExeVersion.ProgramFilePath + 'data');
   {$ifdef FPC_X64MM}
   WriteHeapStatus(' ', 16, 8, {compileflags=}true);
   {$endif FPC_X64MM}

@@ -682,6 +682,10 @@ procedure AppendShortInt64(value: Int64; var dest: shortstring);
 procedure AppendShortChar(chr: AnsiChar; var dest: shortstring);
   {$ifdef FPC} inline; {$endif}
 
+/// simple concatenation of a shortstring text into a shorstring
+procedure AppendShort(const src: shortstring; var dest: shortstring);
+  {$ifdef FPC} inline; {$endif}
+
 /// simple concatenation of a #0 ending text into a shorstring
 // - if Len is < 0, will use StrLen(buf)
 procedure AppendShortBuffer(buf: PAnsiChar; len: integer; var dest: shortstring);
@@ -2413,6 +2417,7 @@ function PosExChar(Chr: AnsiChar; const Str: RawUtf8): PtrInt;
 /// fast retrieve the position of a given character in a #0 ended buffer
 // - will use fast SSE2 asm on x86_64
 function PosChar(Str: PUtf8Char; Chr: AnsiChar): PUtf8Char;
+  {$ifndef CPUX64}{$ifdef FPC}inline;{$endif}{$endif}
 
 {$ifndef PUREMORMOT2}
 /// fast dedicated RawUtf8 version of Trim()
@@ -2483,13 +2488,14 @@ function IsAnsiCompatible(const Text: RawByteString): boolean; overload;
 function IsAnsiCompatibleW(PW: PWideChar; Len: PtrInt): boolean; overload;
 
 
-/// extract file name, without its extension
-// - may optionally return the associated extension, as '.ext'
+/// compute the file name, including its path if supplied, but without its extension
+// - e.g. GetFileNameWithoutExt('/var/toto.ext') = '/var/toto'
+// - may optionally return the extracted extension, as '.ext'
 function GetFileNameWithoutExt(const FileName: TFileName;
   Extension: PFileName = nil): TFileName;
 
 /// creates a directory if not already existing
-// - returns the full expanded directory name, including trailing backslash
+// - returns the full expanded directory name, including trailing path delimiter
 // - returns '' on error, unless RaiseExceptionOnCreationFailure is true
 function EnsureDirectoryExists(const Directory: TFileName;
   RaiseExceptionOnCreationFailure: boolean = false): TFileName;
@@ -3656,11 +3662,17 @@ type
   /// dynamic array of timestamps stored as millisecond-based Unix Time
   TUnixMSTimeDynArray = array of TUnixMSTime;
 
-/// retrieve the HTTP reason text from a code
+/// retrieve the HTTP reason text from its integer code
 // - e.g. StatusCodeToReason(200)='OK'
 // - as defined in http://www.w3.org/Protocols/rfc2616/rfc2616-sec10.html
-// - see also StatusCodeToErrorMsg() from mormot.core.text
-function StatusCodeToReason(Code: cardinal): RawUtf8;
+// - see also StatusCodeToErrorMsg() from mormot.core.text if you need
+// the HTTP error as both integer and text, returned as shortstring
+function StatusCodeToReason(Code: cardinal): RawUtf8; overload;
+  {$ifdef HASINLINE}inline;{$endif}
+
+/// retrieve the HTTP reason text from its integer code
+// - as defined in http://www.w3.org/Protocols/rfc2616/rfc2616-sec10.html
+procedure StatusCodeToReason(Code: cardinal; var Reason: RawUtf8); overload;
 
 /// returns true for successful HTTP status codes, i.e. in 200..399 range
 // - will map mainly SUCCESS (200), CREATED (201), NOCONTENT (204),
@@ -4030,12 +4042,23 @@ begin
   FastSetString(result, @source[1], ord(source[0]));
 end;
 
+procedure AppendShort(const src: shortstring; var dest: shortstring);
+var
+  len: PtrInt;
+begin
+  len := ord(src[0]);
+  if len + ord(dest[0]) > 255 then
+    exit;
+  MoveFast(src[1], dest[ord(dest[0]) + 1], len);
+  inc(dest[0], len);
+end;
+
 procedure AppendShortInteger(value: integer; var dest: shortstring);
 var
   temp: shortstring;
 begin
   str(value, temp);
-  AppendShortBuffer(@temp[1], ord(temp[0]), dest);
+  AppendShort(temp, dest);
 end;
 
 procedure AppendShortInt64(value: Int64; var dest: shortstring);
@@ -4043,7 +4066,7 @@ var
   temp: shortstring;
 begin
   str(value, temp);
-  AppendShortBuffer(@temp[1], ord(temp[0]), dest);
+  AppendShort(temp, dest);
 end;
 
 procedure AppendShortChar(chr: AnsiChar; var dest: shortstring);
@@ -5503,7 +5526,8 @@ var
   n: PtrInt;
 begin
   n := Length(Values);
-  if NoDuplicates and IntegerScanExists(pointer(Values), n, Value) then
+  if NoDuplicates and
+     IntegerScanExists(pointer(Values), n, Value) then
   begin
     result := false;
     exit;
@@ -5524,7 +5548,8 @@ end;
 function AddInteger(var Values: TIntegerDynArray; var ValuesCount: integer;
   Value: integer; NoDuplicates: boolean): boolean;
 begin
-  if NoDuplicates and IntegerScanExists(pointer(Values), ValuesCount, Value) then
+  if NoDuplicates and
+     IntegerScanExists(pointer(Values), ValuesCount, Value) then
   begin
     result := false;
     exit;
@@ -9033,9 +9058,8 @@ begin
     if c = #0 then
       exit
     else if c = Chr then
-      break
-    else
-      inc(Str);
+      break;
+    inc(Str);
   until false;
   result := Str;
 end;
@@ -11001,99 +11025,104 @@ var
   // live cache array to avoid memory allocation
   ReasonCache: array[1..5, 0..13] of RawUtf8;
 
-function StatusCodeToReasonInternal(Code: cardinal): RawUtf8;
+procedure StatusCode2Reason(Code: cardinal; var Reason: RawUtf8);
 begin
   case Code of
     HTTP_CONTINUE:
-      result := 'Continue';
+      Reason := 'Continue';
     HTTP_SWITCHINGPROTOCOLS:
-      result := 'Switching Protocols';
+      Reason := 'Switching Protocols';
     HTTP_SUCCESS:
-      result := 'OK';
+      Reason := 'OK';
     HTTP_CREATED:
-      result := 'Created';
+      Reason := 'Created';
     HTTP_ACCEPTED:
-      result := 'Accepted';
+      Reason := 'Accepted';
     HTTP_NONAUTHORIZEDINFO:
-      result := 'Non-Authoritative Information';
+      Reason := 'Non-Authoritative Information';
     HTTP_NOCONTENT:
-      result := 'No Content';
+      Reason := 'No Content';
     HTTP_RESETCONTENT:
-      result := 'Reset Content';
+      Reason := 'Reset Content';
     HTTP_PARTIALCONTENT:
-      result := 'Partial Content';
+      Reason := 'Partial Content';
     207:
-      result := 'Multi-Status';
+      Reason := 'Multi-Status';
     HTTP_MULTIPLECHOICES:
-      result := 'Multiple Choices';
+      Reason := 'Multiple Choices';
     HTTP_MOVEDPERMANENTLY:
-      result := 'Moved Permanently';
+      Reason := 'Moved Permanently';
     HTTP_FOUND:
-      result := 'Found';
+      Reason := 'Found';
     HTTP_SEEOTHER:
-      result := 'See Other';
+      Reason := 'See Other';
     HTTP_NOTMODIFIED:
-      result := 'Not Modified';
+      Reason := 'Not Modified';
     HTTP_USEPROXY:
-      result := 'Use Proxy';
+      Reason := 'Use Proxy';
     HTTP_TEMPORARYREDIRECT:
-      result := 'Temporary Redirect';
+      Reason := 'Temporary Redirect';
     308:
-      result := 'Permanent Redirect';
+      Reason := 'Permanent Redirect';
     HTTP_BADREQUEST:
-      result := 'Bad Request';
+      Reason := 'Bad Request';
     HTTP_UNAUTHORIZED:
-      result := 'Unauthorized';
+      Reason := 'Unauthorized';
     HTTP_FORBIDDEN:
-      result := 'Forbidden';
+      Reason := 'Forbidden';
     HTTP_NOTFOUND:
-      result := 'Not Found';
+      Reason := 'Not Found';
     HTTP_NOTALLOWED:
-      result := 'Method Not Allowed';
+      Reason := 'Method Not Allowed';
     HTTP_NOTACCEPTABLE:
-      result := 'Not Acceptable';
+      Reason := 'Not Acceptable';
     HTTP_PROXYAUTHREQUIRED:
-      result := 'Proxy Authentication Required';
+      Reason := 'Proxy Authentication Required';
     HTTP_TIMEOUT:
-      result := 'Request Timeout';
+      Reason := 'Request Timeout';
     HTTP_CONFLICT:
-      result := 'Conflict';
+      Reason := 'Conflict';
     410:
-      result := 'Gone';
+      Reason := 'Gone';
     411:
-      result := 'Length Required';
+      Reason := 'Length Required';
     412:
-      result := 'Precondition Failed';
+      Reason := 'Precondition Failed';
     HTTP_PAYLOADTOOLARGE:
-      result := 'Payload Too Large';
+      Reason := 'Payload Too Large';
     414:
-      result := 'URI Too Long';
+      Reason := 'URI Too Long';
     415:
-      result := 'Unsupported Media Type';
+      Reason := 'Unsupported Media Type';
     416:
-      result := 'Requested Range Not Satisfiable';
+      Reason := 'Requested Range Not Satisfiable';
     426:
-      result := 'Upgrade Required';
+      Reason := 'Upgrade Required';
     HTTP_SERVERERROR:
-      result := 'Internal Server Error';
+      Reason := 'Internal Server Error';
     HTTP_NOTIMPLEMENTED:
-      result := 'Not Implemented';
+      Reason := 'Not Implemented';
     HTTP_BADGATEWAY:
-      result := 'Bad Gateway';
+      Reason := 'Bad Gateway';
     HTTP_UNAVAILABLE:
-      result := 'Service Unavailable';
+      Reason := 'Service Unavailable';
     HTTP_GATEWAYTIMEOUT:
-      result := 'Gateway Timeout';
+      Reason := 'Gateway Timeout';
     HTTP_HTTPVERSIONNONSUPPORTED:
-      result := 'HTTP Version Not Supported';
+      Reason := 'HTTP Version Not Supported';
     511:
-      result := 'Network Authentication Required';
+      Reason := 'Network Authentication Required';
   else
-    result := 'Invalid Request';
+    Reason := 'Invalid Request';
   end;
 end;
 
 function StatusCodeToReason(Code: cardinal): RawUtf8;
+begin
+  StatusCodeToReason(Code, result);
+end;
+
+procedure StatusCodeToReason(Code: cardinal; var Reason: RawUtf8);
 var
   Hi, Lo: cardinal;
 begin
@@ -11110,15 +11139,15 @@ begin
     if not ((Hi in [1..5]) and
             (Lo in [0..13])) then
     begin
-      result := StatusCodeToReasonInternal(Code);
+      StatusCode2Reason(Code, Reason);
       exit;
     end;
   end;
-  result := ReasonCache[Hi, Lo];
-  if result <> '' then
+  Reason := ReasonCache[Hi, Lo];
+  if Reason <> '' then
     exit;
-  result := StatusCodeToReasonInternal(Code);
-  ReasonCache[Hi, Lo] := result;
+  StatusCode2Reason(Code, Reason);
+  ReasonCache[Hi, Lo] := Reason;
 end;
 
 function StatusCodeIsSuccess(Code: integer): boolean;

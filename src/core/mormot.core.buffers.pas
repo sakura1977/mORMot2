@@ -3089,7 +3089,7 @@ begin
         #255:
           begin
             // B:255 B:byOne
-            for n := 1 to pByte(p + 1)^ do
+            for n := 1 to PByte(p + 1)^ do
             begin
               inc(i);
               V^ := i;
@@ -4088,7 +4088,7 @@ const
   COMPRESS_SYNLZ = 1;
 
 var
-  // don't use TObjectList before mormot.core.json registered TRttiJSON
+  // don't use TObjectList before mormot.core.json registered TRttiJson
   SynCompressAlgos: array of TAlgoCompress;
 
 constructor TAlgoCompress.Create;
@@ -7537,7 +7537,7 @@ begin
     Hasher := DefaultHasher;
   result := 0;
   f := FileOpenSequentialRead(FileName);
-  if PtrInt(f) >= 0 then
+  if ValidHandle(f) then
   begin
     repeat
       read := FileRead(f, buf, SizeOf(buf));
@@ -8080,6 +8080,7 @@ begin
   // RTTI has shortstrings in adjacent L1 cache lines -> faster than EMOJI_TEXT[]
   result := TEmoji(FindShortStringListTrimLowerCase(
     EMOJI_RTTI, ord(high(TEmoji)) - 1, P, len) + 1);
+  // note: we may enhance performance by using FastFindPUtf8CharSorted()
 end;
 
 function EmojiParseDots(var P: PUtf8Char; W: TBaseWriter): TEmoji;
@@ -8192,7 +8193,6 @@ end;
 procedure InitializeUnit;
 var
   i: PtrInt;
-var
   e: TEmoji;
 begin
   // initialize Base64/Base64Uri encoding/decoding tables
