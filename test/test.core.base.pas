@@ -1146,7 +1146,7 @@ const
     F.Build := i + 3;
     F.Main := IntToString(i + 1000);
     F.Detailed := IntToString(2000 - i);
-    F.BuildDateTime := 36215.12;
+    unaligned(F.BuildDateTime) := 36215.12;
     F.BuildYear := i + 2011;
   end;
 
@@ -1639,7 +1639,7 @@ begin
       Check(Build = i + 3);
       Check(Main = IntToString(i + 1000));
       Check(Detailed = IntToString(2000 - i));
-      CheckSame(BuildDateTime, 36215.12);
+      CheckSame(unaligned(BuildDateTime), 36215.12);
       Check(BuildYear = i + 2011);
     end;
   for i := 0 to 1000 do
@@ -5430,11 +5430,11 @@ procedure TTestCoreBase._TSynLogFile;
       Check(L.LevelUsed = [sllEnter, sllLeave, sllDebug]);
       Check(L.RunningUser = 'MySelf');
       Check(L.CPU = '2*0-15-1027');
-    {$ifdef MSWINDOWS}
+      {$ifdef MSWINDOWS}
       Check(L.OS = wXP);
       Check(L.ServicePack = 3);
       Check(not L.Wow64);
-    {$endif MSWINDOWS}
+      {$endif MSWINDOWS}
       Check(L.Freq = 0);
       CheckSame(L.StartDateTime, 40640.502882, 1 / SecsPerDay);
       if CheckFailed(L.Count = 3) then
