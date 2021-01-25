@@ -1272,7 +1272,7 @@ end;
 constructor THttpServerGeneric.Create(CreateSuspended: boolean;
   const OnStart, OnStop: TOnNotifyThread; const ProcessName: RawUtf8);
 begin
-  SetServerName('mORMot (' + OS_TEXT + ')');
+  SetServerName('mORMot2 (' + OS_TEXT + ')');
   inherited Create(CreateSuspended, OnStart, OnStop, ProcessName);
 end;
 
@@ -2879,8 +2879,8 @@ begin
             end;
             if Assigned(OnBeforeBody) then
             begin
-              err := OnBeforeBody(ctxt.URL, ctxt.Method, ctxt.InHeaders,
-                ctxt.InContentType, remoteip, incontlen, ctxt.fUseSSL);
+              err := OnBeforeBody(ctxt.fURL, ctxt.fMethod, ctxt.fInHeaders,
+                ctxt.fInContentType, remoteip, incontlen, ctxt.fUseSSL);
               if err <> HTTP_SUCCESS then
               begin
                 SendError(err, 'Rejected');
