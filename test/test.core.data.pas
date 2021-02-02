@@ -719,15 +719,17 @@ class procedure TCollTstDynArray.FVReader(
     var Context: TJsonParserContext; Data: pointer);
 begin
   // '[1,2001,3001,4001,"1","1001"],[2,2002,3002,4002,"2","1002"],...'
-  if not Context.ParseArray then
-    exit;
-  PFV(Data)^.Major := GetNextItemCardinal(Context.Json);
-  PFV(Data)^.Minor := GetNextItemCardinal(Context.Json);
-  PFV(Data)^.Release := GetNextItemCardinal(Context.Json);
-  PFV(Data)^.Build := GetNextItemCardinal(Context.Json);
-  PFV(Data)^.Main := Utf8ToString(Context.ParseUtf8);
-  PFV(Data)^.Detailed := Utf8ToString(Context.ParseUtf8);
-  Context.ParseEndOfObject;
+  if Context.ParseArray then
+    with PFV(Data)^ do
+    begin
+      Major := GetNextItemCardinal(Context.Json);
+      Minor := GetNextItemCardinal(Context.Json);
+      Release := GetNextItemCardinal(Context.Json);
+      Build := GetNextItemCardinal(Context.Json);
+      Main := Context.ParseString;
+      Detailed := Context.ParseString;
+      Context.ParseEndOfObject;
+    end;
 end;
 
 class procedure TCollTstDynArray.FVWriter(W: TTextWriter; Data: pointer;
@@ -744,23 +746,29 @@ var
   Values: array[0..5] of TValuePUtf8Char;
 begin
   // '{"Major":1,"Minor":2001,"Release":3001,"Build":4001,"Main":"1","Detailed":"1001"},..
-  if not Context.ParseObject([
+  if Context.ParseObject([
      'Major', 'Minor', 'Release', 'Build', 'Main', 'Detailed'], @Values) then
-    exit;
-  PFV(Data)^.Major := Values[0].ToInteger;
-  PFV(Data)^.Minor := Values[1].ToInteger;
-  PFV(Data)^.Release := Values[2].ToInteger;
-  PFV(Data)^.Build := Values[3].ToInteger;
-  PFV(Data)^.Main := Values[4].ToString;
-  PFV(Data)^.Detailed := Values[5].ToString;
+    with PFV(Data)^ do
+    begin
+      Major := Values[0].ToInteger;
+      Minor := Values[1].ToInteger;
+      Release := Values[2].ToInteger;
+      Build := Values[3].ToInteger;
+      Main := Values[4].ToString;
+      Detailed := Values[5].ToString;
+    end;
 end;
 
 class procedure TCollTstDynArray.FVWriter2(W: TTextWriter; Data: pointer;
   Options: TTextWriterWriteObjectOptions);
 begin
   with PFV(Data)^ do
-    W.AddJsonEscape(['Major', Major, 'Minor', Minor, 'Release', Release, 'Build',
-      Build, 'Main', Main, 'Detailed', Detailed]);
+    W.AddJsonEscape(['Major', Major,
+                     'Minor', Minor,
+                     'Release', Release,
+                     'Build', Build,
+                     'Main', Main,
+                     'Detailed', Detailed]);
 end;
 
 class procedure TCollTstDynArray.FVClassReader(var Context: TJsonParserContext;
@@ -787,8 +795,12 @@ class procedure TCollTstDynArray.FVClassWriter(W: TTextWriter; Value: TObject;
   Options: TTextWriterWriteObjectOptions);
 begin
   with TFileVersion(Value) do
-    W.AddJsonEscape(['Major', Major, 'Minor', Minor, 'Release', Release, 'Build',
-      Build, 'Main', Main, 'BuildDateTime', DateTimeToIso8601Text(BuildDateTime)]);
+    W.AddJsonEscape(['Major', Major,
+                     'Minor', Minor,
+                     'Release', Release,
+                     'Build', Build,
+                     'Main', Main,
+                     'BuildDateTime', DateTimeToIso8601Text(BuildDateTime)]);
 end;
 
 

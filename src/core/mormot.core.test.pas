@@ -322,7 +322,7 @@ type
     fAssertions: integer;
     fAssertionsFailed: integer;
     fCurrentMethodInfo: PSynTestMethodInfo;
-    fSaveToFile: Text;
+    fSaveToFile: System.Text;
     fSafe: TSynLocker;
     fFailed: TSynTestFaileds;
     fFailedCount: integer;
@@ -384,6 +384,8 @@ type
     /// save the debug messages into an external file
     // - if no file name is specified, the current Ident is used
     procedure SaveToFile(const DestPath: TFileName; const FileName: TFileName = '');
+    /// save the debug messages into an existing Text file
+    procedure SaveToText(var aDest: System.Text);
     /// register a specified Test case from its class name
     // - an instance of the supplied class will be created during Run
     // - the published methods of the children must call this method in order
@@ -964,7 +966,8 @@ begin
 end;
 
 function TSynTestCase.NotifyTestSpeed(const ItemName: string; ItemCount: integer;
-  SizeInBytes: cardinal; Timer: PPrecisionTimer; OnlyLog: boolean): TSynMonitorOneMicroSec;
+  SizeInBytes: cardinal; Timer: PPrecisionTimer;
+  OnlyLog: boolean): TSynMonitorOneMicroSec;
 var
   Temp: TPrecisionTimer;
   msg: string;
@@ -1306,6 +1309,13 @@ begin
     FillCharFast(fSaveToFile, sizeof(fSaveToFile), 0);
 end;
 
+procedure TSynTests.SaveToText(var aDest: System.Text);
+begin
+  if TTextRec(fSaveToFile).Handle <> 0 then
+    Close(fSaveToFile);
+  TTextRec(fSaveToFile) := TTextRec(aDest);
+end;
+
 {$I+}
 
 class procedure TSynTests.RunAsConsole(const CustomIdent: string;
@@ -1413,8 +1423,11 @@ end;
 procedure TSynTestsLogged.AddFailed(const msg: string);
 begin
   inherited AddFailed(msg);
-  with fCurrentMethodInfo^ do
-    fLogFile.Log(sllFail, '% [%]', [IdentTestName, msg], Test);
+  if fCurrentMethodInfo <> nil then
+    with fCurrentMethodInfo^ do
+      fLogFile.Log(sllFail, '% [%]', [IdentTestName, msg], Test)
+  else
+    fLogFile.Log(sllFail, 'no context', self)
 end;
 
 

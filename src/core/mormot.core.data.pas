@@ -1248,8 +1248,11 @@ type
     procedure UseExternalCount(var aCountPointer: integer);
       {$ifdef HASINLINE}inline;{$endif}
     /// initialize the wrapper to point to no dynamic array
+    // - it won't clear the wrapped array, just reset the fValue internal pointer
+    // - in practice, will disable the other methods
     procedure Void;
     /// check if the wrapper points to a dynamic array
+    // - i.e. if Void has been called before
     function IsVoid: boolean;
     /// add an element to the dynamic array
     // - warning: Item must be of the same exact type than the dynamic array,
@@ -1259,16 +1262,22 @@ type
     // may reallocate the list every time a record is added, unless an external
     // count variable has been specified in Init(...,@Count) method
     function Add(const Item): PtrInt;
-    /// add an element to the dynamic array
-    // - this version add a void element to the array, and returns its index
+    /// add an element to the dynamic array, returning its index
     // - note: if you use this method to add a new item with a reference to the
-    // dynamic array, using a local variable is needed under FPC:
-    // !    i := DynArray.New;
-    // !    with Values[i] do // otherwise Values is nil -> GPF
+    // dynamic array, be aware that the following trigger a GPF on FPC:
+    // !    with Values[DynArray.New] do // otherwise Values is nil -> GPF
     // !    begin
     // !      Field1 := 1;
     // !      ...
-    function New: integer;
+    // - so you should either use a local variable:
+    // !    i := DynArray.New;
+    // !    with Values[i] do // otherwise Values is nil -> GPF
+    // !    begin
+    // - or even better, don't use the dubious "with Values[...] do" but NewPtr
+    function New: PtrInt;
+    /// add an element to the dynamic array, returning its pointer
+    // - a slightly faster alternative to ItemPtr(New)
+    function NewPtr: pointer;
     /// add an element to the dynamic array at the position specified by Index
     // - warning: Item must be of the same exact type than the dynamic array,
     // and must be a reference to a variable (you can't write Insert(10,i+10) e.g.)
@@ -1514,6 +1523,8 @@ type
     // - return a non nil pointer just after the Source content on success
     // - this method will raise an ESynException for T*ObjArray types
     function LoadFrom(Source: PAnsiChar; SourceMax: PAnsiChar = nil): PAnsiChar; 
+    /// unserialize dynamic array content from binary written by TDynArray.SaveTo
+    procedure LoadFromReader(var Read: TFastReader);
     /// unserialize the dynamic array content from a TDynArray.SaveTo binary string
     // - same as LoadFrom, and will check for any buffer overflow since we
     // know the actual end of input buffer
@@ -6182,12 +6193,21 @@ begin
   ItemCopy(@Item, PAnsiChar(fValue^) + result * fInfo.Cache.ItemSize);
 end;
 
-function TDynArray.New: integer;
+function TDynArray.New: PtrInt;
 begin
   result := GetCount;
-  if fValue = nil then
-    exit; // avoid GPF if void
   SetCount(result + 1);
+end;
+
+function TDynArray.NewPtr: pointer;
+var
+  index: PtrInt;
+begin
+  index := GetCount; // in two explicit steps to ensure no problem at inlining
+  SetCount(index + 1);
+  result := fValue^;
+  if result <> nil then
+    inc(PByte(result), index * fInfo.Cache.ItemSize)
 end;
 
 function TDynArray.Peek(var Dest): boolean;
@@ -6495,15 +6515,37 @@ begin
 end;
 
 function TDynArray.LoadFrom(Source, SourceMax: PAnsiChar): PAnsiChar;
+var
+  read: TFastReader;
 begin
   if SourceMax = nil then
     // backward compatible: assume fake 100MB Source input buffer
     SourceMax := Source + 100 shl 20;
-  result := BinaryLoad(fValue, Source, Info.Info, nil, SourceMax, [rkDynArray]);
-  if (fCountP <> nil) and
-     (fValue^ <> nil) then
-    // BinaryLoad() set the array length, not the external count
-    fCountP^ := GetCapacity;
+  read.Init(Source, SourceMax - Source);
+  LoadFromReader(read);
+  if read.P <> Source then
+    result := read.P
+  else
+    result := nil;
+end;
+
+function TDynArray.LoadFromBinary(const Buffer: RawByteString): boolean;
+var
+  read: TFastReader;
+begin
+  read.Init(Buffer);
+  LoadFromReader(read);
+  result := read.P = read.Last;
+end;
+
+procedure TDynArray.LoadFromReader(var Read: TFastReader);
+begin
+  if fValue <> nil then
+  begin
+    _BL_DynArray(pointer(fValue), Read, Info.Info);
+    if fCountP <> nil then // _BL_DynArray() set length -> reflect on Count
+      fCountP^ := PDALen(PAnsiChar(fValue^) - _DALEN)^ + _DAOFF;
+  end;
 end;
 
 procedure TDynArray.LoadFromStream(Stream: TCustomMemoryStream);
@@ -6513,15 +6555,6 @@ begin
   S := PAnsiChar(Stream.Memory);
   P := LoadFrom(S + Stream.Position, S + Stream.Size);
   Stream.Seek(P - S, soFromBeginning);
-end;
-
-function TDynArray.LoadFromBinary(const Buffer: RawByteString): boolean;
-begin
-  result := BinaryLoad(fValue, Buffer, Info.Info, [rkDynArray]);
-  if (fCountP <> nil) and
-     (fValue^ <> nil) then
-    // BinaryLoad() set the array length, not the external count
-    fCountP^ := PDALen(PAnsiChar(fValue^) - _DALEN)^ + _DAOFF;
 end;
 
 function TDynArray.SaveToJson(EnumSetsAsText: boolean; reformat: TTextWriterJsonFormat): RawUtf8;

@@ -325,8 +325,8 @@ type
   TRttiClass = object
   public
     /// the class type
-    // - not defined as an inlined function, since first field is always aligned
-    RttiClass: TClass;
+    function RttiClass: TClass;
+      {$ifdef HASINLINE}inline;{$endif}
     /// the parent class type information
     function ParentInfo: PRttiInfo;
       {$ifdef HASINLINE}inline;{$endif}
@@ -367,8 +367,8 @@ type
   public
     /// specify ordinal storage size and sign
     // - is prefered to MaxValue to identify the number of stored bytes
-    // - not defined as an inlined function, since first field is always aligned
-    RttiOrd: TRttiOrd;
+    function RttiOrd: TRttiOrd;
+      {$ifdef HASINLINE}inline;{$endif}
     /// first value of enumeration type, typicaly 0
     // - may be < 0 e.g. for boolean
     function MinValue: PtrInt;
@@ -1752,6 +1752,7 @@ const
 
 type
   TRttiCustom = class;
+
   PRttiCustomProp = ^TRttiCustomProp;
 
   /// variant-like value as returned by TRttiCustomProp.GetValueDirect and
@@ -1866,10 +1867,10 @@ type
     /// check if the Value is void (0 / '' / null)
     function ValueIsVoid(Data: pointer): boolean;
       {$ifdef HASINLINE}inline;{$endif}
-    /// compare two properties values
+    /// compare two properties values with proper getter method call
     function CompareValue(Data, Other: pointer; const OtherRtti: TRttiCustomProp;
       CaseInsensitive: boolean): integer;
-    /// append the field value as JSON with proper support
+    /// append the field value as JSON with proper getter method call
     // - wrap GetValue() + AddVariant() over a temp TRttiVarData
     procedure AddValueJson(W: TBaseWriter; Data: pointer;
       Options: TTextWriterWriteObjectOptions);
@@ -1975,6 +1976,7 @@ type
     vcStrings,
     vcObjectList,
     vcList,
+    vcESynException,
     vcException);
 
 
@@ -2457,6 +2459,11 @@ type
 
 { TRttiClass }
 
+function TRttiClass.RttiClass: TClass;
+begin
+  result := PTypeData(@self)^.ClassType;
+end;
+
 function TRttiClass.UnitName: PShortString;
 begin
   result := @PTypeData(@self)^.UnitName;
@@ -2530,6 +2537,11 @@ end;
 
 
 { TRttiEnumType }
+
+function TRttiEnumType.RttiOrd: TRttiOrd;
+begin
+  result := TRttiOrd(PTypeData(@self)^.OrdType);
+end;
 
 function TRttiEnumType.MinValue: PtrInt;
 begin
@@ -6363,6 +6375,8 @@ begin
     fValueRtlClass := vcObjectList
   else if aClass.InheritsFrom(TList) then
     fValueRtlClass := vcList
+  else if aClass.InheritsFrom(ESynException) then
+    fValueRtlClass := vcESynException
   else if aClass.InheritsFrom(Exception) then
     fValueRtlClass := vcException;
   fProps.AddFromClass(aInfo, {includeparents=}true);
