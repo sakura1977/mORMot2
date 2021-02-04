@@ -471,7 +471,7 @@ type
   // - if the client is also HTTP/1.1 compatible, KeepAlive connection is handled:
   //  multiple requests will use the existing connection and thread;
   //  this is faster and uses less resources, especialy under Windows
-  // - a Thread Pool is used internaly to speed up HTTP/1.0 connections - a
+  // - a Thread Pool is used internally to speed up HTTP/1.0 connections - a
   // typical use, under Linux, is to run this class behind a NGINX frontend,
   // configured as https reverse proxy, leaving default "proxy_http_version 1.0"
   // and "proxy_request_buffering on" options for best performance, and
@@ -497,7 +497,7 @@ type
     fExecuteState: (esNotStarted, esBinding, esRunning, esFinished);
     fStats: array[THttpServerSocketGetRequestResult] of integer;
     fSocketClass: THttpServerSocketClass;
-    fHeadersNotFiltered: boolean;
+    fHeadersUnFiltered: boolean;
     fExecuteMessage: string;
     function GetStat(one: THttpServerSocketGetRequestResult): integer;
     function GetHttpQueueLength: cardinal; override;
@@ -540,7 +540,7 @@ type
     constructor Create(const aPort: RawUtf8;
       const OnStart, OnStop: TOnNotifyThread;
       const ProcessName: RawUtf8; ServerThreadPoolCount: integer = 32;
-      KeepAliveTimeOut: integer = 30000; HeadersUnFiltered: boolean = false;
+      KeepAliveTimeOut: integer = 30000; aHeadersUnFiltered: boolean = false;
       CreateSuspended: boolean = false); reintroduce; virtual;
     /// ensure the HTTP server thread is actually bound to the specified port
     // - TCrtSocket.Bind() occurs in the background in the Execute method: you
@@ -571,8 +571,8 @@ type
     // - for instance, Content-Length, Content-Type and Content-Encoding are
     // stored as fields in this THttpSocket, but not included in its Headers[]
     // - set this property to true to include all incoming headers
-    property HeadersNotFiltered: boolean
-      read fHeadersNotFiltered;
+    property HeadersUnFiltered: boolean
+      read fHeadersUnFiltered;
     /// access to the main server low-level Socket
     // - it's a raw TCrtSocket, which only need a socket to be bound, listening
     // and accept incoming request
@@ -1404,7 +1404,7 @@ end;
 constructor THttpServer.Create(const aPort: RawUtf8;
   const OnStart, OnStop: TOnNotifyThread; const ProcessName: RawUtf8;
   ServerThreadPoolCount, KeepAliveTimeOut: integer;
-  HeadersUnFiltered, CreateSuspended: boolean);
+  aHeadersUnFiltered, CreateSuspended: boolean);
 begin
   fSockPort := aPort;
   fInternalHttpServerRespList := TSynList.Create;
@@ -1424,7 +1424,7 @@ begin
     fThreadPool := TSynThreadPoolTHttpServer.Create(self, ServerThreadPoolCount);
     fHttpQueueLength := 1000;
   end;
-  fHeadersNotFiltered := HeadersUnFiltered;
+  fHeadersUnFiltered := aHeadersUnFiltered;
   inherited Create(CreateSuspended, OnStart, OnStop, ProcessName);
 end;
 
@@ -1869,14 +1869,16 @@ begin
         '', ClientSock.fTLS);
     try
       cod := DoBeforeRequest(ctxt);
-      {$ifdef SYNCRTDEBUGLOW}
-      TSynLog.Add.Log(sllCustom2, 'DoBeforeRequest=%', [cod], self);
-      {$endif SYNCRTDEBUGLOW}
       if cod > 0 then
+      begin
+        {$ifdef SYNCRTDEBUGLOW}
+        TSynLog.Add.Log(sllCustom2, 'DoBeforeRequest=%', [cod], self);
+        {$endif SYNCRTDEBUGLOW}
         if not SendResponse or
            (cod <> HTTP_ACCEPTED) then
           exit;
-      cod := Request(ctxt);
+      end;
+      cod := Request(ctxt); // this is the main processing callback
       aftercode := DoAfterRequest(ctxt);
       {$ifdef SYNCRTDEBUGLOW}
       TSynLog.Add.Log(sllCustom2, 'Request=% DoAfterRequest=%', [cod, aftercode], self);
@@ -1951,7 +1953,7 @@ begin
          (fServer = nil) or
          fServer.Terminated then
         exit;
-      noheaderfilter := fServer.HeadersNotFiltered;
+      noheaderfilter := fServer.HeadersUnFiltered;
     end
     else
       noheaderfilter := false;
@@ -1968,13 +1970,12 @@ begin
     Content := '';
     // get headers and content
     GetHeader(noheaderfilter);
-    if fServer <> nil then
+    if fServer <> nil then // = nil e.g. from TRtspOverHttpServer
     begin
-      // nil from TRtspOverHttpServer
       if fServer.fRemoteIPHeaderUpper <> '' then
         // real Internet IP (replace 127.0.0.1 from a proxy)
-        FindNameValue(headers, pointer(fServer.fRemoteIPHeaderUpper), fRemoteIP,
-          {keepnotfound=}true);
+        FindNameValue(headers, pointer(fServer.fRemoteIPHeaderUpper),
+          fRemoteIP, {keepnotfound=}true);
       if fServer.fRemoteConnIDHeaderUpper <> '' then
       begin
         P := FindNameValue(pointer(headers), pointer(fServer.fRemoteConnIDHeaderUpper));

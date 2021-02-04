@@ -1623,12 +1623,12 @@ function AnyTextFileToSynUnicode(const FileName: TFileName;
 
 /// get text file contents (even UTF-16 or UTF-8) and convert it into an
 // UTF-8 string according to any BOM marker at the beginning of the file
-// - if AssumeUTF8IfNoBOM is FALSE, the current string code page is used (i.e.
+// - if AssumeUtf8IfNoBom is FALSE, the current string code page is used (i.e.
 // CurrentAnsiConvert class) for conversion from ANSI into UTF-8
-// - if AssumeUTF8IfNoBOM is TRUE, any file without any BOM marker will be
+// - if AssumeUtf8IfNoBom is TRUE, any file without any BOM marker will be
 // interpreted as UTF-8
 function AnyTextFileToRawUtf8(const FileName: TFileName;
-  AssumeUTF8IfNoBOM: boolean = false): RawUtf8;
+  AssumeUtf8IfNoBom: boolean = false): RawUtf8;
 
 /// compute the 32-bit default hash of a file content
 // - you can specify your own hashing function if DefaultHasher is not what you expect
@@ -7008,9 +7008,7 @@ begin
         $ffd8ff: // JPEG_CONTENT_TYPE = FF D8 FF DB/E0/E1/E2/E3/E8
           result := true;
       else
-        case PCardinalArray(Content)^[1] of // 4 byte offset
-          1{TAlgoSynLZ.AlgoID}: // crc32 01 00 00 00 crc32 = Compress() header
-            result := PCardinalArray(Content)^[0] <> PCardinalArray(Content)^[2];
+        case PCardinalArray(Content)^[1] of // ignore variable 4 byte offset
           $70797466, // mp4,mov = 66 74 79 70 [33 67 70 35/4D 53 4E 56..]
           $766f6f6d: // mov = 6D 6F 6F 76
             result := true;
@@ -7029,7 +7027,7 @@ begin
      (len < 100) or
      (PWord(jpeg)^ <> $d8ff) then // SOI
     exit;
-  je := jpeg + len - 1;
+  je := jpeg + len - 8;
   inc(jpeg, 2);
   while jpeg < je do
   begin
@@ -7223,7 +7221,7 @@ begin
   GetMem(fLines, fLinesMax * SizeOf(pointer));
   P := pointer(fMap.Buffer);
   fMapEnd := P + fMap.Size;
-  if Map.TextFileKind = isUTF8 then
+  if Map.TextFileKind = isUtf8 then
     inc(PByte(P), 3); // ignore UTF-8 BOM
   ParseLines(P, fMapEnd, self);
   if fLinesMax > fCount + 16384 then
@@ -7459,7 +7457,7 @@ begin
         isUnicode:
           SetString(result, PWideChar(PtrUInt(Map.Buffer) + 2),
             (Map.Size - 2) shr 1);
-        isUTF8:
+        isUtf8:
           Utf8ToSynUnicode(PUtf8Char(pointer(PtrUInt(Map.Buffer) + 3)),
             Map.Size - 3, result);
         isAnsi:
@@ -7471,7 +7469,7 @@ begin
   end;
 end;
 
-function AnyTextFileToRawUtf8(const FileName: TFileName; AssumeUTF8IfNoBOM: boolean): RawUtf8;
+function AnyTextFileToRawUtf8(const FileName: TFileName; AssumeUtf8IfNoBom: boolean): RawUtf8;
 var
   Map: TMemoryMap;
 begin
@@ -7482,10 +7480,10 @@ begin
       isUnicode:
         RawUnicodeToUtf8(PWideChar(PtrUInt(Map.Buffer) + 2),
           (Map.Size - 2) shr 1, result);
-      isUTF8:
+      isUtf8:
         FastSetString(result, pointer(PtrUInt(Map.Buffer) + 3), Map.Size - 3);
       isAnsi:
-        if AssumeUTF8IfNoBOM then
+        if AssumeUtf8IfNoBom then
           FastSetString(result, Map.Buffer, Map.Size)
         else
           result := CurrentAnsiConvert.AnsiBufferToRawUtf8(Map.Buffer, Map.Size);
@@ -7510,7 +7508,7 @@ begin
         isUnicode:
           SetString(result,
             PWideChar(PtrUInt(Map.Buffer) + 2), (Map.Size - 2) shr 1);
-        isUTF8:
+        isUtf8:
           Utf8DecodeToString(
             pointer(PtrUInt(Map.Buffer) + 3), Map.Size - 3, result);
         isAnsi:
@@ -7526,7 +7524,7 @@ begin
         isUnicode:
           result := CurrentAnsiConvert.UnicodeBufferToAnsi(
             PWideChar(PtrUInt(Map.Buffer) + 2), (Map.Size - 2) shr 1);
-        isUTF8:
+        isUtf8:
           result := CurrentAnsiConvert.Utf8BufferToAnsi(
             pointer(PtrUInt(Map.Buffer) + 3), Map.Size - 3);
         isAnsi:

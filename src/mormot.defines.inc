@@ -22,7 +22,7 @@
 
 {.$define PUREMORMOT2}
 // if defined, no mORMot 1.18 compatilibity types nor functions would be enabled
-// - by default, existing projects should compile with mORMot 2
+// - by default, existing projects should (almost) compile with mORMot 2
 // - you should eventually define this conditional to make a perfect code
 // conversion to the new types and methods definitions
 
@@ -395,7 +395,7 @@
       {$define ISDELPHI2010_OR_FPC_NEWRTTI}
       {$define HASTTHREADSTART}
       {$define HASINTERFACEASTOBJECT}
-      {$ifdef NEWRTTINOTUSED} // option reduce EXE size by disabling much RTTI
+      {$ifdef NEWRTTINOTUSED} // option reduce EXE size by disabling some RTTI
         {$WEAKLINKRTTI ON}
         {$RTTI EXPLICIT METHODS([]) PROPERTIES([]) FIELDS([])}
       {$endif NEWRTTINOTUSED}
@@ -565,31 +565,5 @@
   {$endif OSANDROID}
 
 {$endif OSPOSIX}
-
-
-// -----------
-// -- HTTP Compression - set globally for Client and Server apps
-
-  //TODO define options set for THttpServer(Generic)
-
-{$ifndef NOCOMPRESSSYNLZ}
-  {$define COMPRESSSYNLZ}
-  // if defined, mormot.rest.http.server will use SynLZ for content compression
-  // - with SynLZ, the 440 KB JSON for TTestClientServerAccess._TRestHttpClient
-  //   is compressed into 106 KB with no speed penalty (it's even a bit faster)
-  //   whereas deflate, even with its level set to 1 (fastest), is 25 % slower
-  // - TRestHttpClientGeneric.Compression shall contain hcSynLZ to handle it
-{$endif NOCOMPRESSSYNLZ}
-
-{$ifndef NOCOMPRESSDEFLATE}
-  {$define COMPRESSDEFLATE}
-  // if defined, mormot.rest.http.server will use gzip for content compression
-  // - deflate/zip is just broken between browsers and client, and should be
-  //   avoided: see http://stackoverflow.com/a/9186091
-  // - when the server is connected an AJAX application (not defined by default)
-  // - if you define both COMPRESSSYNLZ and COMPRESSDEFLATE, the server will
-  //   use SynLZ if available, and deflate if not called from a Delphi client
-  // - TRestHttpClientGeneric.Compression shall contain hcDeflate to handle it
-{$endif NOCOMPRESSDEFLATE}
 
 
