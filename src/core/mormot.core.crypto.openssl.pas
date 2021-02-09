@@ -9,17 +9,22 @@ unit mormot.core.crypto.openssl;
    High-Performance Cryptographic Features using OpenSSL 1.1.1
     - OpenSSL Cryptographic Pseudorandom Number Generator (CSPRNG)
     - AES Cypher/Uncypher in various Modes
+    - Register OpenSSL to our General Cryptography Catalog
 
   *****************************************************************************
 
-  Our mormot.core.crypto.pas asm is stand-alone and faster than OpenSSL for most
-  algorithms, but AES-CTR and AES-GCM. For those two, you may try this unit.
+  Note: on x86_64, our mormot.core.crypto.pas asm is stand-alone and faster
+  than OpenSSL for most algorithms, but AES-GCM.
 
 }
 
 interface
 
 {$I ..\mormot.defines.inc}
+
+{$ifdef USE_OPENSSL}
+
+// compile as a void unit if USE_OPENSSL is not defined
 
 uses
   classes,
@@ -30,7 +35,6 @@ uses
   mormot.core.unicode,
   mormot.core.text,
   mormot.core.crypto,
-  mormot.core.ecc,
   mormot.lib.openssl11;
 
 
@@ -132,10 +136,10 @@ type
   end;
 
   /// OpenSSL AES cypher/uncypher with Cipher feedback (CFB)
-  // - our TAesCfb class is slightly faster than OpenSSL:
-  // $ 2500 aes128cfb in 10.80ms i.e. 231438/s or 492.5 MB/s
+  // - our TAesCfb class is faster than OpenSSL:
+  // $ 2500 aes128cfb in 6.98ms i.e. 357807/s or 761.4 MB/s
   // $ 2500 aes128cfbosl in 10.96ms i.e. 228039/s or 485.3 MB/s
-  // $ 2500 aes256cfb in 13.36ms i.e. 187041/s or 398 MB/s
+  // $ 2500 aes256cfb in 9.41ms i.e. 265646/s or 565.3 MB/s
   // $ 2500 aes256cfbosl in 13.47ms i.e. 185473/s or 394.7 MB/s
   TAesCfbOsl = class(TAesAbstractOsl)
   public
@@ -157,11 +161,11 @@ type
 
   /// OpenSSL AES cypher/uncypher with 128-bit Counter mode (CTR)
   // - similar to TAesCtrNist, not our proprietary TAesCtr which has 64-bit CTR
-  // - OpenSSL parallelize its process, so is faster than our TAesCrtNist class:
-  // $ 2500 aes128ctr in 9.39ms i.e. 266212/s or 566.5 MB/s
-  // $ 2500 aes128ctrosl in 2.61ms i.e. 956754/s or 1.9 GB/s
-  // $ 2500 aes256ctr in 11.94ms i.e. 209275/s or 445.3 MB/s
-  // $ 2500 aes256ctrosl in 3.29ms i.e. 759878/s or 1.5 GB/s
+  // - our TAesCtrNist class is faster than OpenSSL:
+  // $ 2500 aes128ctr in 2.06ms i.e. 1209482/s or 2.5 GB/s
+  // $ 2500 aes256ctr in 2.68ms i.e. 931792/s or 1.9 GB/s
+  // $ 2500 aes128ctrosl in 2.37ms i.e. 1053518/s or 2.1 GB/s
+  // $ 2500 aes256ctrosl in 3.22ms i.e. 775193/s or 1.6 GB/s
   TAesCtrNistOsl = class(TAesAbstractOsl)
   public
     /// return the OpenSSL EVP Cipher name of this class and key size
@@ -171,6 +175,11 @@ type
   /// OpenSSL AES-GCM cypher/uncypher
   // - implements AEAD (authenticated-encryption with associated-data) process
   // via MacSetNonce/MacEncrypt or AesGcmAad/AesGcmFinal methods
+  // - OpenSSL is faster than our TAesGcm class which is not interleaved:
+  // $ 2500 aes128gcm in 14.41ms i.e. 173418/s or 369 MB/s
+  // $ 2500 aes256gcm in 17.37ms i.e. 143918/s or 306.2 MB/s
+  // $ 2500 aes128gcmosl in 3.03ms i.e. 824810/s or 1.7 GB/s
+  // $ 2500 aes256gcmosl in 3.56ms i.e. 701065/s or 1.4 GB/s
   TAesGcmOsl = class(TAesGcmAbstract)
   protected
     fAes: TAesOsl;
@@ -190,7 +199,8 @@ type
     function CloneEncryptDecrypt: TAesAbstract; override;
     /// AES-GCM pure alternative to MacSetNonce()
     // - set the IV as usual (only the first 12 bytes will be used for GCM),
-    // then optionally append any AEAD data with this method before Encrypt()
+    // then optionally append any AEAD data with this method; warning: you need
+    // to call Encrypt() once before - perhaps as Encrypt(nil, nil, 0)
     procedure AesGcmAad(Buf: pointer; Len: integer); override;
     /// AES-GCM pure alternative to MacEncryptGetTag/MacDecryptCheckTag
     // - after Encrypt, fill tag with the GCM value of the data and return true
@@ -199,8 +209,12 @@ type
   end;
 
 
-/// call once at program startup to use OpenSSL when its performance
-// - mainly for AES-GCM and AES-CTR process
+
+{ ************** Register OpenSSL to our General Cryptography Catalog }
+
+/// call once at program startup to use OpenSSL when its performance matters
+// - redirects TAesGcmFast (and TAesCtrFast on i386) globals to OpenSSL
+// - calls RegisterEccAes to setup TEcdheProtocol and TEccCertificate ECIES
 procedure RegisterOpenSsl;
 
 
@@ -357,18 +371,13 @@ end;
 
 function TAesAbstractOsl.Clone: TAesAbstract;
 begin
-  if fIVHistoryDec.Count <> 0 then
-    result := inherited Clone
-  else
-  begin
-    result := TAesAbstractOsl(NewInstance);
-    fAes.Clone(result, TAesAbstractOsl(result).fAes); // efficient Ctx[] copy
-  end;
+  result := TAesAbstractOsl(NewInstance);
+  fAes.Clone(result, TAesAbstractOsl(result).fAes); // efficient Ctx[] copy
 end;
 
 function TAesAbstractOsl.CloneEncryptDecrypt: TAesAbstract;
 begin
-  result := self; // there is one fCtx[] for each direction
+  result := self; // there is one Ctx[] for each direction
 end;
 
 
@@ -522,15 +531,20 @@ begin
 end;
 
 
+{ ************** Register OpenSSL to our General Cryptography Catalog }
+
 procedure RegisterOpenSsl;
 begin
   if not OpenSslIsAvailable then
     exit;
-  // so that mormot.core.ecc.pas' TEcdheProtocol could benefit from OpenSSL
-  ECDHEPROT_EF2AES[efAesCtr128] := TAesCtrNistOsl;
-  ECDHEPROT_EF2AES[efAesCtr256] := TAesCtrNistOsl;
-  ECDHEPROT_EF2AES[efAesGcm128] := TAesGcmOsl;
-  ECDHEPROT_EF2AES[efAesGcm256] := TAesGcmOsl;
+  // for mormot.core.crypto AES classes
+  TAesGcmFast := TAesGcmOsl;
+  {$ifndef HASAESNI64}
+  // our AES-CTR x86_64 asm is faster than OpenSSL
+  TAesCtrFast := TAesCtrNistOsl;
+  {$endif HASAESNI64}
+  // register those classes e.g. for mormot.core.ecc.pas
+  CryptoClassesChanged;
 end;
 
 
@@ -538,5 +552,11 @@ initialization
 
 finalization
   FreeAndNil(MainAesPrngOsl);
+
+{$else}
+
+implementation
+
+{$endif USE_OPENSSL}
 
 end.

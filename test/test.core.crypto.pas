@@ -7,17 +7,6 @@ interface
 
 {$I ..\src\mormot.defines.inc}
 
-{$ifdef OSWINDOWS}
-  // on Windows: enable Microsoft AES Cryptographic Provider (XP SP3 and up)
-  {$define USE_PROV_RSA_AES}
-  // define at your own risk, if you have the good libraries ;)
-  {/$define USE_OPENSSL}
-{$else}
-  // try OpenSSL on POSIX systems where it is likely to be unique and maintained
-  {$define USE_OPENSSL}
-{$endif OSWINDOWS}
-
-
 uses
   sysutils,
   mormot.core.base,
@@ -27,9 +16,7 @@ uses
   mormot.core.unicode,
   mormot.core.rtti,
   mormot.core.crypto,
-  {$ifdef USE_OPENSSL}
   mormot.core.crypto.openssl,
-  {$endif USE_OPENSSL}
   mormot.core.secure,
   mormot.core.perf,
   mormot.core.test,
@@ -1025,7 +1012,7 @@ begin
 end;
 
 const
-  // reference vectors for all AES modes - match OpenSSL implementation
+  // reference vectors for all AES modes - matching OpenSSL implementation
   TEST_AES_REF: array[0..2, 0..6] of RawByteString = (
   // 128-bit TAesEcb, TAesCbc, TAesCfb, TAesOfb, TAesCtr, TAesCtrNist, TAesGcm
    ('aS24Jm0RHPz26P_RHqX-pGktuCZtERz89uj_0R6l_qRpLbgmbREc_Pbo_9Eepf6kB7pVFdRAcIoVhoTQPytzTQ',
@@ -1077,9 +1064,9 @@ var
   Key: TSha256Digest;
   s, b, p: TAesBlock;
   iv: THash128Rec;
-  i, k, ks, m, len: integer;
+  i, j, k, ks, m, len: integer;
   tag1, tag2: TAesBlock;
-  one, two: TAesAbstract;
+  one, two, encdec: TAesAbstract;
   {$ifndef PUREMORMOT2}
   AES: TAesFull;
   {$endif PUREMORMOT2}
@@ -1118,8 +1105,6 @@ begin
   SetLength(crypted, MAX + 256);
   st := '1234essai';
   PInteger(UniqueRawUtf8(RawUtf8(st)))^ := Random(MaxInt);
-  iv.L := $1234567890abcdef; // synch with TEST_AES_REF
-  iv.H := $0fedcba987654321;
   for noaesni := false to true do
   begin
     {%H-}Timer[noaesni].Init;
@@ -1131,6 +1116,8 @@ begin
         if (MODES[m] = nil) or
            not MODES[m].IsAvailable then
           continue; // OpenSSL may not be available on this platform
+        iv.L := $1234567890abcdef; // synch with TEST_AES_REF
+        iv.H := $0fedcba987654321;
         st := RawUtf8(StringOfChar('x', 50)); // synch with TEST_AES_REF
         one := MODES[m].Create(pointer(st)^, ks);
         try
@@ -1182,10 +1169,13 @@ begin
             end;
             s4 := BinToBase64uri(s2);
             CheckEqual(s3, s4);
-            two.IV := iv.b;
-            checkEqual(two.DecryptPkcs7(s2, false), st);
+            encdec := two.CloneEncryptDecrypt;
+            encdec.IV := iv.b;
+            checkEqual(encdec.DecryptPkcs7(s2, false), st);
             if gcm then
-              Check(TAesGcmAbstract(two).AesGcmFinal(tag1));
+              Check(TAesGcmAbstract(encdec).AesGcmFinal(tag1));
+            if encdec <> two then
+              encdec.Free;
           finally
             two.Free;
           end;
@@ -1194,33 +1184,26 @@ begin
         end;
       end;
       Sha256Weak(st, Key);
-      for i := 1 to 100 do
+      for i := 1 to 20 do
       begin
         MoveFast(Key, s, 16);
         Timer[noaesni].Resume;
         A.EncryptInit(Key, ks);
-        A.Encrypt(s, b);
+        for j := 1 to 100 do
+          A.Encrypt(s, b);
         A.Done;
         A.DecryptInit(Key, ks);
-        A.Decrypt(b, p);
+        for j := 1 to 100 do
+          A.Decrypt(b, p);
         A.Done;
         Timer[noaesni].Pause;
         Check(CompareMem(@p, @s, sizeof(p)));
         Check(IsEqual(p, s));
-        st := st + RandomString(4);
       end;
-      PC := Pointer(orig);
-      len := MAX;
-      repeat // populate orig with random data
-        if len > length(st) then
-          i := length(st)
-        else
-          i := len;
-        dec(len, i);
-        MoveFast(pointer(st)^, PC^, i);
-        inc(PC, i);
-      until len = 0;
-      {$ifndef PUREMORMOT2}
+      {$ifdef PUREMORMOT2}
+      orig := RandomString(8000);
+      {$else}
+      orig := RandomString(MAX);
       len := AES.EncodeDecode(Key, ks, MAX, True, nil, nil, pointer(orig),
         pointer(crypted));
       Check(len < MAX + 256);
@@ -1230,6 +1213,7 @@ begin
         Check(len = MAX);
         Check(CompareMem(AES.outStreamCreated.Memory, pointer(orig), MAX));
       {$endif PUREMORMOT2}
+        iv.c3 := $e0ffffff; // to trigger an explicit CTR overflow
         if not noaesni then
         begin
           for m := low(MODES) to high(MODES) do
@@ -1249,14 +1233,15 @@ begin
                   else
                     len := i * 31; // encrypt buffers from 0 to 7936 bytes
                   s2 := copy(orig, 1, len);
-                  FillCharFast(pointer(@one.IV)^, sizeof(one.IV), 1);
+                  check(length(s2) = len);
+                  one.iv := iv.b;
                   s3 := one.EncryptPkcs7(s2);
                   if gcm then
                   begin
                     FillZero(tag1);
                     TAesGcmAbstract(one).AesGcmFinal(tag1);
                   end;
-                  FillCharFast(pointer(@one.IV)^, sizeof(one.IV), 1);
+                  one.iv := iv.b;
                   Check(one.DecryptPkcs7(s3) = s2, IntToStr(len));
                   if gcm then
                     Check(TAesGcmAbstract(one).AesGcmFinal(tag1));
@@ -1289,8 +1274,8 @@ begin
     {$ifdef CPUINTEL}
     if noaesni then
     begin
-      fRunConsole := format('%s cypher 1..%d bytes with AES-NI: %s, without: %s',
-        [fRunConsole, length(st), Timer[false].Stop, Timer[true].Stop]);
+      fRunConsole := format('%s cypher with AES-NI: %s, without: %s',
+        [fRunConsole, Timer[false].Stop, Timer[true].Stop]);
       Include(CpuFeatures, cfAESNI); // revert Exclude() below from previous loop
     end;
     if A.UsesAesni then
