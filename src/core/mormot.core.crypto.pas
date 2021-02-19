@@ -50,33 +50,37 @@ type
   ESynCrypto = class(ESynException);
 
 {$ifdef ASMX64}
-  {$ifdef HASAESNI}
+  {$ifdef HASAESNI}  // compiler supports asm with aesenc/aesdec opcodes
     {$define USEAESNI}
     {$define USEAESNI64}
-    {$define USECLMUL}  // gf_mul_pclmulqdq() requires some complex opcodes
-    {$define USEGCMAVX} // 8x interleaved aesni + pclmulqdq asm for AES-GCM
+    {$ifdef CPUX64ASM} // oldest Delphi x86_64 SSE asm is buggy
+      {$define USECLMUL}  // pclmulqdq opcodes
+      {$define USEGCMAVX} // 8x interleaved aesni + pclmulqdq asm for AES-GCM
+      {$define USEAESNIHASH} // aesni+sse4.1 32-64-128 aeshash
+    {$endif CPUX64ASM}
   {$endif HASAESNI}
   {$ifdef OSWINDOWS}
     {$define CRC32C_X64} // external crc32_iscsi_01 for win64/lin64
     {$define SHA512_X64} // external sha512_sse4 for win64/lin64
   {$endif OSWINDOWS}
   {$ifdef OSLINUX}
-    {$define CRC32C_X64} // external crc32_iscsi_01 for win64/lin64
-    {$define SHA512_X64} // external sha512_sse4 for win64/lin64
+    {$define CRC32C_X64} // external crc32_iscsi_01.o for win64/lin64
+    {$define SHA512_X64} // external sha512_sse4.o for win64/lin64
   {$endif OSLINUX}
 {$endif ASMX64}
 
 {$ifdef ASMX86}
   {$define USEAESNI}
   {$define USEAESNI32}
-  {$ifdef HASAESNI}
-    {$define USECLMUL} // gf_mul_pclmulqdq() requires some complex opcodes
+  {$ifdef HASAESNI}    // compiler supports asm with aesenc/aesdec opcodes
+    {$define USECLMUL} // pclmulqdq opcodes
+    {$define USEAESNIHASH} // aesni+sse4.1 32-64-128 aeshash
   {$endif HASAESNI}
   {$ifdef OSWINDOWS}
-  {$define SHA512_X86} // external sha512-x86 for win32/lin32
+  {$define SHA512_X86} // external sha512-x86.o for win32/lin32
   {$endif OSWINDOWS}
   {$ifdef OSLINUX}
-  {$define SHA512_X86} // external sha512-x86 for win32/lin32
+  {$define SHA512_X86} // external sha512-x86.o for win32/lin32
   {$endif OSLINUX}
 {$endif ASMX86}
 
@@ -163,6 +167,33 @@ procedure RawSha256Compress(var Hash; Data: pointer);
 /// entry point of the raw SHA-512 transform function - may be used for low-level use
 procedure RawSha512Compress(var Hash; Data: pointer);
 
+var
+  /// 32-bit truncation of Go runtime aeshash, using aesni opcode
+  // - just a wrapper around AesNiHash128() with proper 32-bit zeroing
+  // - only defined if AES-NI and SSE 4.1 are available on this CPU
+  // - faster than our SSE4.2+pclmulqdq crc32c() function, with less collision
+  // - warning: the hashes will be consistent only during a process: at startup,
+  // a random AES key is computed to prevent DOS attack on forged input
+  // - DefaultHasher() is assigned to this function, when available on the CPU
+  AesNiHash32: THasher;
+
+  /// 64-bit aeshash as implemented in Go runtime, using aesni opcode
+  // - is the fastest and probably one of the safest non-cryptographic hash
+  // - just a wrapper around AesNiHash128() with proper 64-bit zeroing
+  // - only defined if AES-NI and SSE 4.1 are available on this CPU, so you
+  // should always check if Assigned(AesNiHash64) then ...
+  // - warning: the hashes will be consistent only during a process: at startup,
+  // a random AES key is computed to prevent DOS attack on forged input
+  // - DefaultHasher64() is assigned to this function, when available on the CPU
+  AesNiHash64: function(seed: QWord; data: pointer; len: PtrUInt): QWord;
+
+  /// 128-bit aeshash as implemented in Go runtime, using aesni opcode
+  // - access to the raw function implementing both AesNiHash64 and AesNiHash32
+  // - only defined if AES-NI and SSE 4.1 are available on this CPU
+  // - warning: the hashes will be consistent only during a process: at startup,
+  // a random AES key is computed to prevent DOS attack on forged input
+  // - DefaultHasher128() is assigned to this function, when available on the CPU
+  AesNiHash128: procedure(hash: PHash128; data: pointer; len: PtrUInt);
 
 
 { *************** AES Encoding/Decoding with optimized asm and AES-NI support }
@@ -270,7 +301,7 @@ type
   /// low-level AES-GCM processing
   // - implements standard AEAD (authenticated-encryption with associated-data)
   // algorithm, as defined by NIST Special Publication 800-38D
-  // - will use AES-NI and CLMUL Intel/AMD opcodes if available
+  // - will use AES-NI and CLMUL Intel/AMD opcodes if available on x86_64/i386
   TAesGcmEngine = object
   private
     /// standard AES encryption context
@@ -942,8 +973,8 @@ type
     /// perform the AES un-cypher and authentication
     procedure Decrypt(BufIn, BufOut: pointer; Count: cardinal); override;
     /// prepare the AES-GCM process before Encrypt/Decrypt is called
-    // - RandomNonce is not used: AES-GCM has its own nonce setting algorithm,
-    // and IV is likely to be randomly set by EncryptPkcs7()
+    // - RandomNonce is not used: AES-GCM has its own nonce setting algorithm
+    // for its GMAC, and IV is likely to be randomly set by EncryptPkcs7()
     // - will just include any supplied associated data to the GMAC tag
     // - see AesGcmAad() method as a "pure AES-GCM" alternative
     function MacSetNonce(DoEncrypt: boolean; const RandomNonce: THash256;
@@ -985,14 +1016,14 @@ type
   // via MacSetNonce/MacEncrypt or AesGcmAad/AesGcmFinal methods
   // - will use AES-NI and CLMUL hardware instructions, if available
   // - expect IV to be set before process, or IVAtBeginning=true
-  // - by design, AES-GCM doesn't expect any Nonce to be supplied before processing
+  // - by design, AES-GCM doesn't expect any Nonce to be supplied before process
   // - our TAesGcm class is 8x interleaved for both GMAC and AES-CTR
   // $  mormot aes-128-gcm in 3.45ms i.e. 722752/s or 1.5 GB/s
   // $  mormot aes-256-gcm in 4.11ms i.e. 607385/s or 1.2 GB/s
   // - OpenSSL is faster since it performs GMAC and AES-CTR in a single pass
   // $  openssl aes-128-gcm in 2.86ms i.e. 874125/s or 1.8 GB/s
   // $  openssl aes-256-gcm in 3.43ms i.e. 727590/s or 1.5 GB/s
-  // - on i386, numbers are much lower, since lacks CLMUL and interleaved asm
+  // - on i386, numbers are much lower, since lacks interleaved asm
   // $  mormot aes-128-gcm in 15.86ms i.e. 157609/s or 335.4 MB/s
   // $  mormot aes-256-gcm in 18.23ms i.e. 137083/s or 291.7 MB/s
   // $  openssl aes-128-gcm in 5.49ms i.e. 455290/s or 0.9 GB/s
@@ -2568,7 +2599,7 @@ type
     {$ifdef USEAESNI32}
     AesNi32: pointer; // xmm7 AES-NI encoding
     {$endif USEAESNI32}
-    Flags: set of (aesInitialized, aesNi);
+    Flags: set of (aesInitialized, aesNi, aesNiSse41);
     Rounds: byte;    // Number of rounds
     KeyBits: word;   // Number of bits in key (128/192/256)
   end;
@@ -2604,16 +2635,17 @@ const
 
   // used by SHA-256
   K256: array[0..63] of cardinal = (
-    $428a2f98, $71374491, $b5c0fbcf, $e9b5dba5, $3956c25b, $59f111f1, $923f82a4,
-    $ab1c5ed5, $d807aa98, $12835b01, $243185be, $550c7dc3, $72be5d74, $80deb1fe,
-    $9bdc06a7, $c19bf174, $e49b69c1, $efbe4786, $0fc19dc6, $240ca1cc, $2de92c6f,
-    $4a7484aa, $5cb0a9dc, $76f988da, $983e5152, $a831c66d, $b00327c8, $bf597fc7,
-    $c6e00bf3, $d5a79147, $06ca6351, $14292967, $27b70a85, $2e1b2138, $4d2c6dfc,
-    $53380d13, $650a7354, $766a0abb, $81c2c92e, $92722c85, $a2bfe8a1, $a81a664b,
-    $c24b8b70, $c76c51a3, $d192e819, $d6990624, $f40e3585, $106aa070, $19a4c116,
-    $1e376c08, $2748774c, $34b0bcb5, $391c0cb3, $4ed8aa4a, $5b9cca4f, $682e6ff3,
-    $748f82ee, $78a5636f, $84c87814, $8cc70208, $90befffa, $a4506ceb, $bef9a3f7,
-    $c67178f2);
+    $428a2f98, $71374491, $b5c0fbcf, $e9b5dba5, $3956c25b, $59f111f1,
+    $923f82a4, $ab1c5ed5, $d807aa98, $12835b01, $243185be, $550c7dc3,
+    $72be5d74, $80deb1fe, $9bdc06a7, $c19bf174, $e49b69c1, $efbe4786,
+    $0fc19dc6, $240ca1cc, $2de92c6f, $4a7484aa, $5cb0a9dc, $76f988da,
+    $983e5152, $a831c66d, $b00327c8, $bf597fc7, $c6e00bf3, $d5a79147,
+    $06ca6351, $14292967, $27b70a85, $2e1b2138, $4d2c6dfc, $53380d13,
+    $650a7354, $766a0abb, $81c2c92e, $92722c85, $a2bfe8a1, $a81a664b,
+    $c24b8b70, $c76c51a3, $d192e819, $d6990624, $f40e3585, $106aa070,
+    $19a4c116, $1e376c08, $2748774c, $34b0bcb5, $391c0cb3, $4ed8aa4a,
+    $5b9cca4f, $682e6ff3, $748f82ee, $78a5636f, $84c87814, $8cc70208,
+    $90befffa, $a4506ceb, $bef9a3f7, $c67178f2);
 
 var
   // AES computed tables - don't change the order below! (used for weak Xor)
@@ -2704,7 +2736,7 @@ end;
 procedure XorConst(P: PIntegerArray; Count: integer);
 // XorConst: fast Cypher changing by Count value (weak cypher but compression OK)
 var
-  i: integer;
+  i: PtrInt;
   Code: integer;
 begin
   // 1 to 3 bytes may stay unencrypted: not relevant
@@ -3022,7 +3054,7 @@ end;
 
 procedure ShiftPas(KeySize: cardinal; pk: PAWK);
 var
-  i: integer;
+  i: PtrInt;
   temp: cardinal;
   sb: PByteArray;  // faster on PIC
 begin
@@ -3146,22 +3178,24 @@ begin
   Nk := KeySize div 32;
   MoveFast(Key, ctx.RK, 4 * Nk);
   {$ifdef ASMINTEL}
-  ctx.DoBlock := @aesencryptasm;
+  ctx.DoBlock := @AesEncryptAsm;
   {$else}
   ctx.DoBlock := @aesencryptpas;
   {$endif ASMINTEL}
   {$ifdef USEAESNI}
   if cfAESNI in CpuFeatures then
   begin
-    include(ctx.Flags, aesNi);
+    include(ctx.Flags, aesNi); // for AESENC/AESDEC opcodes
     case KeySize of
       128:
-        ctx.DoBlock := @aesniencrypt128;
+        ctx.DoBlock := @AesNiEncrypt128;
       192:
-        ctx.DoBlock := @aesniencrypt192;
+        ctx.DoBlock := @AesNiEncrypt192;
       256:
-        ctx.DoBlock := @aesniencrypt256;
+        ctx.DoBlock := @AesNiEncrypt256;
     end;
+    if cfSSE41 in CpuFeatures then
+      include(ctx.Flags, aesNiSse41); // for PSHUF and PINSR opcodes
     {$ifdef USEAESNI32}
     case KeySize of
       128:
@@ -3213,11 +3247,11 @@ begin
     MakeDecrKeyAesNi(ctx.Rounds, @ctx.RK);
     case KeySize of
       128:
-        ctx.DoBlock := @aesnidecrypt128;
+        ctx.DoBlock := @AesNiDecrypt128;
       192:
-        ctx.DoBlock := @aesnidecrypt192;
+        ctx.DoBlock := @AesNiDecrypt192;
       256:
-        ctx.DoBlock := @aesnidecrypt256;
+        ctx.DoBlock := @AesNiDecrypt256;
     end;
   end
   else
@@ -3328,7 +3362,7 @@ procedure TAes.DoBlocksCtr(iv: PAesBlock; src, dst: pointer;
   blockcount: PtrUInt);
 begin
   {$ifdef USEAESNI64}
-  if aesNi in TAesContext(Context).Flags then
+  if aesNiSse41 in TAesContext(Context).Flags then
     AesNiEncryptCtrNist(src, dst, blockcount shl 4, @Context, pointer(iv))
   else
   {$endif USEAESNI64}
@@ -3438,7 +3472,7 @@ begin
   a.c3 := ((y[3] shr 1) and MASK_7F) or
           (((y[3] shl 15) or (y[2] shr 17)) and MASK_80);
   a.c2 := ((y[2] shr 1) and MASK_7F) or
-                (((y[2] shl 15) or (y[1] shr 17)) and MASK_80);
+          (((y[2] shl 15) or (y[1] shr 17)) and MASK_80);
   a.c1 := ((y[1] shr 1) and MASK_7F) or
           (((y[1] shl 15) or (y[0] shr 17)) and MASK_80);
   a.c0 := (((y[0] shr 1) and MASK_7F) or
@@ -3495,16 +3529,16 @@ begin
     gf_mul_pas(a, b);
 end;
 
-procedure gf_mul_h(const eng: TAesGcmEngine; var a: TAesBlock);
+procedure gf_mul_h(const engine: TAesGcmEngine; var a: TAesBlock);
   {$ifdef HASINLINE} inline; {$endif}
 begin
   {$ifdef USECLMUL}
-  if flagCLMUL in eng.flags then
-    gf_mul_pclmulqdq(@a, @eng.ghash_h)
+  if flagCLMUL in engine.flags then
+    gf_mul_pclmulqdq(@a, @engine.ghash_h)
   else
   {$endif USECLMUL}
     // use pure pascal efficient code with 4KB pre-computed table
-    eng.gf_mul_h_pas(a);
+    engine.gf_mul_h_pas(a);
 end;
 
 
@@ -3601,7 +3635,7 @@ begin
   blocks := ILen shr AesBlockShift;
   if blocks <> 0 then
     {$ifdef USEAESNI64}
-    if aesNi in TAesContext(aes).Flags then
+    if aesNiSse41 in TAesContext(aes).Flags then
     begin
       // AES-GCM has a 32-bit counter -> don't use 128-bit AesNiEncryptCtrNist()
       ctr := bswap32(TAesContext(aes).iv.c3) + blocks;
@@ -3763,7 +3797,7 @@ begin
     end;
     if (ILen and AesBlockMod = 0) and
        {$ifdef USEAESNI64} // faster with 8x interleaved internal_crypt()
-       not (aesNi in TAesContext(aes).Flags) and
+       not (aesNiSse41 in TAesContext(aes).Flags) and
        {$endif USEAESNI64}
        (blen = 0) then
     begin
@@ -3806,7 +3840,7 @@ begin
       exit;
     if (ILen and AesBlockMod = 0) and
        {$ifdef USEAESNI64} // faster with 8x interleaved internal_crypt()
-       not (aesNi in TAesContext(aes).Flags) and
+       not (aesNiSse41 in TAesContext(aes).Flags) and
        {$endif USEAESNI64}
        (blen = 0) then
     begin
@@ -4082,7 +4116,7 @@ begin
   end;
   if IVAtBeginning then
   begin
-    TAesPrng.Main.FillRandom(fIV); // unfixed PRNG from system entropy
+    TAesPrng.Main.FillRandom(fIV); // cryptographic PRNG as seed for uniqueness
     PAesBlock(Output)^ := fIV;
     inc(PAesBlock(Output));
   end;
@@ -4254,7 +4288,7 @@ function TAesAbstract.MacAndCrypt(const Data: RawByteString;
   Encrypt: boolean): RawByteString;
 const
   VERSION = 1;
-  CRCSIZ = SizeOf(THash256) * 2;
+  CRCSIZ = SizeOf(THash256) * 2; // nonce+mac hashes
   SIZ = CRCSIZ + SizeOf(cardinal);
 var
   len, enclen: cardinal;
@@ -4475,7 +4509,7 @@ end;
 
 procedure TAesEcb.Decrypt(BufIn, BufOut: pointer; Count: cardinal);
 var
-  i: integer;
+  i: cardinal;
 begin
   inherited; // set fIn,fOut
   if fAesInit <> initDecrypt then
@@ -4493,7 +4527,7 @@ end;
 
 procedure TAesEcb.Encrypt(BufIn, BufOut: pointer; Count: cardinal);
 var
-  i: integer;
+  i: cardinal;
 begin
   inherited; // set fIn,fOut
   if fAesInit <> initEncrypt then
@@ -4514,7 +4548,7 @@ end;
 
 procedure TAesCbc.Decrypt(BufIn, BufOut: pointer; Count: cardinal);
 var
-  i: integer;
+  i: cardinal;
   tmp: TAesBlock;
 begin
   inherited; // set fIn,fOut
@@ -4545,7 +4579,7 @@ end;
 
 procedure TAesCbc.Encrypt(BufIn, BufOut: pointer; Count: cardinal);
 var
-  i: integer;
+  i: cardinal;
 begin
   inherited; // set fIn,fOut
   if fAesInit <> initEncrypt then
@@ -4578,21 +4612,17 @@ begin
 end;
 
 
-{$ifdef FPC} // disable some paranoid warning with FPC about inlined asm blocks
-  {$WARN 7121 off : Check size of memory operand }
-{$endif FPC}
-
 
 { TAesCfb }
 
 procedure TAesCfb.Decrypt(BufIn, BufOut: pointer; Count: cardinal);
 var
-  i: integer;
+  i: cardinal;
   tmp: TAesBlock;
 begin
   {$ifdef USEAESNI32}
   if Assigned(TAesContext(fAes.Context).AesNi32) then
-    aesnicfbdecrypt(self, BufIn, BufOut, Count)
+    AesNiCfbDecrypt(self, BufIn, BufOut, Count)
   else
   {$endif USEAESNI32}
   {$ifdef USEAESNI64}
@@ -4636,11 +4666,11 @@ end;
 
 procedure TAesCfb.Encrypt(BufIn, BufOut: pointer; Count: cardinal);
 var
-  i: integer;
+  i: cardinal;
 begin
   {$ifdef USEAESNI32}
   if Assigned(TAesContext(fAes).AesNi32) then
-    aesnicfbencrypt(self, BufIn, BufOut, Count)
+    AesNiCfbEncrypt(self, BufIn, BufOut, Count)
   else
   {$endif USEAESNI32}
   {$ifdef USEAESNI64}
@@ -4744,7 +4774,7 @@ end;
 
 procedure TAesCfbCrc.Decrypt(BufIn, BufOut: pointer; Count: cardinal);
 var
-  i: integer;
+  i: cardinal;
   tmp: TAesBlock;
 begin
   if Count = 0 then
@@ -4752,7 +4782,7 @@ begin
   {$ifdef USEAESNI32}
   if Assigned(TAesContext(fAes).AesNi32) and
      (Count and AesBlockMod = 0) then
-    aesnicfbcrcdecrypt(self, BufIn, BufOut, Count)
+    AesNiCfbCrcDecrypt(self, BufIn, BufOut, Count)
   else
   {$endif USEAESNI32}
   {$ifdef USEAESNI64}
@@ -4802,14 +4832,14 @@ end;
 
 procedure TAesCfbCrc.Encrypt(BufIn, BufOut: pointer; Count: cardinal);
 var
-  i: integer;
+  i: cardinal;
 begin
   if Count = 0 then
     exit;
   {$ifdef USEAESNI32}
   if Assigned(TAesContext(fAes).AesNi32) and
      (Count and AesBlockMod = 0) then
-    aesnicfbcrcencrypt(self, BufIn, BufOut, Count)
+    AesNiCfbCrcEncrypt(self, BufIn, BufOut, Count)
   else
   {$endif USEAESNI32}
   {$ifdef USEAESNI64}
@@ -4879,14 +4909,14 @@ end;
 
 procedure TAesOfbCrc.Encrypt(BufIn, BufOut: pointer; Count: cardinal);
 var
-  i: integer;
+  i: cardinal;
 begin
   if Count = 0 then
     exit;
   {$ifdef USEAESNI32}
   if Assigned(TAesContext(fAes).AesNi32) and
      (Count and AesBlockMod = 0) then
-    aesniofbcrcencrypt(self, BufIn, BufOut, Count)
+    AesNiOfbCrcEncrypt(self, BufIn, BufOut, Count)
   else
   {$endif USEAESNI32}
   begin
@@ -4921,7 +4951,7 @@ end;
 
 procedure TAesCtrCrc.Encrypt(BufIn, BufOut: pointer; Count: cardinal);
 var
-  i: integer;
+  i: cardinal;
   offs: PtrInt;
   tmp, iv: TAesBlock;
 begin
@@ -4930,7 +4960,7 @@ begin
   {$ifdef USEAESNI32}
   if Assigned(TAesContext(fAes).AesNi32) and
      (Count and AesBlockMod = 0) then
-    aesnictrcrcencrypt(self, BufIn, BufOut, Count)
+    AesNiCtrCrcEncrypt(self, BufIn, BufOut, Count)
   else
   {$endif USEAESNI32}
   {$ifdef USEAESNI64} // very fast x86_64 AES-NI asm with 8x interleave factor
@@ -4986,11 +5016,11 @@ end;
 
 procedure TAesOfb.Encrypt(BufIn, BufOut: pointer; Count: cardinal);
 var
-  i: integer;
+  i: cardinal;
 begin
   {$ifdef USEAESNI32}
   if Assigned(TAesContext(fAes).AesNi32) then
-    aesniofbencrypt(self, BufIn, BufOut, Count)
+    AesNiOfbEncrypt(self, BufIn, BufOut, Count)
   else
   {$endif USEAESNI32}
   {$ifdef USEAESNI64}
@@ -5054,13 +5084,13 @@ end;
 
 procedure TAesCtrAny.Encrypt(BufIn, BufOut: pointer; Count: cardinal);
 var
-  i: integer;
+  i: cardinal;
   offs: PtrInt;
   tmp, iv: TAesBlock;
 begin
   {$ifdef USEAESNI32}
   if Assigned(TAesContext(fAes).AesNi32) then
-    aesnictranyencrypt(self, BufIn, BufOut, Count)
+    AesNiCtrAnyEncrypt(self, BufIn, BufOut, Count)
   else
   {$endif USEAESNI32}
   begin
@@ -5112,7 +5142,7 @@ begin
     if Count and AesBlockMod = 0 then
       {$ifdef USEAESNI64}
       // very fast x86_64 AES-NI asm with 8x interleave factor
-      if aesNi in TAesContext(fAes).Flags then
+      if aesNiSse41 in TAesContext(fAes).Flags then
         AesNiEncryptCtrNist(BufIn, BufOut, Count, @fAes, @fIV)
       else
       {$endif USEAESNI64}
@@ -5226,6 +5256,7 @@ function TAesGcm.AesGcmInit: boolean;
 begin
   {$ifdef USEGCMAVX}
   if (cfCLMUL in CpuFeatures) and
+     (cfSSE41 in CpuFeatures) and
      (cfAESNI in CpuFeatures) then
   begin
     // 8x interleaved aesni + pclmulqdq x86_64 asm
@@ -5233,10 +5264,11 @@ begin
     result := fGcm.aes.EncryptInit(fKey, fKeySize);
     if result then
       GcmAvxInit(@fGcm.gf_t4k, @fGcm.aes, TAesContext(fGcm.aes).Rounds);
-    exit;
-  end;
+  end
+  else
   {$endif USEGCMAVX}
-  result := fGcm.Init(fKey, fKeySize);
+    // regular TAesGcmEngine
+    result := fGcm.Init(fKey, fKeySize);
 end;
 
 function TAesGcm.Clone: TAesAbstract;
@@ -5282,6 +5314,7 @@ begin
   {$ifdef USEGCMAVX}
   if flagAVX in fGcm.flags then
   begin
+    // 8x interleaved aesni + pclmulqdq x86_64 asm
     result := true;
     if Count and AesBlockMod <> 0 then
       raise ESynCrypto.CreateUtf8('%.Encrypt/Decrypt should use PKCS7', [self]);
@@ -5312,6 +5345,7 @@ begin
   end
   else
   {$endif USEGCMAVX}
+    // regular TAesGcmEngine process
     if fStarted = stEnc then
       result := fGcm.Encrypt(BufIn, BufOut, Count)
     else
@@ -5342,8 +5376,8 @@ begin
   if flagAVX in fGcm.flags then
   begin
     decoded := TAesContext(fGcm.aes).iv;
-    decoded.c3 := fGcm.y0_val; // restore initial counter
-    fGcm.aes.Encrypt(decoded.b);
+    decoded.c3 := fGcm.y0_val; // restore initial counter (always 1 for CTR_POS)
+    fGcm.aes.Encrypt(decoded.b);  // compute E(K,Y0)
     GcmAvxGetTag(@fGcm.gf_t4k, @decoded, @fGcm.txt_ghv, fGcm.atx_cnt.V, fGcm.aad_cnt.V);
     decoded.b := fGcm.txt_ghv;
   end
@@ -5888,8 +5922,7 @@ end;
 class function TAesPrngAbstract.AFUnsplit(const Split: RawByteString;
   out Buffer; BufferBytes: integer): boolean;
 var
-  len: cardinal;
-  i: integer;
+  len, i: cardinal;
   src: pointer;
   tmp: TByteDynArray;
 begin
@@ -6169,19 +6202,18 @@ begin
   end;
   // big buffers will release the lock before processing
   MoveFast(fAes, aes, SizeOf(aes));
-  H := bswap64(TAesContext(fAes.Context).iv.H);
+  H := bswap64(aes.iv.H);
   inc(H, main);
   if remain <> 0 then
     inc(H);
   if H < bswap64(aes.iv.H) then // propagate big-endian 64-bit CTR overflow
-    TAesContext(fAes.Context).iv.L :=
-      bswap64(bswap64(TAesContext(fAes.Context).iv.L) + 1);
+    TAesContext(fAes.Context).iv.L := bswap64(bswap64(aes.iv.L) + 1);
   TAesContext(fAes.Context).iv.H := bswap64(H);
   LeaveCriticalSection(fSafe);
   // unlocked AES computation
   if main <> 0 then
     {$ifdef USEAESNI64}
-    if aesNi in aes.Flags then
+    if aesNiSse41 in aes.Flags then
     begin
       main := main shl AesBlockShift;
       FillCharFast(Buffer^, main, 0); // dst := 0 xor AES(iv) -> PRNG
@@ -6393,7 +6425,7 @@ end;
 
 procedure Sha256ExpandMessageBlocks(W, Buf: PIntegerArray);
 var
-  i: integer;
+  i: PtrInt;
 begin
   // bswap256() instead of "for i := 0 to 15 do W[i]:= bswap32(Buf[i]);"
   bswap256(@Buf[0], @W[0]);
@@ -6489,8 +6521,8 @@ procedure RawSha256Compress(var Hash; Data: pointer);
 begin
   {$ifdef ASMX64}
   if K256Aligned <> nil then
-    // use optimized Intel's sha256_sse4.asm
-    sha256_sse4(Data^, Hash, 1)
+    // use optimized Intel's Sha256Sse4.asm
+    Sha256Sse4(Data^, Hash, 1)
   else
   {$endif ASMX64}
     Sha256CompressPas(TSHAHash(Hash), Data);
@@ -6527,8 +6559,8 @@ begin
      (Data.Index = 0) and
      (Len >= 64) then
   begin
-    // use optimized Intel's sha256_sse4.asm for whole blocks
-    sha256_sse4(Buffer^, Data.Hash, Len shr 6);
+    // use optimized Intel's Sha256Sse4.asm for whole blocks
+    Sha256Sse4(Buffer^, Data.Hash, Len shr 6);
     inc(PByte(Buffer), Len);
     Len := Len and 63;
     dec(PByte(Buffer), Len);
@@ -6655,7 +6687,7 @@ procedure sha512_compresspas(var Hash: TSha512Hash; Data: PQWordArray);
 var
   a, b, c, d, e, f, g, h, temp1, temp2: QWord; // to use registers on CPU64
   w: array[0..79] of QWord;
-  i: integer;
+  i: PtrInt;
 begin
   bswap64array(Data, @w, 16);
   for i := 16 to 79 do
@@ -6932,7 +6964,7 @@ procedure KeccakPermutation(A: PQWordArray);
 var
   B: array[0..24] of QWord;
   C: array[0..4] of QWord;
-  i: integer;
+  i: PtrInt;
 begin
   for i := 0 to 23 do
   begin
@@ -6980,7 +7012,7 @@ procedure KeccakPermutation(A: PQWordArray);
 var
   B: array[0..24] of QWord;
   C0, C1, C2, C3, C4, D0, D1, D2, D3, D4: QWord;
-  i: integer;
+  i: PtrInt;
 begin
   for i := 0 to 23 do
   begin
@@ -7439,7 +7471,7 @@ end;
 
 procedure THMAC_SHA1.Init(key: pointer; keylen: integer);
 var
-  i: integer;
+  i: PtrInt;
   k0, k0xorIpad: THash512Rec;
 begin
   FillZero(k0.b);
@@ -7519,7 +7551,7 @@ end;
 
 procedure THMAC_SHA256.Init(key: pointer; keylen: integer);
 var
-  i: integer;
+  i: PtrInt;
   k0, k0xorIpad: THash512Rec;
 begin
   FillZero(k0.b);
@@ -7614,7 +7646,7 @@ end;
 
 procedure THMAC_SHA384.Init(key: pointer; keylen: integer);
 var
-  i: integer;
+  i: PtrInt;
   k0, k0xorIpad: array[0..31] of cardinal;
 begin
   FillCharFast(k0, SizeOf(k0), 0);
@@ -7694,7 +7726,7 @@ end;
 
 procedure THMAC_SHA512.Init(key: pointer; keylen: integer);
 var
-  i: integer;
+  i: PtrInt;
   k0, k0xorIpad: array[0..31] of cardinal;
 begin
   FillCharFast(k0, SizeOf(k0), 0);
@@ -7795,7 +7827,7 @@ end;
 procedure HMAC_CRC256C(key, msg: pointer; keylen, msglen: integer;
   out result: THash256);
 var
-  i: integer;
+  i: PtrInt;
   h1, h2: cardinal;
   k0, k0xorIpad, step7data: THash512Rec;
 begin
@@ -7840,7 +7872,7 @@ end;
 
 procedure THMAC_CRC32C.Init(key: pointer; keylen: integer);
 var
-  i: integer;
+  i: PtrInt;
   k0, k0xorIpad: THash512Rec;
 begin
   FillCharFast(k0, SizeOf(k0), 0);
@@ -8448,8 +8480,7 @@ end;
 procedure TMd5.Update(const buffer; len: cardinal);
 var
   p: ^TMd5In;
-  t: cardinal;
-  i: integer;
+  t, i: cardinal;
 begin
   p := @buffer;
   // Update byte count
@@ -8510,7 +8541,7 @@ procedure sha1Compress(var Hash: TSHAHash; Data: PByteArray);
 var
   A, B, C, D, E, X: cardinal;
   W: array[0..79] of cardinal;
-  i: integer;
+  i: PtrInt;
 begin
   // init W[] + A..E
   bswap256(@Data[0], @W[0]);
@@ -9608,13 +9639,14 @@ begin
   begin
     // use SSE4.2+pclmulqdq instructions
     crc32c := @crc32c_sse42_aesni;
+    // on old compilers, USEAESNIHASH is not set -> crc32c is a good fallback
     DefaultHasher := @crc32c_sse42_aesni;
     InterningHasher := @crc32c_sse42_aesni;
   end;
   {$endif CRC32C_X64}
   if cfSSE41 in CpuFeatures then
   begin
-    // optimized Intel's sha256_sse4.asm
+    // optimized Intel's Sha256Sse4.asm
     K256Aligned := @K256;
     if PtrUInt(K256Aligned) and 15 <> 0 then
     begin
@@ -9625,6 +9657,22 @@ begin
     end;
   end;
   {$endif ASMX64}
+  {$ifdef USEAESNIHASH}
+  if (cfSSE41 in CpuFeatures) and
+     (cfAesNi in CpuFeatures) then
+  begin
+    // 128-bit aeshash as implemented in Go runtime, using aesenc opcode
+    GetMemAligned(AESNIHASHKEYSCHED_, nil, 16 * 16, AESNIHASHKEYSCHED);
+    FillRandom(AESNIHASHKEYSCHED, 16 * 4); // genuine
+    AesNiHash64 := @_AesNiHash64;
+    AesNiHash32 := @_AesNiHash32;
+    AesNiHash128 := @_AesNiHash128;
+    DefaultHasher := @_AesNiHash32;
+    InterningHasher := @_AesNiHash32;
+    DefaultHasher64 := @_AesNiHash64;
+    DefaultHasher128 := @_AesNiHash128;
+  end;
+  {$endif USEAESNIHASH}
   assert(SizeOf(TMd5Buf) = SizeOf(TMd5Digest));
   assert(SizeOf(TAes) = AES_CONTEXT_SIZE);
   assert(SizeOf(TAesContext) = AES_CONTEXT_SIZE);
