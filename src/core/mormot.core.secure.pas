@@ -1936,7 +1936,7 @@ begin
   inherited Create;
   InitializeCriticalSection(fSafe);
   fAes[false] := aClass.Create(aKey, aKeySize);
-  fAes[true] := fAes[false].Clone;
+  fAes[true] := fAes[false].CloneEncryptDecrypt;
 end;
 
 constructor TProtocolAes.CreateFrom(aAnother: TProtocolAes);
@@ -1944,13 +1944,14 @@ begin
   inherited Create;
   InitializeCriticalSection(fSafe);
   fAes[false] := aAnother.fAes[false].Clone;
-  fAes[true] := fAes[false].Clone;
+  fAes[true] := fAes[false].CloneEncryptDecrypt;
 end;
 
 destructor TProtocolAes.Destroy;
 begin
   fAes[false].Free;
-  fAes[true].Free;
+  if fAes[true] <> fAes[false] then
+    fAes[true].Free; // fAes[false].CloneEncryptDecrypt may return self
   DeleteCriticalSection(fSafe);
   inherited Destroy;
 end;
@@ -1964,7 +1965,7 @@ end;
 function TProtocolAes.Decrypt(const aEncrypted: RawByteString;
   out aPlain: RawByteString): TProtocolResult;
 begin
-  EnterCriticalSection(fSafe);;
+  EnterCriticalSection(fSafe);
   try
     try
       aPlain := fAes[false].DecryptPkcs7(aEncrypted, {iv=}true, {raise=}false);

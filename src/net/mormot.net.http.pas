@@ -163,6 +163,10 @@ type
     ContentType: RawUtf8;
     /// same as HeaderGetValue('UPGRADE'), but retrieved during Request
     Upgrade: RawUtf8;
+    /// same as FindNameValue(aInHeaders, HEADER_BEARER_UPPER, ...),
+    // but retrieved during Request
+    // - is the raw Token, excluding 'Authorization: Bearer ' trailing chars
+    BearerToken: RawUtf8;
     /// same as HeaderGetValue('X-POWERED-BY'), but retrieved during Request
     XPoweredBy: RawUtf8;
     /// map the presence of some HTTP headers, but retrieved during Request
@@ -250,17 +254,6 @@ type
   TOnHttpServerAfterResponse = procedure(Ctxt: THttpServerRequestAbstract;
     const Code: cardinal) of object;
 
-  /// event handler used by THttpServerGeneric.OnBeforeBody property
-  // - if defined, is called just before the body is retrieved from the client
-  // - supplied parameters reflect the current input state, and could be
-  // modified on the fly to adapt to the expected behavior
-  // - should return HTTP_SUCCESS=200 to continue the process, or an HTTP
-  // error code (e.g. HTTP_FORBIDDEN or HTTP_PAYLOADTOOLARGE) to reject
-  // the request
-  TOnHttpServerBeforeBody = function(var aURL, aMethod, aInHeaders,
-    aInContentType, aRemoteIP: RawUtf8; aContentLength: integer;
-    aUseSSL: boolean): cardinal of object;
-
   /// the server-side available authentication schemes
   // - as used by THttpServerRequest.AuthenticationStatus
   // - hraNone..hraKerberos will match low-level HTTP_REQUEST_AUTH_TYPE enum as
@@ -273,6 +266,31 @@ type
     hraNtlm,
     hraNegotiate,
     hraKerberos);
+
+  /// available THttpServerRequest connection attributes
+  // - hsrHttps will indicates that the communication was made over HTTPS
+  // - hsrSecured is set if the transmission is encrypted or in-process,
+  // using e.g. HTTPS/TLS or our proprietary AES/ECDHE algorithms
+  // - hsrWebsockets communication was made using WebSockets
+  // - match TRestUriParamsLowLevelFlag in mormot.rest.core
+  THttpServerRequestFlag = (
+    hsrHttps,
+    hsrSecured,
+    hsrWebsockets);
+
+  /// the THttpServerRequest connection attributes
+  THttpServerRequestFlags = set of THttpServerRequestFlag;
+
+  /// event handler used by THttpServerGeneric.OnBeforeBody property
+  // - if defined, is called just before the body is retrieved from the client
+  // - supplied parameters reflect the current input state, and could be
+  // modified on the fly to adapt to the expected behavior
+  // - should return HTTP_SUCCESS=200 to continue the process, or an HTTP
+  // error code (e.g. HTTP_FORBIDDEN or HTTP_PAYLOADTOOLARGE) to reject
+  // the request
+  TOnHttpServerBeforeBody = function(var aURL, aMethod, aInHeaders,
+    aInContentType, aRemoteIP, aBearerToken: RawUtf8; aContentLength: integer;
+    aFlags: THttpServerRequestFlags): cardinal of object;
 
   /// abstract generic input/output structure used for HTTP server requests
   // - URL/Method/InHeaders/InContent properties are input parameters
@@ -293,7 +311,7 @@ type
     fOutContent: RawByteString;
     fRequestID: integer;
     fConnectionID: THttpServerConnectionID;
-    fUseSSL: boolean;
+    fConnectionFlags: THttpServerRequestFlags;
     fAuthenticationStatus: THttpServerRequestAuthentication;
   public
     /// low-level property which may be used during requests processing
@@ -302,8 +320,8 @@ type
     // - will set input parameters URL/Method/InHeaders/InContent/InContentType
     // - will reset output parameters
     procedure Prepare(const aURL, aMethod, aInHeaders: RawUtf8;
-      const aInContent: RawByteString; const aInContentType, aRemoteIP: RawUtf8;
-      aUseSSL: boolean = false); virtual; abstract;
+      const aInContent: RawByteString; const aInContentType, aRemoteIP: RawUtf8);
+        virtual; abstract;
     /// append some lines to the InHeaders input parameter
     procedure AddInHeader(additionalHeader: RawUtf8);
     /// input parameter containing the caller URI
@@ -352,10 +370,9 @@ type
     // increasing 31-bit integer sequence for (web)socket-based servers
     property ConnectionID: THttpServerConnectionID
       read fConnectionID;
-    /// is TRUE if the caller is connected via HTTPS
-    // - only set for THttpApiServer class yet
-    property UseSSL: boolean
-      read fUseSSL;
+    /// define how the client is connected
+    property ConnectionFlags: THttpServerRequestFlags
+      read fConnectionFlags write fConnectionFlags;
     /// contains the THttpServer-side authentication status
     // - e.g. when using http.sys authentication with HTTP API 2.0
     property AuthenticationStatus: THttpServerRequestAuthentication
@@ -595,6 +612,7 @@ begin
   ContentLength := -1;
   Content := '';
   ServerInternalState := 0;
+  BearerToken := '';
 end;
 
 procedure THttpSocket.GetHeader(HeadersUnFiltered: boolean);
@@ -632,7 +650,7 @@ begin
     // note: set P=nil below to store in Headers[]
     case IdemPCharArray(P, ['CONTENT-', 'TRANSFER-ENCODING: CHUNKED',
       'CONNECTION: ', 'ACCEPT-ENCODING:', 'UPGRADE:', 'SERVER-INTERNALSTATE:',
-      'X-POWERED-BY:']) of
+      'X-POWERED-BY:', HEADER_BEARER_UPPER]) of
       0:
         // 'CONTENT-'
         case IdemPCharArray(P + 8, ['LENGTH:', 'TYPE:', 'ENCODING:']) of
@@ -710,6 +728,14 @@ begin
       6:
         // 'X-POWERED-BY:'
         GetTrimmed(P + 13, XPoweredBy);
+      7:
+        // 'AUTHORIZATION: BEARER '
+        begin
+          GetTrimmed(P + 22, BearerToken);
+          if BearerToken <> '' then
+            // allows FindNameValue(..., HEADER_BEARER_UPPER, ...) search
+            P := nil;
+        end
     else
       // unrecognized name should be stored in Headers
       P := nil;

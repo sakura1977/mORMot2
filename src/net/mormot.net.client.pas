@@ -13,6 +13,7 @@ unit mormot.net.client;
    - TSimpleHttpClient Wrapper Class
    - Cached HTTP Connection to a Remote Server
    - Send Email using the SMTP Protocol
+   - DNS Resolution Cache for mormot.net.sock NewSocket()
 
   *****************************************************************************
 
@@ -116,6 +117,10 @@ type
   // mormot.net.websock unit)
   THttpClientSocketClass = class of THttpClientSocket;
 
+/// returns the HTTP User-Agent header value of a mORMot client including
+// the Instance class name
+function DefaultUserAgent(Instance: TObject): RawUtf8;
+
 /// create a THttpClientSocket, returning nil on error
 // - useful to easily catch socket error exception ENetSock
 function OpenHttp(const aServer, aPort: RawUtf8; aTLS: boolean = false;
@@ -132,7 +137,7 @@ function OpenHttp(const aUri: RawUtf8;
 // and the overloaded HttpGet() functions
 function OpenHttpGet(const server, port, url, inHeaders: RawUtf8;
   outHeaders: PRawUtf8 = nil; aLayer: TNetLayer = nlTCP;
-  aTLS: boolean = false): RawByteString; overload;
+  aTLS: boolean = false; outStatus: PInteger = nil): RawByteString; overload;
 
 
 
@@ -829,6 +834,7 @@ begin
     SYNOPSE_FRAMEWORK_VERSION + ' %)', [Instance], result);
 end;
 
+
 { THttpClientSocket }
 
 procedure THttpClientSocket.RequestSendHeader(const url, method: RawUtf8);
@@ -842,7 +848,7 @@ begin
     SockSend([method, ' /', url, ' HTTP/1.1'])
   else
     SockSend([method, ' ', url, ' HTTP/1.1']);
-  if Port = DEFAULT_PORT[fTLS] then
+  if Port = DEFAULT_PORT[TLS.Enabled] then
     SockSend(['Host: ', Server])
   else
     SockSend(['Host: ', Server, ':', Port]);
@@ -873,7 +879,8 @@ function THttpClientSocket.Request(const url, method: RawUtf8;
     begin
       Close; // close this connection
       try
-        OpenBind(fServer, fPort, {bind=}false, fTLS); // retry with a new socket
+        // retry with a new socket
+        OpenBind(fServer, fPort, {bind=}false, TLS.Enabled);
         HttpStateReset;
         result := Request(url, method, KeepAlive, header, Data, DataType, true);
       except
@@ -1028,15 +1035,20 @@ begin
 end;
 
 function OpenHttpGet(const server, port, url, inHeaders: RawUtf8;
-  outHeaders: PRawUtf8; aLayer: TNetLayer; aTLS: boolean): RawByteString;
-var Http: THttpClientSocket;
+  outHeaders: PRawUtf8; aLayer: TNetLayer; aTLS: boolean;
+  outStatus: PInteger): RawByteString;
+var
+  Http: THttpClientSocket;
+  status: integer;
 begin
   result := '';
   Http := OpenHttp(server, port, aTLS, aLayer);
   if Http <> nil then
   try
-    if Http.Get(url, 0, inHeaders) in
-         [HTTP_SUCCESS..HTTP_PARTIALCONTENT] then
+    status := Http.Get(url, 0, inHeaders);
+    if outStatus <> nil then
+      outStatus^ := status;
+    if status in [HTTP_SUCCESS..HTTP_PARTIALCONTENT] then
     begin
       result := Http.Content;
       if outHeaders <> nil then
@@ -2268,16 +2280,19 @@ begin
       result := TWinHttp.Get(
         aUri, inHeaders, {weakCA=}true, outHeaders, outStatus)
       {$else}
-      {$ifdef USELIBCURL}
-      result := TCurlHttp.Get(
-        aUri, inHeaders, {weakCA=}true, outHeaders, outStatus)
-      {$else}
-      raise EHttpSocket.CreateFmt('https is not supported by HttpGet(%s)', [aUri])
+      {$ifdef USELIBCURL2}
+      if TCurlHttp.IsAvailable then
+        result := TCurlHttp.Get(
+          aUri, inHeaders, {weakCA=}true, outHeaders, outStatus)
+      else
       {$endif USELIBCURL}
+        // fallback to SChannel/OpenSSL if libcurl is not installed
+        result := OpenHttpGet(uri.Server, uri.Port, uri.Address,
+          inHeaders, outHeaders, uri.Layer, uri.Https, outStatus)
       {$endif USEWININET}
     else
-      result := OpenHttpGet(
-        uri.Server, uri.Port, uri.Address, inHeaders, outHeaders, uri.Layer)
+      result := OpenHttpGet(uri.Server, uri.Port, uri.Address,
+        inHeaders, outHeaders, uri.Layer, uri.Https, outStatus)
     else
       result := '';
   {$ifdef LINUX_RAWDEBUGVOIDHTTPGET}
@@ -2286,58 +2301,6 @@ begin
   {$endif LINUX_RAWDEBUGVOIDHTTPGET}
 end;
 
-
-
-{ TNewSocketAddressCache }
-
-type
-  /// thread-safe TSynDictionary-based cache of DNS names for NewSocket()
-  TNewSocketAddressCache = class(TInterfacedObject, INewSocketAddressCache)
-  public
-    Data: TSynDictionary;
-    constructor Create(aTimeOutSeconds: integer);
-    destructor Destroy; override;
-    function Search(const Host: RawUtf8; out NetAddr: TNetAddr): boolean;
-    procedure Add(const Host: RawUtf8; const NetAddr: TNetAddr);
-    procedure Flush(const Host: RawUtf8);
-    procedure SetTimeOut(aSeconds: integer);
-  end;
-
-constructor TNewSocketAddressCache.Create(aTimeOutSeconds: integer);
-begin
-  Data := TSynDictionary.Create(
-    TypeInfo(TRawUtf8DynArray), TypeInfo(TNetAddrDynArray),
-    {caseinsens=}true, aTimeOutSeconds);
-end;
-
-destructor TNewSocketAddressCache.Destroy;
-begin
-  Data.Free;
-  inherited Destroy;
-end;
-
-function TNewSocketAddressCache.Search(const Host: RawUtf8;
-  out NetAddr: TNetAddr): boolean;
-begin
-  result := Data.FindAndCopy(Host, NetAddr);
-end;
-
-procedure TNewSocketAddressCache.Add(const Host: RawUtf8;
-  const NetAddr: TNetAddr);
-begin
-  Data.DeleteDeprecated; // flush cache only when we may need some new space
-  Data.Add(Host, NetAddr); // ignore if already added in another thread
-end;
-
-procedure TNewSocketAddressCache.Flush(const Host: RawUtf8);
-begin
-  Data.Delete(Host);
-end;
-
-procedure TNewSocketAddressCache.SetTimeOut(aSeconds: integer);
-begin
-  Data.TimeOutSeconds := aSeconds; // warning: will clear the cache
-end;
 
 
 { ************** Send Email using the SMTP Protocol }
@@ -2375,8 +2338,7 @@ begin
   result := SendEmail(
     Server.Host, From, CsvDest, Subject, Text, Headers,
     Server.User, Server.Pass, Server.Port, TextCharSet,
-    (Server.Port = '465') or
-    (Server.Port = '587'));
+    aTLS or (Server.Port = '465') or (Server.Port = '587'));
 end;
 
 {$I-}
@@ -2416,7 +2378,7 @@ begin
   P := pointer(CsvDest);
   if P = nil then
     exit;
-  TCP := Open(Server, Port, aTLS);
+  TCP := SocketOpen(Server, Port, aTLS);
   if TCP <> nil then
   try
     TCP.CreateSockIn; // we use SockIn and SockOut here
@@ -2472,6 +2434,62 @@ begin
   StringToUtf8(Text, result);
   if not IsAnsiCompatible(result) then
     result := '=?UTF-8?B?' + BinToBase64(result);
+end;
+
+
+{ ************** DNS Resolution Cache for mormot.net.sock NewSocket() }
+
+{ TNewSocketAddressCache }
+
+type
+  /// thread-safe TSynDictionary-based cache of DNS names for NewSocket()
+  TNewSocketAddressCache = class(TInterfacedObject, INewSocketAddressCache)
+  protected
+    fData: TSynDictionary;
+  public
+    constructor Create(aTimeOutSeconds: integer);
+    destructor Destroy; override;
+    // INewSocketAddressCache methods
+    function Search(const Host: RawUtf8; out NetAddr: TNetAddr): boolean;
+    procedure Add(const Host: RawUtf8; const NetAddr: TNetAddr);
+    procedure Flush(const Host: RawUtf8);
+    procedure SetTimeOut(aSeconds: integer);
+  end;
+
+constructor TNewSocketAddressCache.Create(aTimeOutSeconds: integer);
+begin
+  fData := TSynDictionary.Create(
+    TypeInfo(TRawUtf8DynArray), TypeInfo(TNetAddrDynArray),
+    {caseinsens=}true, aTimeOutSeconds);
+end;
+
+destructor TNewSocketAddressCache.Destroy;
+begin
+  fData.Free;
+  inherited Destroy;
+end;
+
+function TNewSocketAddressCache.Search(const Host: RawUtf8;
+  out NetAddr: TNetAddr): boolean;
+begin
+  result := fData.FindAndCopy(Host, NetAddr);
+end;
+
+procedure TNewSocketAddressCache.Add(const Host: RawUtf8;
+  const NetAddr: TNetAddr);
+begin
+  fData.DeleteDeprecated; // flush cache only when we may need some new space
+  fData.Add(Host, NetAddr); // do nothing if already added in another thread
+end;
+
+procedure TNewSocketAddressCache.Flush(const Host: RawUtf8);
+begin
+  fData.Delete(Host);
+end;
+
+procedure TNewSocketAddressCache.SetTimeOut(aSeconds: integer);
+begin
+  fData.TimeOutSeconds := aSeconds; // warning: will clear the cache
 end;
 
 

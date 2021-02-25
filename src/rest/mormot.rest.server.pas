@@ -168,6 +168,7 @@ type
     fInput: TRawUtf8DynArray; // even items are parameter names, odd are values
     fInputPostContentType: RawUtf8;
     fInputCookiesRetrieved: boolean;
+    fInputAllowDouble: boolean;
     fInputCookies: array of record
       Name, Value: RawUtf8; // only computed if InCookie[] is used
     end;
@@ -501,6 +502,9 @@ type
     // but you should convert its value to AnsiString using Utf8ToString()
     function InputOrError(const ParamName: RawUtf8; out Value: variant;
       const ErrorMessageForMissingParameter: string): boolean;
+    /// if Input[] InputOrVoid[] InputOrError() variants could be double
+    property InputAllowDouble: boolean
+      read fInputAllowDouble write fInputAllowDouble;
     /// retrieve all input parameters from URI as a variant JSON object
     // - returns Unassigned if no parameter was defined
     // - returns a JSON object with input parameters encoded as
@@ -1660,7 +1664,7 @@ type
   // header unless rsoAuthenticationUriDisable is set (for security reasons)
   // - you can switch off root/timestamp/info URI via rsoTimestampInfoUriDisable
   // - Uri() header output will be sanitized for any EOL injection, unless
-  // rsoHttpHeaderCheckDisable is defined (to gain a few cycles?)
+  // rsoHttpHeaderCheckDisable is defined (to gain a few cycles)
   // - by default, TAuthUser.Data blob is retrieved from the database,
   // unless rsoGetUserRetrieveNoBlobData is defined
   // - rsoNoInternalState could be state to avoid transmitting the
@@ -2594,7 +2598,7 @@ type
 
   /// parameters supplied to publish a TSqlRestServer via HTTP
   // - used by the overloaded TRestHttpServer.Create(TRestHttpServerDefinition)
-  // constructor in mORMotHttpServer.pas, and also in dddInfraSettings.pas
+  // constructor in mormot.rest.http.server.pas, and also in dddInfraSettings.pas
   TRestHttpServerDefinition = class(TSynPersistentWithPassword)
   protected
     fBindPort: RawByteString;
@@ -2782,7 +2786,7 @@ begin
   j := length(Server.fModel.Root);
   if (i + j > length(Call^.Url)) or
      not (P[i + j] in [#0, '/', '?']) or
-     not IdemPropNameUSameLen(P + i, pointer(Server.fModel.Root), j) then
+     not IdemPropNameUSameLenNotNull(P + i, pointer(Server.fModel.Root), j) then
   begin
     // URI do not start with Model.Root -> caller can try another TRestServer
     result := False;
@@ -2892,13 +2896,13 @@ begin
     Session := CONST_AUTHENTICATION_SESSION_NOT_STARTED;
     if // /auth + /timestamp are e.g. allowed methods without signature
        ((MethodIndex >= 0) and
-       Server.fPublishedMethod[MethodIndex].ByPassAuthentication) or
+        Server.fPublishedMethod[MethodIndex].ByPassAuthentication) or
        // you can allow a service to be called directly
        ((Service <> nil) and
-       TServiceFactoryServerAbstract(Service).ByPassAuthentication) or
+        TServiceFactoryServerAbstract(Service).ByPassAuthentication) or
        // allow by-pass for a set of HTTP verbs (e.g. mGET)
        ((Table <> nil) and
-       (Method in Server.BypassOrmAuthentication)) then
+        (Method in Server.BypassOrmAuthentication)) then
       // no need to check the sessions
       exit;
     Server.fSessions.Safe.Lock;
@@ -2914,8 +2918,8 @@ begin
             if (Log <> nil) and
                (s.RemoteIP <> '') and
                (s.RemoteIP <> '127.0.0.1') then
-              Log.Log(sllUserAuth, '%/% %', [s.User.LogonName,
-                s.ID, s.RemoteIP], self);
+              Log.Log(sllUserAuth, '%/% %',
+                [s.User.LogonName, s.ID, s.RemoteIP], self);
             exit;
           end;
           inc(a);
@@ -2942,8 +2946,7 @@ begin
   if Log <> nil then
     Log.Log(sllUserAuth, 'AuthenticationFailed(%) for % (session=%)',
       [txt^, Call^.Url, Session], self);
-  // 401 Unauthorized response MUST include a WWW-Authenticate header,
-  // which is not what we used, so here we won't send 401 error code but 403
+  // 401 HTTP_UNAUTHORIZED must include a WWW-Authenticate header, so return 403
   Call.OutStatus := HTTP_FORBIDDEN;
   FormatUtf8('Authentication Failed: % (%)',
     [UnCamelCase(TrimLeftLowerCaseShort(txt)), ord(Reason)], CustomErrorMsg);
@@ -3293,7 +3296,8 @@ procedure TRestServerUriContext.InternalExecuteSoaByInterface;
         // {"method":"_free_", "params":[], "id":1234}
         if not (Service.InstanceCreation in [sicClientDriven..sicPerThread]) then
         begin
-          Error('_free_ is not compatible with %', [ToText(Service.InstanceCreation)^]);
+          Error('_free_ is not compatible with %',
+            [ToText(Service.InstanceCreation)^]);
           exit;
         end;
       ord(imContract):
@@ -4101,7 +4105,7 @@ var
 begin
   value := GetInputUtf8OrVoid(ParamName);
   if (length(value) <> 8) or
-     not HexDisplayToCardinal(Pointer(value), result) then
+     not HexDisplayToBin(Pointer(value), @result, SizeOf(result)) then
     result := 0;
 end;
 
@@ -4252,12 +4256,17 @@ var
   v: RawUtf8;
 begin
   GetInputByName(ParamName, '', v);
-  GetVariantFromJson(pointer(v), false, result{%H-});
+  GetVariantFromJson(pointer(v), false, result{%H-}, nil,
+    fInputAllowDouble, length(v));
 end;
 
 function TRestServerUriContext.GetInputOrVoid(const ParamName: RawUtf8): variant;
+var
+  v: RawUtf8;
 begin
-  GetVariantFromJson(pointer(GetInputUtf8OrVoid(ParamName)), false, result{%H-});
+  v := GetInputUtf8OrVoid(ParamName);
+  GetVariantFromJson(pointer(v), false, result{%H-}, nil,
+    fInputAllowDouble, length(v));
 end;
 
 function TRestServerUriContext.InputOrError(const ParamName: RawUtf8;
@@ -4267,7 +4276,8 @@ var
 begin
   result := InputUtf8OrError(ParamName, v, ErrorMessageForMissingParameter);
   if result then
-    GetVariantFromJson(pointer(v), false, Value);
+    GetVariantFromJson(pointer(v), false, Value, nil,
+      fInputAllowDouble, length(v));
 end;
 
 function TRestServerUriContext.GetInputAsTDocVariant(
@@ -4297,7 +4307,8 @@ begin
       end
       else
         forcestring := false;
-      GetVariantFromJson(pointer(fInput[ndx * 2 + 1]), forcestring, v, @Options);
+      GetVariantFromJson(pointer(fInput[ndx * 2 + 1]), forcestring, v,
+        @Options, fInputAllowDouble, length(fInput[ndx * 2 + 1]));
       res.AddValue(name, v);
     end;
   end
@@ -4521,7 +4532,7 @@ begin
       agent := GetUserAgent;
       if (agent = '') or
          (PosEx('mORMot', agent) > 0) then
-        // 'mORMot' set e.g. from XPOWEREDPROGRAM value in SynCrtSock
+        // 'mORMot' set e.g. from DefaultUserAgent() in mormot.net.http
         fClientKind := ckFramework
       else
         fClientKind := ckAjax;
@@ -5428,15 +5439,15 @@ begin
   len := Ctxt.UriSessionSignaturePos - 1;
   P := @Ctxt.Call^.Url[len + (20 + 8)]; // points to Hexa8(Timestamp)
   minticks := result.fLastTimestamp - fTimestampCoherencyTicks;
-  if HexDisplayToCardinal(P, ts) and
+  if HexDisplayToBin(P, @ts, SizeOf(ts)) and
      (fNoTimestampCoherencyCheck or
       (integer(minticks) < 0) or // <0 just after login
-      (ts >= minticks)) then
+      ({%H-}ts >= minticks)) then
   begin
     expectedsign := fComputeSignature(result.fPrivateSaltHash,
       P, pointer(Ctxt.Call^.Url), len);
-    if HexDisplayToCardinal(P + 8, sign) and
-       (sign = expectedsign) then
+    if HexDisplayToBin(P + 8, @sign, SizeOf(sign)) and
+       ({%H-}sign = expectedsign) then
     begin
       if ts > result.fLastTimestamp then
         result.fLastTimestamp := ts;
@@ -5495,7 +5506,7 @@ begin
   end;
   hash := ServerNonceHash; // thread-safe SHA-3 sponge reuse
   hash.Update(@ticks, SizeOf(ticks));
-  hash.final(res, true);
+  hash.Final(res, true);
   result := BinToHexLower(@res, SizeOf(res));
   with ServerNonceCache[Previous] do
   begin
@@ -6865,7 +6876,7 @@ begin
   if Assigned(OnSessionCreate) then
     if OnSessionCreate(self, Session, Ctxt) then
     begin
-      // TRUE aborts session creation
+      // callback returning TRUE aborts session creation
       InternalLog('Session aborted by OnSessionCreate() callback ' +
         'for User.LogonName=% (connected from %/%) - clients=%, sessions=%',
         [User.LogonName, Session.RemoteIP, Ctxt.Call^.LowLevelConnectionID,
@@ -7350,7 +7361,7 @@ const
 var
   ctxt: TRestServerUriContext;
   msstart, msstop: Int64;
-  elapsed, len: cardinal;
+  elapsed: cardinal;
   outcomingfile: boolean;
   log: ISynLog;
 begin
@@ -7399,7 +7410,7 @@ begin
       // 2. handle security
       if (rsoSecureConnectionRequired in fOptions) and
          (ctxt.MethodIndex <> fPublishedMethodTimestampIndex) and
-         not (llfSecured in Call.LowLevelFlags) then
+         not (llfSecured in Call.LowLevelConnectionFlags) then
         ctxt.AuthenticationFailed(afSecureConnectionRequired)
       else if not ctxt.Authenticate then
         ctxt.AuthenticationFailed(afInvalidSignature)
@@ -7413,9 +7424,9 @@ begin
       else if (ctxt.Session <> CONST_AUTHENTICATION_NOT_USED) or
               (fJwtForUnauthenticatedRequest = nil) or
               (ctxt.MethodIndex = fPublishedMethodTimestampIndex) or
-              ((llfSecured in Call.LowLevelFlags) and
-               // HTTPS does not authenticate by itself
-               not (llfHttps in Call.LowLevelFlags)) or
+              ((llfSecured in Call.LowLevelConnectionFlags) and
+               // HTTPS does not authenticate by itself, WebSockets does
+               not (llfHttps in Call.LowLevelConnectionFlags)) or
               ctxt.AuthenticationCheck(fJwtForUnauthenticatedRequest) then
       // 3. call appropriate ORM / SOA commands in fAcquireExecution[] context
       try
@@ -7450,12 +7461,11 @@ begin
     begin
       outcomingfile := false;
       if Call.OutBody <> '' then
-      begin
-        len := length(Call.OutHead);
-        outcomingfile := (len >= 25) and
+        // detect 'Content-type: !STATICFILE' as first header
+        outcomingfile := (length(Call.OutHead) >= 25) and
                          (Call.OutHead[15] = '!') and
-          IdemPChar(pointer(Call.OutHead), STATICFILE_CONTENT_TYPE_HEADER_UPPPER);
-      end
+                         IdemPChar(pointer(Call.OutHead),
+                           STATICFILE_CONTENT_TYPE_HEADER_UPPPER)
       else
         // handle Call.OutBody=''
         if (Call.OutStatus = HTTP_SUCCESS) and
@@ -7484,8 +7494,10 @@ begin
     else
       // database state may have changed above
       Call.OutInternalState := TRestOrmServer(fOrmInstance).InternalState;
+    // set any outgoing cookie
     if ctxt.OutSetCookie <> '' then
       ctxt.OutHeadFromCookie;
+    // paranoid check of the supplied output headers
     if not (rsoHttpHeaderCheckDisable in fOptions) and
        IsInvalidHttpHeader(pointer(Call.OutHead), length(Call.OutHead)) then
       ctxt.Error('Unsafe HTTP header rejected [%]',
@@ -7747,7 +7759,7 @@ begin
   LibraryRequestString(call.Url, Url, UrlLen);
   LibraryRequestString(call.Method, Method, MethodLen);
   call.LowLevelConnectionID := PtrInt(GlobalLibraryRequestServer);
-  call.LowLevelFlags := [llfSecured]; // in-process communication is safe
+  call.LowLevelConnectionFlags := [llfSecured]; // in-process call
   call.InHead := 'RemoteIP: 127.0.0.1';
   if (Head <> nil) and
      (HeadLen <> 0) then

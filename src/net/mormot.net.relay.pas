@@ -274,8 +274,9 @@ type
     fServerConnectedToLocalHost: boolean;
     fStatCache: RawJson;
     fStatTix: integer;
-    function OnServerBeforeBody(var aURL,aMethod,aInHeaders, aInContentType,
-      aRemoteIP: RawUtf8; aContentLength: integer; aUseSSL: boolean): cardinal;
+    function OnServerBeforeBody(var aURL, aMethod, aInHeaders, aInContentType,
+      aRemoteIP, aBearerToken: RawUtf8; aContentLength: integer;
+      aFlags: THttpServerRequestFlags): cardinal;
     function OnServerRequest(Ctxt: THttpServerRequestAbstract): cardinal;
     function OnClientsRequest(Ctxt: THttpServerRequestAbstract): cardinal;
     function GetStats: RawJson;
@@ -404,6 +405,23 @@ end;
 
 { TRelayServerProtocol }
 
+constructor TRelayServerProtocol.Create(aOwner: TPublicRelay;
+  const aServerKey: RawUtf8);
+begin
+  fOwner := aOwner;
+  inherited Create('synopserelay', '');
+  if aServerKey <> '' then
+    SetEncryptKey({aServer=}true, aServerKey);
+end;
+
+function TRelayServerProtocol.Clone(
+  const aClientUri: RawUtf8): TWebSocketProtocol;
+begin
+  result := TRelayServerProtocol.Create(fOwner, '');
+  if fEncryption <> nil then
+    TRelayServerProtocol(result).fEncryption := fEncryption.Clone;
+end;
+
 procedure TRelayServerProtocol.ProcessIncomingFrame(Sender: TWebSocketProcess;
   var Frame: TWebSocketFrame; const info: RawUtf8);
 var
@@ -411,7 +429,7 @@ var
   connection: THttpServerConnectionID;
   sent: boolean;
   rest: TRelayFrameRestPayload;
-  client: TWebSocketServerResp;
+  client: TWebSocketProcessServer;
   i: PtrInt;
   p: ^THttpServerRequest;
 begin
@@ -490,9 +508,9 @@ begin
             else
             begin
               // redirect the frame to the final client
-              sent := client.WebSocketProcess.SendFrame(Frame);
+              sent := client.SendFrame(Frame);
               log.Log(LOG_DEBUGERROR[not sent], 'ProcessIncomingFrame % #% % %',
-                [ToText(Frame.opcode)^, connection, client.WebSocketProcess.RemoteIP,
+                [ToText(Frame.opcode)^, connection, client.RemoteIP,
                  KBNoSpace(length(Frame.payload))], self);
             end;
           end;
@@ -504,23 +522,6 @@ begin
   finally
     fOwner.Safe.UnLock;
   end;
-end;
-
-constructor TRelayServerProtocol.Create(aOwner: TPublicRelay;
-  const aServerKey: RawUtf8);
-begin
-  fOwner := aOwner;
-  inherited Create('synopserelay', '');
-  if aServerKey <> '' then
-    SetEncryptKey({aServer=}true, aServerKey);
-end;
-
-function TRelayServerProtocol.Clone(
-  const aClientUri: RawUtf8): TWebSocketProtocol;
-begin
-  result := TRelayServerProtocol.Create(fOwner, '');
-  if fEncryption <> nil then
-    TRelayServerProtocol(result).fEncryption := fEncryption.Clone;
 end;
 
 
@@ -937,10 +938,9 @@ begin
 end;
 
 function TPublicRelay.OnServerBeforeBody(
-  var aURL, aMethod, aInHeaders, aInContentType, aRemoteIP: RawUtf8;
-  aContentLength: integer; aUseSSL: boolean): cardinal;
+  var aURL, aMethod, aInHeaders, aInContentType, aRemoteIP, aBearerToken: RawUtf8;
+  aContentLength: integer; aFlags: THttpServerRequestFlags): cardinal;
 var
-  bearer: RawUtf8;
   res: TJwtResult;
 begin
   if IdemPChar(pointer(aURL), '/STAT') then
@@ -948,8 +948,10 @@ begin
     result := HTTP_SUCCESS;
     exit;
   end;
-  FindNameValue(aInHeaders, HEADER_BEARER_UPPER, bearer);
-  res := fServerJWT.Verify(bearer);
+  if aBearerToken = '' then
+    res := jwtNoToken
+  else
+    res := fServerJWT.Verify(aBearerToken);
   if res = jwtValid then
     if fServerConnected <> nil then
     begin
@@ -958,7 +960,7 @@ begin
       result := HTTP_NOTACCEPTABLE;
     end
     else
-      result := HTTP_SUCCESS
+      result := HTTP_SUCCESS // valid bearer -> continue the request
   else
   begin
     inc(fRejected);

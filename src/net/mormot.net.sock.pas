@@ -170,6 +170,7 @@ type
 
   /// used by NewSocket() to cache the host names via NewSocketAddressCache global
   // - defined in this unit, but implemented in mormot.net.client.pas
+  // - the implementation should be thread-safe
   INewSocketAddressCache = interface
     /// method called by NewSocket() to resolve its address
     function Search(const Host: RawUtf8; out NetAddr: TNetAddr): boolean;
@@ -221,7 +222,8 @@ function ToText(res: TNetResult): PShortString; overload;
 
 type
   /// TLS Options and Information for a given TCrtSocket/INetTLS connection
-  // - currently only properly implemented by mormot.lib.openssl11
+  // - currently only properly implemented by mormot.lib.openssl11 - SChannel
+  // on Windows only recognizes IgnoreCertificateErrors and sets CipherName
   // - typical usage is the following:
   // $ with THttpClientSocket.Create do
   // $ try
@@ -232,11 +234,13 @@ type
   // $   writeln(TLS.PeerInfo);
   // $   writeln(TLS.CipherName);
   // $   writeln(Get('/forum/', 1000), ' len=', ContentLength);
-  // $   writeln(Get('/fossil/wiki/Synopse+OpenSource', 1000), ' len=', ContentLength);
+  // $   writeln(Get('/fossil/wiki/Synopse+OpenSource', 1000));
   // $ finally
   // $   Free;
   // $ end;
   TNetTLSContext = record
+    /// set if the TLS flag was set to TCrtSocket.OpenBind() method
+    Enabled: boolean;
     /// input: let HTTPS be less paranoid about TLS certificates
     IgnoreCertificateErrors: boolean;
     /// input: if PeerInfo field should be retrieved once connected
@@ -492,7 +496,7 @@ type
     fBytesOut: Int64;
     fSocketLayer: TNetLayer;
     fSockInEofError: integer;
-    fTLS, fWasBind: boolean;
+    fWasBind: boolean;
     // updated by every SockSend() call
     fSndBuf: RawByteString;
     fSndBufLen: integer;
@@ -520,6 +524,7 @@ type
     /// connect to aServer:aPort
     // - optionaly via TLS (using the SChannel API on Windows, or by including
     // mormot.lib.openssl11 unit to your project) - with custom input options
+    // - see also SocketOpen() for a wrapper catching any connection exception
     constructor Open(const aServer, aPort: RawUtf8; aLayer: TNetLayer = nlTCP;
       aTimeOut: cardinal = 10000; aTLS: boolean = false; aTLSContext: PNetTLSContext = nil);
     /// bind to an address
@@ -800,10 +805,10 @@ const
     '80', '443');
 
 
-/// create a TCrtSocket, returning nil on error
-// (useful to easily catch socket error exception ENetSock)
-function Open(const aServer, aPort: RawUtf8;
-  aTLS: boolean = false): TCrtSocket;
+/// create a TCrtSocket instance, returning nil on error
+// - useful to easily catch any exception, and provide a custom TNetTLSContext
+function SocketOpen(const aServer, aPort: RawUtf8;
+  aTLS: boolean = false; aTLSContext: PNetTLSContext = nil): TCrtSocket;
 
 
 implementation
@@ -1068,6 +1073,7 @@ begin
   netsocket := nil;
   fromcache := false;
   tobecached := false;
+  // resolve the TNetAddr of the address:port layer - maybe from cache
   if (layer in nlIP) and
      (not dobind) and
      Assigned(NewSocketAddressCache) and
@@ -1086,6 +1092,7 @@ begin
     result := addr.SetFrom(address, port, layer);
   if result <> nrOK then
     exit;
+  // create the raw Socket instance
   sock := socket(PSockAddr(@addr)^.sa_family, _ST[layer], _IP[layer]);
   if sock = -1 then
   begin
@@ -1095,11 +1102,13 @@ begin
       NewSocketAddressCache.Flush(address);
     exit;
   end;
+  // bind or connect to this Socket
   repeat
     if dobind then
     begin
-      // Socket should remain open for 5 seconds after a closesocket() call
+      // bound Socket should remain open for 5 seconds after a closesocket()
       TNetSocket(sock).SetLinger(5);
+      // Server-side binding/listening of the socket to the address:port
       if (bind(sock, @addr, addr.Size)  <> NO_ERROR) or
          ((layer <> nlUDP) and
           (listen(sock, DefaultListenBacklog)  <> NO_ERROR)) then
@@ -1110,6 +1119,7 @@ begin
       // open Client connection
       if connecttimeout > 0 then
       begin
+        // set timeouts before connect()
         TNetSocket(sock).SetReceiveTimeout(connecttimeout);
         if recvtimeout = connecttimeout then
           recvtimeout := 0; // call SetReceiveTimeout() once
@@ -1128,12 +1138,15 @@ begin
   until false;
   if result <> nrOK then
   begin
+    // this address:port seems invalid or already bound
     closesocket(sock);
     if fromcache then
+      // ensure the cache won't contain this faulty address any more
       NewSocketAddressCache.Flush(address);
   end
   else
   begin
+    // Socket is successfully connected -> setup the connection
     if tobecached then
       // update cache once we are sure the host actually exists
       NewSocketAddressCache.Add(address, addr);
@@ -1227,14 +1240,14 @@ end;
 
 function TNetSocketWrap.MakeAsync: TNetResult;
 var
-  nonblock: cardinal;
+  nonblocking: cardinal;
 begin
   if @self = nil then
     result := nrNoSocket
   else
   begin
-    nonblock := 1;
-    result := NetCheck(ioctlsocket(TSocket(@self), FIONBIO, @nonblock));
+    nonblocking := 1;
+    result := NetCheck(ioctlsocket(TSocket(@self), FIONBIO, @nonblocking));
   end;
 end;
 
@@ -1701,8 +1714,8 @@ begin
       retry := 10
     else
       retry := {$ifdef OSBSD} 10 {$else} 2 {$endif};
-    res := NewSocket(aServer, aPort, aLayer, doBind, Timeout, Timeout, Timeout,
-      retry, fSock);
+    res := NewSocket(aServer, aPort, aLayer, doBind,
+      Timeout, Timeout, Timeout, retry, fSock);
     if res <> nrOK then
       raise ENetSock.CreateFmt('OpenBind(%s:%s,%s) failed as ''%s'': %s',
         [aServer, fPort, BINDTXT[doBind], _NR[res], BINDMSG[doBind]]);
@@ -1730,7 +1743,7 @@ begin
         raise ENetSock.Create('TLS is not available on this system - ' +
           'try installing OpenSSL 1.1.1');
       fSecure.AfterConnection(fSock, TLS, aServer);
-      fTLS := true;
+      TLS.Enabled := true;
     except
       on E: Exception do
       begin
@@ -2574,7 +2587,7 @@ begin
     port := DEFAULT_PORT[Https];
   if S^ <> #0 then // ':' or '/'
     inc(S);
-  address := S;
+  Address := S;
   if Server <> '' then
     result := true;
 end;
@@ -2610,10 +2623,11 @@ begin
     Root := copy(address, 1, i - 1);
 end;
 
-function Open(const aServer, aPort: RawUtf8; aTLS: boolean): TCrtSocket;
+function SocketOpen(const aServer, aPort: RawUtf8; aTLS: boolean;
+  aTLSContext: PNetTLSContext): TCrtSocket;
 begin
   try
-    result := TCrtSocket.Open(aServer, aPort, nlTCP, 10000, aTLS);
+    result := TCrtSocket.Open(aServer, aPort, nlTCP, 10000, aTLS, aTLSContext);
   except
     result := nil;
   end;
