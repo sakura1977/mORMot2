@@ -119,29 +119,104 @@ procedure ComputeChallenge(const Base64: RawByteString; out Digest: TSha1Digest)
 
 { ******************** WebSockets Protocols Implementation }
 
-var
-  /// the raw AES class used by TWebSocketProtocol.SetEncryptKey/SetEncryptKeyAes
-  // - if left to its default nil, TAesFast[mCtr] will be used, since it is much
-  // faster on x86_64 or if mormot.core.crypto.openssl.RegisterOpenSsl is called
-  // - for compatibility, you may set TAesCfb as used with mORMot 1.18
-  // - WebSockets compression makes crc32c() so AES-GCM or AES-CTC are unneeded
-  ProtocolAesClass: TAesAbstractClass = nil;
-
-  /// how TWebSocketProtocol.SetEncryptKey derivate its password via PBKDF2_SHA3()
-  // - we use PBKDF2 over SHA-3 in 256-bit, for a future-proof derivation
-  // - default 1024 value takes around 0.5 millisecond to compute, so is safe
-  // against most brute-force attacks
-  // - if you set 0, it will use the mORMot 1.18 deprecated Sha256Weak() function
-  ProtocolAesRounds: integer = 1024;
-
-  /// how TWebSocketProtocol.SetEncryptKey derivate its password via PBKDF2_SHA3()
-  ProtocolAesSalt: RawUtf8 = 'E750ACCA-2C6F-4B0E-999B-D31C9A14EFAB';
-
-
 type
   {$M+}
   TWebSocketProcess = class;
   {$M-}
+
+  /// used by TWebSocketProcessSettings for WebSockets process logging settings
+  TWebSocketProcessSettingsLogDetails = set of (
+    logHeartbeat,
+    logTextFrameContent,
+    logBinaryFrameContent);
+
+  /// parameters to be used for WebSockets processing
+  // - those settings are used by all protocols running on a given
+  // TWebSocketServer or a THttpClientWebSockets
+  {$ifdef USERECORDWITHMETHODS}
+  TWebSocketProcessSettings = record
+  {$else}
+  TWebSocketProcessSettings = object
+  {$endif USERECORDWITHMETHODS}
+  public
+    /// time in milli seconds between each focPing commands sent to the other end
+    // - default is 0, i.e. no automatic ping sending on client side, and
+    // 20000, i.e. 20 seconds, on server side
+    HeartbeatDelay: cardinal;
+    /// maximum period time in milli seconds when ProcessLoop thread will stay
+    // idle before checking for the next pending requests
+    // - default is 500 ms, but you may put a lower value, if you expects e.g.
+    // REST commands or NotifyCallback(wscNonBlockWithoutAnswer) to be processed
+    // with a lower delay
+    LoopDelay: cardinal;
+    /// ms between sending - allow to gather output frames
+    // - GetTickCount resolution is around 16ms under Windows, so default 10ms
+    // seems fine for a cross-platform similar behavior
+    SendDelay: cardinal;
+    /// will close the connection after a given number of invalid Heartbeat sent
+    // - when a Hearbeat is failed to be transmitted, the class will start
+    // counting how many ping/pong did fail: when this property value is
+    // reached, it will release and close the connection
+    // - default value is 5
+    DisconnectAfterInvalidHeartbeatCount: cardinal;
+    /// how many milliseconds the callback notification should wait acquiring
+    // the connection before failing
+    // - defaut is 5000, i.e. 5 seconds
+    CallbackAcquireTimeOutMS: cardinal;
+    /// how many milliseconds the callback notification should wait for the
+    // client to return its answer
+    // - defaut is 30000, i.e. 30 seconds
+    CallbackAnswerTimeOutMS: cardinal;
+    /// callback run when a WebSockets client is just connected
+    // - triggerred by TWebSocketProcess.ProcessStart
+    OnClientConnected: TNotifyEvent;
+    /// callback run when a WebSockets client is just disconnected
+    // - triggerred by TWebSocketProcess.ProcessStop
+    OnClientDisconnected: TNotifyEvent;
+    /// by default, contains [] to minimize the logged information
+    // - set logHeartbeat if you want the ping/pong frames to be logged
+    // - set logTextFrameContent if you want the text frame content to be logged
+    // - set logBinaryFrameContent if you want the binary frame content to be logged
+    // - used only if WebSocketLog global variable is set to a TSynLog class
+    LogDetails: TWebSocketProcessSettingsLogDetails;
+    /// TWebSocketProtocol.SetEncryptKey PBKDF2-SHA-3 salt for TProtocolAes
+    // - default is some fixed value - you may customize it for a project
+    AesSalt: RawUtf8;
+    /// TWebSocketProtocol.SetEncryptKey PBKDF2-SHA-3 rounds for TProtocolAes
+    // - default is 1024 which takes around 0.5 ms to compute
+    // - 0 would use Sha256Weak() derivation function, as mORMot 1.18
+    AesRounds: integer;
+    /// TWebSocketProtocol.SetEncryptKey AES class for TProtocolAes
+    // - default is TAesFast[mCtr]
+    AesCipher: TAesAbstractClass;
+    /// TWebSocketProtocol.SetEncryptKey AES key size in bits, for TProtocolAes
+    // - default is 128 for efficient 'aes-128-ctr' at 2.5GB/s
+    // - for mORMot 1.18 compatibility, set for your custom settings:
+    // $ AesClass := TAesCfb;
+    // $ AesBits := 256;
+    // $ AesRounds := 0; // Sha256Weak() deprecated function
+    AesBits: integer;
+    /// TWebSocketProtocol.SetEncryptKey 'password#xxxxxx.private' ECDHE algo
+    // - default is efAesCtr128 as set to TEcdheProtocol.FromPasswordSecureFile
+    EcdheCipher: TEcdheEF;
+    /// TWebSocketProtocol.SetEncryptKey 'password#xxxxxx.private' ECDHE auth
+    // - default is the safest authMutual
+    EcdheAuth: TEcdheAuth;
+    /// TWebSocketProtocol.SetEncryptKey 'password#xxxxxx.private' password rounds
+    // - default is 60000, i.e. DEFAULT_ECCROUNDS
+    EcdheRounds: integer;
+    /// will set the default values
+    procedure SetDefaults;
+    /// will set LogDetails to its highest level of verbosity
+    // - used only if WebSocketLog global variable is set
+    procedure SetFullLog;
+  end;
+
+  /// points to parameters to be used for WebSockets process
+  // - using a pointer/reference type will allow in-place modification of
+  // any TWebSocketProcess.Settings, TWebSocketServer.Settings or
+  // THttpClientWebSockets.Settings property
+  PWebSocketProcessSettings = ^TWebSocketProcessSettings;
 
   /// callback event triggered by TWebSocketProtocol for any incoming message
   // - called before TWebSocketProtocol.ProcessIncomingFrame for incoming
@@ -217,18 +292,26 @@ type
     function SetSubprotocol(const aProtocolName: RawUtf8): boolean; virtual;
     /// create the internal Encryption: IProtocol according to the supplied key
     // - any asymmetric algorithm needs to know its side, i.e. client or server
-    // - try 'password#xxxxxx.private' TEcdheProtocol.FromPasswordSecureFile(aKey)
-    // with efAesCtc128, then TEcdheProtocol.FromKey(aKey), then SetEncryptKeyAes()
-    // with PBKDF2_SHA3 over ProtocolAesSalt/ProtocolAesRounds/ProtocolAesClass
+    // - use aKey='password#xxxxxx.private' for efAesCtr128 calling
+    // TEcdheProtocol.FromPasswordSecureFile() - FromKeySetCA() should have been
+    // called to set the global PKI
+    // - use aKey='a=mutual;e=aesctc128;p=34a2;pw=password;ca=..' full
+    // TEcdheProtocol.FromKey(aKey) format
+    // - or aKey will be derivated using aSettings to call
+    // SetEncryptKeyAes - default as 1024 PBKDF2-SHA-3 rounds into aes-128-ctr
     // - you can disable encryption by setting aKey=''
-    procedure SetEncryptKey(aServer: boolean; const aKey: RawUtf8);
-    /// set the fEncryption: IProtocol as TProtocolAes.Create(TAesCtr)
-    procedure SetEncryptKeyAes(const aKey; aKeySize: cardinal);
-    /// set the fEncryption: IProtocol as TEcdheProtocol.Create()
-    // - as default, we use efAesCtc128 which is faster on x86_64 (2.4GB/s)
+    procedure SetEncryptKey(aServer: boolean; const aKey: RawUtf8;
+      aSettings: PWebSocketProcessSettings);
+    /// set the fEncryption: IProtocol from TProtocolAes.Create()
+    // - if aClass is nil, TAesFast[mCtr] will be used as default
+    // - AEAD Cfc,mOfc,mCtc,mGcm modes will be rejected since unsupported
+    procedure SetEncryptKeyAes(aCipher: TAesAbstractClass;
+      const aKey; aKeySize: cardinal);
+    /// set the fEncryption: IProtocol from TEcdheProtocol.Create()
+    // - as default, we use efAesCtr128 which is the fastest on x86_64 (2.5GB/s)
     procedure SetEncryptKeyEcdhe(aAuth: TEcdheAuth; aPKI: TEccCertificateChain;
       aPrivate: TEccCertificateSecret; aServer: boolean;
-      aEF: TEcdheEF = efAesCtc128; aPrivateOwned: boolean = false);
+      aEF: TEcdheEF = efAesCtr128; aPrivateOwned: boolean = false);
     /// redirect to Encryption.ProcessHandshake, if defined
     function ProcessHandshake(const ExtIn: TRawUtf8DynArray;
       out ExtOut: RawUtf8; ErrorMsg: PRawUtf8): boolean; virtual;
@@ -343,8 +426,22 @@ type
     function Clone(const aClientUri: RawUtf8): TWebSocketProtocol; override;
   end;
 
+  /// tune the 'synopsebin' protocol
+  // - pboCompress will compress all frames payload using SynLZ
+  // - pboNoLocalHostCompress won't compress frames on the loopback (127.0.0.1)
+  // - pboNoLocalHostEncrypt won't encrypt frames on the loopback (127.0.0.1)
+  TWebSocketProtocolBinaryOption = (
+    pboSynLzCompress,
+    pboNoLocalHostCompress,
+    pboNoLocalHostEncrypt);
+
+  /// how TWebSocketProtocolBinary implements the 'synopsebin' protocol
+  // - should match on both client and server ends
+  TWebSocketProtocolBinaryOptions = set of TWebSocketProtocolBinaryOption;
+
+
   /// handle a REST application-level WebSockets protocol using compressed and
-  // optionally AES-CFB encrypted binary
+  // optionally AES-CTR encrypted binary
   // - this class will implement then following application-level protocol:
   // $ Sec-WebSocket-Protocol: synopsebin
   // or fallback to the previous subprotocol
@@ -353,9 +450,9 @@ type
   // headers matching 'a000001','a000002',... instead of 'request'/'answer'
   TWebSocketProtocolBinary = class(TWebSocketProtocolRest)
   protected
-    fCompressed: boolean;
     fFramesInBytesSocket: QWord;
     fFramesOutBytesSocket: QWord;
+    fOptions: TWebSocketProtocolBinaryOptions;
     procedure FrameCompress(const Head: RawUtf8;
       const Values: array of const; const Content, ContentType: RawByteString;
       var frame: TWebSocketFrame); override;
@@ -378,17 +475,20 @@ type
     /// initialize the WebSockets binary protocol with no encryption
     // - if aUri is '', any URI would potentially upgrade to this protocol; you
     // can specify an URI to limit the protocol upgrade to a single resource
-    // - SynLZ compression is enabled by default, unless aCompressed is false
-    constructor Create(const aUri: RawUtf8; aCompressed: boolean = true);
+    // - SynLZ compression is enabled by default, for all frames
+    constructor Create(const aUri: RawUtf8;
+      aOptions: TWebSocketProtocolBinaryOptions = [pboSynLzCompress]);
       reintroduce; overload; virtual;
     /// initialize the WebSockets binary protocol with a symmetric AES key
     // - if aUri is '', any URI would potentially upgrade to this protocol; you
     // can specify an URI to limit the protocol upgrade to a single resource
-    // - if aKeySize if 128, 192 or 256, TProtocolAes (i.e. AES-CFB encryption)
+    // - if aKeySize if 128, 192 or 256, TProtocolAes (i.e. AES-CTR encryption)
     //  will be used to secure the transmission
-    // - SynLZ compression is enabled by default, unless aCompressed is false
+    // - SynLZ compression is enabled by default, before encryption
     constructor Create(const aUri: RawUtf8; const aKey; aKeySize: cardinal;
-      aCompressed: boolean = true); reintroduce; overload;
+      aOptions: TWebSocketProtocolBinaryOptions = [pboSynLzCompress];
+      aCipher: TAesAbstractClass = nil);
+        reintroduce; overload;
     /// initialize the WebSockets binary protocol from a textual key
     // - if aUri is '', any URI would potentially upgrade to this protocol; you
     // can specify an URI to limit the protocol upgrade to a single resource
@@ -397,7 +497,9 @@ type
     // a symmetric or assymetric algorithm
     // - SynLZ compression is enabled by default, unless aCompressed is false
     constructor Create(const aUri: RawUtf8; aServer: boolean;
-      const aKey: RawUtf8; aCompressed: boolean = true); reintroduce; overload;
+      const aKey: RawUtf8; aSettings: PWebSocketProcessSettings;
+      aOptions: TWebSocketProtocolBinaryOptions = [pboSynLzCompress]);
+        reintroduce; overload;
     /// compute a new instance of the WebSockets protocol, with same parameters
     function Clone(const aClientUri: RawUtf8): TWebSocketProtocol; override;
     /// returns Name by default, but could be e.g. 'synopsebin, synopsebinary'
@@ -405,10 +507,10 @@ type
     /// specify the recognized sub-protocols, e.g. 'synopsebin, synopsebinary'
     function SetSubprotocol(const aProtocolName: RawUtf8): boolean; override;
   published
-    /// defines if SynLZ compression is enabled during the transmission
-    // - is set to TRUE by default
-    property Compressed: boolean
-      read fCompressed write fCompressed;
+    /// how compression / encryption is implemented during the transmission
+    // - is set to [pboSynLzCompress] by default
+    property Options: TWebSocketProtocolBinaryOptions
+      read fOptions write fOptions;
     /// how many bytes have been received by this instance from the wire
     property FramesInBytesSocket: QWord
       read fFramesInBytesSocket;
@@ -501,72 +603,6 @@ type
 
 { ******************** WebSockets Client and Server Shared Process }
 
-  /// used by TWebSocketProcessSettings for WebSockets process logging settings
-  TWebSocketProcessSettingsLogDetails = set of (
-    logHeartbeat,
-    logTextFrameContent,
-    logBinaryFrameContent);
-
-  /// parameters to be used for WebSockets process
-  {$ifdef USERECORDWITHMETHODS}
-  TWebSocketProcessSettings = record
-  {$else}
-  TWebSocketProcessSettings = object
-  {$endif USERECORDWITHMETHODS}
-  public
-    /// time in milli seconds between each focPing commands sent to the other end
-    // - default is 0, i.e. no automatic ping sending on client side, and
-    // 20000, i.e. 20 seconds, on server side
-    HeartbeatDelay: cardinal;
-    /// maximum period time in milli seconds when ProcessLoop thread will stay
-    // idle before checking for the next pending requests
-    // - default is 500 ms, but you may put a lower value, if you expects e.g.
-    // REST commands or NotifyCallback(wscNonBlockWithoutAnswer) to be processed
-    // with a lower delay
-    LoopDelay: cardinal;
-    /// ms between sending - allow to gather output frames
-    // - GetTickCount resolution is around 16ms under Windows, so default 10ms
-    // seems fine for a cross-platform similar behavior
-    SendDelay: cardinal;
-    /// will close the connection after a given number of invalid Heartbeat sent
-    // - when a Hearbeat is failed to be transmitted, the class will start
-    // counting how many ping/pong did fail: when this property value is
-    // reached, it will release and close the connection
-    // - default value is 5
-    DisconnectAfterInvalidHeartbeatCount: cardinal;
-    /// how many milliseconds the callback notification should wait acquiring
-    // the connection before failing
-    // - defaut is 5000, i.e. 5 seconds
-    CallbackAcquireTimeOutMS: cardinal;
-    /// how many milliseconds the callback notification should wait for the
-    // client to return its answer
-    // - defaut is 30000, i.e. 30 seconds
-    CallbackAnswerTimeOutMS: cardinal;
-    /// callback run when a WebSockets client is just connected
-    // - triggerred by TWebSocketProcess.ProcessStart
-    OnClientConnected: TNotifyEvent;
-    /// callback run when a WebSockets client is just disconnected
-    // - triggerred by TWebSocketProcess.ProcessStop
-    OnClientDisconnected: TNotifyEvent;
-    /// by default, contains [] to minimize the logged information
-    // - set logHeartbeat if you want the ping/pong frames to be logged
-    // - set logTextFrameContent if you want the text frame content to be logged
-    // - set logBinaryFrameContent if you want the binary frame content to be logged
-    // - used only if WebSocketLog global variable is set to a TSynLog class
-    LogDetails: TWebSocketProcessSettingsLogDetails;
-    /// will set the default values
-    procedure SetDefaults;
-    /// will set LogDetails to its highest level of verbosity
-    // - used only if WebSocketLog global variable is set
-    procedure SetFullLog;
-  end;
-
-  /// points to parameters to be used for WebSockets process
-  // - using a pointer/reference type will allow in-place modification of
-  // any TWebSocketProcess.Settings, TWebSocketServer.Settings or
-  // THttpClientWebSockets.Settings property
-  PWebSocketProcessSettings = ^TWebSocketProcessSettings;
-
   /// the current state of the WebSockets process
   TWebSocketProcessState = (
     wpsCreate,
@@ -591,7 +627,7 @@ type
     fProcessEnded: boolean;
     fNoConnectionCloseAtDestroy: boolean;
     fProcessCount: integer;
-    fSettings: TWebSocketProcessSettings;
+    fSettings: PWebSocketProcessSettings;
     fSafeIn, fSafeOut: PSynLocker;
     fInvalidPingSendCount: cardinal;
     fSafePing: PSynLocker;
@@ -622,7 +658,7 @@ type
     // - other parameters should reflect the client or server expectations
     constructor Create(aProtocol: TWebSocketProtocol;
       aOwnerConnection: THttpServerConnectionID; aOwnerThread: TSynThread;
-      const aSettings: TWebSocketProcessSettings; const aProcessName: RawUtf8); reintroduce;
+      aSettings: PWebSocketProcessSettings; const aProcessName: RawUtf8); reintroduce;
     /// finalize the context
     // - if needed, will notify the other end with a focConnectionClose frame
     // - will release the TWebSocketProtocol associated instance
@@ -656,16 +692,17 @@ type
     // - returns the HTTP Status code (e.g. HTTP_SUCCESS=200 for success)
     function NotifyCallback(aRequest: THttpServerRequestAbstract;
       aMode: TWebSocketProcessNotifyCallback): cardinal; virtual;
-    /// the settings currently used during the WebSockets process
-    // - defined as a pointer so that you may be able to change the values
-    function Settings: PWebSocketProcessSettings;
-      {$ifdef HASINLINE}inline;{$endif}
     /// returns the current state of the underlying connection
     function State: TWebSocketProcessState;
     /// the associated 'Remote-IP' HTTP header value
     // - returns '' if Protocol=nil or Protocol.RemoteLocalhost=true
     function RemoteIP: RawUtf8;
       {$ifdef HASINLINE}inline;{$endif}
+    /// the settings currently used during the WebSockets process
+    // - points to the owner instance, e.g. TWebSocketServer.Settings or
+    // THttpClientWebSockets.Settings field
+    property Settings: PWebSocketProcessSettings
+      read fSettings;
     /// direct access to the low-level incoming frame stack
     property Incoming: TWebSocketFrameList
       read fIncoming;
@@ -712,7 +749,7 @@ type
     // - other parameters should reflect the client or server expectations
     constructor Create(aSocket: TCrtSocket; aProtocol: TWebSocketProtocol;
       aOwnerConnection: THttpServerConnectionID; aOwnerThread: TSynThread;
-      const aSettings: TWebSocketProcessSettings; const aProcessName: RawUtf8);
+      aSettings: PWebSocketProcessSettings; const aProcessName: RawUtf8);
        reintroduce; virtual;
     /// first step of the low level incoming WebSockets framing protocol over TCrtSocket
     // - in practice, just call fSocket.SockInPending to check for pending data
@@ -748,7 +785,7 @@ var
 
   /// number of bytes above which SynLZ compression may be done
   // - when working with TWebSocketProtocolBinary
-  // - it is useless to compress smaller frames, which fits in network MTU
+  // - it is useless to compress smallest frames, which fits in network MTU
   WebSocketsBinarySynLzThreshold: integer = 450;
 
   /// the allowed maximum size, in MB, of a WebSockets frame
@@ -807,18 +844,22 @@ begin
   fConnectionFlags := [hsrWebsockets];
 end;
 
-procedure TWebSocketProtocol.SetEncryptKey(aServer: boolean; const aKey: RawUtf8);
+procedure TWebSocketProtocol.SetEncryptKey(aServer: boolean; const aKey: RawUtf8;
+  aSettings: PWebSocketProcessSettings);
 var
-  key: TSha256Digest;
+  key: THash256Rec;
 begin
   // always first disable any previous encryption
   fEncryption := nil;
   fConnectionFlags := [hsrWebsockets];
-  if aKey = '' then
+  if (aKey = '') or
+     (aSettings = nil) then
     exit;
   // 1. try asymetric ES-256 ephemeral secret key and mutual authentication
   // check human-friendly format 'password#*.private' key file name
-  fEncryption := TEcdheProtocol.FromPasswordSecureFile(aKey, aServer, efAesCtc128);
+  with aSettings^ do
+    fEncryption := TEcdheProtocol.FromPasswordSecureFile(
+      aKey, aServer, EcdheAuth, EcdheCipher, EcdheRounds);
   if fEncryption = nil then
     // check 'a=mutual;e=aesctc128;p=34a2;pw=password;ca=..' full format
     fEncryption := TEcdheProtocol.FromKey(aKey, aServer);
@@ -827,29 +868,25 @@ begin
   else
   begin
     // 2. aKey no 'a=...'/'pw#xx.private' layout -> use symetric TProtocolAes
-    if ProtocolAesRounds = 0 then
+    if aSettings.AesRounds = 0 then
       // mORMot 1.18 deprecated password derivation
-      Sha256Weak(aKey, key)
+      Sha256Weak(aKey, key.b)
     else
       // new safer password derivation algorithm (rounds=1000 -> 1ms)
-      PBKDF2_SHA3(SHA3_256, aKey, ProtocolAesSalt, ProtocolAesRounds,
+      PBKDF2_SHA3(SHA3_256, aKey, aSettings.AesSalt, aSettings.AesRounds,
         @key, SizeOf(key));
-    SetEncryptKeyAes(key, 256);
+    SetEncryptKeyAes(aSettings.AesCipher, key, aSettings.AesBits);
   end;
 end;
 
-procedure TWebSocketProtocol.SetEncryptKeyAes(const aKey; aKeySize: cardinal);
-var
-  c: TAesAbstractClass;
+procedure TWebSocketProtocol.SetEncryptKeyAes(aCipher: TAesAbstractClass;
+  const aKey; aKeySize: cardinal);
 begin
   fEncryption := nil;
   fConnectionFlags := [hsrWebsockets];
   if aKeySize < 128 then
     exit;
-  c := ProtocolAesClass;
-  if c = nil then
-    c := TAesFast[mCtr]; // fastest on x86_64 or OpenSSL - server friendly
-  fEncryption := TProtocolAes.Create(c, aKey, aKeySize);
+  fEncryption := TProtocolAes.Create(aCipher, aKey, aKeySize);
   include(fConnectionFlags, hsrSecured)
 end;
 
@@ -1320,7 +1357,7 @@ var
     txtlen: integer;
   begin
     txt := GetJsonField(P, P, nil, nil, @txtlen);
-    SetString(content, txt, txtlen);
+    FastSetString(RawUtf8(content), txt, txtlen);
   end;
 
 begin
@@ -1371,31 +1408,33 @@ end;
 { TWebSocketProtocolBinary }
 
 constructor TWebSocketProtocolBinary.Create(
-  const aUri: RawUtf8; aCompressed: boolean);
+  const aUri: RawUtf8; aOptions: TWebSocketProtocolBinaryOptions);
 begin
   inherited Create('synopsebin', aUri);
-  fCompressed := aCompressed;
+  fOptions := aOptions;
 end;
 
 constructor TWebSocketProtocolBinary.Create(const aUri: RawUtf8;
-  const aKey; aKeySize: cardinal; aCompressed: boolean);
+  const aKey; aKeySize: cardinal; aOptions: TWebSocketProtocolBinaryOptions;
+  aCipher: TAesAbstractClass);
 begin
-  Create(aUri, aCompressed);
-  SetEncryptKeyAes(aKey, aKeySize);
+  Create(aUri, aOptions);
+  SetEncryptKeyAes(aCipher, aKey, aKeySize);
 end;
 
 constructor TWebSocketProtocolBinary.Create(const aUri: RawUtf8;
-  aServer: boolean; const aKey: RawUtf8; aCompressed: boolean);
+  aServer: boolean; const aKey: RawUtf8; aSettings: PWebSocketProcessSettings;
+  aOptions: TWebSocketProtocolBinaryOptions);
 begin
-  Create(aUri, aCompressed);
-  SetEncryptKey(aServer, aKey);
+  Create(aUri, aOptions);
+  SetEncryptKey(aServer, aKey, aSettings);
 end;
 
 function TWebSocketProtocolBinary.Clone(
   const aClientUri: RawUtf8): TWebSocketProtocol;
 begin
   result := TWebSocketProtocolBinary.Create(
-    fUri, {dummykey=}self, 0, fCompressed);
+    fUri, {dummykey=}self, 0, fOptions);
   TWebSocketProtocolBinary(result).fSequencing := fSequencing;
   if fEncryption <> nil then
     result.fEncryption := fEncryption.Clone;
@@ -1492,10 +1531,11 @@ begin
   inherited BeforeSendFrame(frame);
   if frame.opcode = focBinary then
   begin
-    if fCompressed then
+    if pboSynLzCompress in fOptions then
     begin
-      if fRemoteLocalhost or
-         (fopAlreadyCompressed in frame.content) then
+      if (fopAlreadyCompressed in frame.content) or
+         (fRemoteLocalhost and
+          (pboNoLocalHostCompress in fOptions)) then
         // localhost or compressed -> no SynLZ
         threshold := maxInt
       else
@@ -1505,7 +1545,9 @@ begin
     end
     else
       value := frame.payload;
-    if fEncryption <> nil then
+    if (fEncryption <> nil) and
+       not (fRemoteLocalhost and
+            (pboNoLocalHostEncrypt in fOptions)) then
       fEncryption.Encrypt(value, frame.payload)
     else
       frame.payload := value;
@@ -1521,7 +1563,9 @@ begin
   inc(fFramesInBytesSocket, length(frame.payload) + 2);
   if frame.opcode = focBinary then
   begin
-    if fEncryption <> nil then
+    if (fEncryption <> nil) and
+       not (fRemoteLocalhost and
+            (pboNoLocalHostEncrypt in fOptions)) then
     begin
       res := fEncryption.Decrypt(frame.payload, value);
       if res <> sprSuccess then
@@ -1530,7 +1574,7 @@ begin
     end
     else
       value := frame.payload;
-    if fCompressed then
+    if pboSynLzCompress in fOptions then
       AlgoSynLZ.Decompress(pointer(value), length(value), frame.payload)
     else
       frame.payload := value;
@@ -1550,8 +1594,8 @@ begin
   if P = nil then
     exit;
   for i := 0 to high(values) do
-    values[i]^ := FromVarString(P);
-  contentType := FromVarString(P);
+    FromVarString(P, values[i]^ ,CP_UTF8);
+  FromVarString(P, contentType, CP_UTF8);
   i := length(frame.payload) - (PAnsiChar(P) - pointer(frame.payload));
   if i < 0 then
     exit;
@@ -1565,7 +1609,7 @@ const
   JUMBO_HEADER: array[0..6] of AnsiChar = 'frames' + FRAME_HEAD_SEP;
 var
   jumboFrame: TWebSocketFrame;
-  i, len: integer;
+  i, len: PtrInt;
   P: PByte;
 begin
   if (FramesCount = 0) or
@@ -1642,8 +1686,8 @@ begin
   if (self = nil) or
      (fFramesInBytes = 0) then
     result := 100
-  else if not fCompressed or
-          (fFramesInBytesSocket < fFramesInBytes) then
+  else if (fFramesInBytesSocket < fFramesInBytes) or
+          not (pboSynLzCompress in fOptions) then
     result := 0
   else
     result := 100 - (fFramesInBytesSocket * 100) div fFramesInBytes;
@@ -1654,8 +1698,8 @@ begin
   if (self = nil) or
      (fFramesOutBytes = 0) then
     result := 100
-  else if not fCompressed or
-          (fFramesOutBytesSocket <= fFramesOutBytes) then
+  else if (fFramesOutBytesSocket <= fFramesOutBytes) or
+          not (pboSynLzCompress in fOptions) then
     result := 0
   else
     result := 100 - (fFramesOutBytesSocket * 100) div fFramesOutBytes;
@@ -1837,6 +1881,13 @@ begin
   LogDetails := [];
   OnClientConnected := nil;
   OnClientDisconnected := nil;
+  AesSalt := 'E750ACCA-2C6F-4B0E-999B-D31C9A14EFAB';
+  AesRounds := 1024;
+  AesCipher := TAesFast[mCtr];
+  AesBits := 128;
+  EcdheCipher := efAesCtr128;
+  EcdheAuth := authMutual;
+  EcdheRounds := DEFAULT_ECCROUNDS;
 end;
 
 procedure TWebSocketProcessSettings.SetFullLog;
@@ -1849,7 +1900,7 @@ end;
 
 constructor TWebSocketProcess.Create(aProtocol: TWebSocketProtocol;
   aOwnerConnection: THttpServerConnectionID; aOwnerThread: TSynThread;
-  const aSettings: TWebSocketProcessSettings; const aProcessName: RawUtf8);
+  aSettings: PWebSocketProcessSettings; const aProcessName: RawUtf8);
 begin
   inherited Create;
   fProcessName := aProcessName;
@@ -2115,11 +2166,6 @@ begin
      (delay > fSettings.LoopDelay) then
     delay := fSettings.LoopDelay;
   SleepHiRes(delay);
-end;
-
-function TWebSocketProcess.Settings: PWebSocketProcessSettings;
-begin
-  result := @fSettings;
 end;
 
 function TWebSocketProcess.State: TWebSocketProcessState;
@@ -2568,7 +2614,7 @@ end;
 
 constructor TWebCrtSocketProcess.Create(aSocket: TCrtSocket; aProtocol:
   TWebSocketProtocol; aOwnerConnection: THttpServerConnectionID;
-  aOwnerThread: TSynThread; const aSettings: TWebSocketProcessSettings;
+  aOwnerThread: TSynThread; aSettings: PWebSocketProcessSettings;
   const aProcessName: RawUtf8);
 begin
   inherited Create(aProtocol, aOwnerConnection, aOwnerThread, aSettings, aProcessName);

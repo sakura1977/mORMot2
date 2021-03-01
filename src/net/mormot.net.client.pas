@@ -47,6 +47,33 @@ uses
 
 { ************** THttpClientSocket Implementing HTTP client over plain sockets }
 
+var
+  /// THttpRequest timeout default value for DNS resolution
+  // - only used by TWinHttp class - other clients will ignore it
+  // - leaving to 0 will let system default value be used
+  HTTP_DEFAULT_RESOLVETIMEOUT: integer = 0;
+  /// THttpRequest timeout default value for remote connection
+  // - default is 30 seconds
+  // - used e.g. by THttpRequest, TRestHttpClientRequest and TRestHttpClientGeneric
+  HTTP_DEFAULT_CONNECTTIMEOUT: integer = 30000;
+  /// THttpRequest timeout default value for data sending
+  // - default is 30 seconds
+  // - used e.g. by THttpRequest, TRestHttpClientRequest and TRestHttpClientGeneric
+  // - you can override this value by setting the corresponding parameter in
+  // THttpRequest.Create() constructor
+  HTTP_DEFAULT_SENDTIMEOUT: integer = 30000;
+  /// THttpRequest timeout default value for data receiving
+  // - default is 30 seconds
+  // - used e.g. by THttpRequest, TRestHttpClientRequest and TRestHttpClientGeneric
+  // - you can override this value by setting the corresponding parameter in
+  // THttpRequest.Create() constructor
+  HTTP_DEFAULT_RECEIVETIMEOUT: integer = 30000;
+
+const
+  /// standard text used to identify the WebSockets protocol
+  HTTP_WEBSOCKET_PROTOCOL: RawUtf8 = 'SEC-WEBSOCKET-PROTOCOL';
+
+
 type
   /// Socket API based REST and HTTP/1.1 compatible client class
   // - this component is HTTP/1.1 compatible, according to RFC 2068 document
@@ -934,13 +961,13 @@ begin
             result := HTTP_HTTPVERSIONNONSUPPORTED;
             exit;
           end;
-          while result = 100 do
+          while result = HTTP_CONTINUE do
           begin
             repeat
               // 100 CONTINUE is just to be ignored on client side
               SockRecvLn(Command);
               P := pointer(Command);
-            until IdemPChar(P, 'HTTP/1.');  // ignore up to next command
+            until IdemPChar(P, 'HTTP/1.'); // ignore up to next command
             result := GetCardinal(P + 9);
           end;
           if P[7] = '0' then
@@ -959,8 +986,11 @@ begin
         // retrieve all HTTP headers
         GetHeader({unfiltered=}false);
         // retrieve Body content (if any)
-        if (result <> HTTP_NOCONTENT) and
+        if (result >= HTTP_SUCCESS) and
+           (result <> HTTP_NOCONTENT) and
+           (result <> HTTP_NOTMODIFIED) and
            (IdemPCharArray(pointer(method), ['HEAD', 'OPTIONS']) < 0) then
+          // HEAD or status 100..109,204,304 -> no body (RFC 2616 section 4.3)
           GetBody;
       except
         on Exception do
