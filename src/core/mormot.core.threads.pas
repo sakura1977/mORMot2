@@ -493,6 +493,9 @@ type
     // - aOnProcess should have been registered by a previous call to Enable() method
     // - returns true on success, false if the supplied task was not registered
     function ExecuteNow(const aOnProcess: TOnSynBackgroundTimerProcess): boolean;
+    /// execute a task without waiting for the next aOnProcessSecs occurence
+    // - aOnProcess should not have been registered by a previous call to Enable() method
+    function ExecuteOnce(const aOnProcess: TOnSynBackgroundTimerProcess): boolean;
     /// returns true if there is currenly one task processed
     function Processing: boolean;
     /// wait until no background task is processed
@@ -1420,7 +1423,8 @@ var
   ProcessSystemUse: TSystemUse;
 
 constructor TSynBackgroundTimer.Create(const aThreadName: RawUtf8;
-  const aOnBeforeExecute, aOnAfterExecute: TOnNotifyThread; aStats: TSynMonitorClass);
+  const aOnBeforeExecute: TOnNotifyThread;
+  const aOnAfterExecute: TOnNotifyThread; aStats: TSynMonitorClass);
 begin
   fTasks.Init(TypeInfo(TSynBackgroundTimerTaskDynArray), fTask);
   fTaskLock.Init;
@@ -1457,17 +1461,28 @@ begin
   try
     variant(fTaskLock.Padding[0]) := true; // = fTaskLock.LockedBool[0]
     try
-      for i := 0 to length(fTask) - 1 do
+      i := 0;
+      while i < length(fTask) do
       begin
         t := @fTask[i];
         if tix >= t^.NextTix then
         begin
-          SetLength(todo, n + 1);
+          if todo = nil then
+            SetLength(todo, length(fTask) - n);
           todo[n] := t^;
           inc(n);
           t^.FIFO := nil; // now owned by todo[n].FIFO
-          t^.NextTix := tix + ((t^.Secs * 1000) - TIXPRECISION);
+          if integer(t^.Secs) = -1 then
+          begin
+            // from ExecuteOnce()
+            fTasks.Delete(i);
+            continue; // don't inc(i)
+          end
+          else
+            // schedule for next time
+            t^.NextTix := tix + ((t^.Secs * 1000) - TIXPRECISION);
         end;
+        inc(i);
       end;
     finally
       fTaskLock.UnLock;
@@ -1518,7 +1533,8 @@ begin
   end;
   task.OnProcess := aOnProcess;
   task.Secs := aOnProcessSecs;
-  task.NextTix := mormot.core.os.GetTickCount64 + (aOnProcessSecs * 1000 - TIXPRECISION);
+  task.NextTix :=
+    mormot.core.os.GetTickCount64 + (aOnProcessSecs * 1000 - TIXPRECISION);
   fTaskLock.Lock;
   try
     found := Find(TMethod(aOnProcess));
@@ -1553,6 +1569,16 @@ function TSynBackgroundTimer.ExecuteNow(
   const aOnProcess: TOnSynBackgroundTimerProcess): boolean;
 begin
   result := Add(aOnProcess, #0, true);
+end;
+
+function TSynBackgroundTimer.ExecuteOnce(
+  const aOnProcess: TOnSynBackgroundTimerProcess): boolean;
+begin
+  result := Assigned(aOnProcess) and Assigned(self);
+  if not result then
+    exit;
+  Enable(aOnProcess, cardinal(-1));
+  Add(aOnProcess, 'Once', true);
 end;
 
 function TSynBackgroundTimer.EnQueue(
