@@ -2996,7 +2996,7 @@ begin
 end;
 
 function GotoNextSqlIdentifier(P: PUtf8Char; tab: PTextCharSet): PUtf8Char;
-  //{$ifdef HASINLINE} inline; {$endif}
+  {$ifdef HASINLINE} inline; {$endif}
 begin
   while tcCtrlNot0Comma in tab[P^] do // in [#1..' ', ';']
     inc(P);
@@ -8749,6 +8749,13 @@ var
   wasString: boolean;
 begin
   VariantToUtf8(V, result, wasString);
+end;
+
+function ToUtf8(const V: TVarData): RawUtf8; overload;
+var
+  wasString: boolean;
+begin
+  VariantToUtf8(PVariant(@V)^, result, wasString);
 end;
 
 function VariantToUtf8(const V: Variant; var Text: RawUtf8): boolean;
