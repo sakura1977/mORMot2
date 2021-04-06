@@ -824,7 +824,7 @@ var
 // - see https://msdn.microsoft.com/en-us/library/ms995355
 // - this function is Windows-only, could be slow, and you don't know which
 // algorithm is really used on your system, so using our mormot.crypt.core.pas
-// CryptDataForCurrentUser() is probably a better (and cross-platform) alternative
+// CryptDataForCurrentUser() is probably a safer (and cross-platform) alternative
 // - also note that DPAPI has been closely reverse engineered - see e.g.
 // https://www.passcape.com/index.php?section=docsys&cmd=details&id=28
 function CryptDataForCurrentUserDPAPI(const Data, AppSecret: RawByteString;
@@ -1483,7 +1483,6 @@ type
 // - on POSIX, calls fpOpen(pointer(FileName),O_RDONLY) with no fpFlock() call
 // - is used e.g. by StringFromFile() or HashFile() functions
 function FileOpenSequentialRead(const FileName: string): integer;
-  {$ifdef FPC}inline;{$endif}
 
 /// returns a TFileStream optimized for one pass file reading
 // - will use FileOpenSequentialRead(), i.e. FILE_FLAG_SEQUENTIAL_SCAN on Windows
@@ -1702,7 +1701,7 @@ var
 /// cross-platform reserve some executable memory
 // - using PAGE_EXECUTE_READWRITE flags on Windows, and PROT_READ or PROT_WRITE
 // or PROT_EXEC on POSIX
-// - this function maintain an internal set of 64KB memory pages for efficiency
+// - this function maintain an internal list of 64KB memory pages for efficiency
 // - memory blocks can not be released (don't try to use fremeem on them) and
 // will be returned to the system at process finalization
 function ReserveExecutableMemory(size: cardinal): pointer;
@@ -2126,6 +2125,8 @@ type
   /// meta-class definition of the TSynLocked hierarchy
   TSynLockedClass = class of TSynLocked;
 
+  TThreadIDDynArray = array of TThreadID;
+
 {$ifdef OSPOSIX}
 
 var
@@ -2188,6 +2189,11 @@ threadvar
 // - will return the CurrentThreadName value, truncated to 31 chars
 function GetCurrentThreadName: RawUtf8;
   {$ifdef HASINLINE}inline;{$endif}
+
+/// returns the thread id and the thread name as a shortstring
+// - returns e.g. 'Thread 0001abcd [shortthreadname]'
+// - for convenient use when logging or raising an exception
+function GetCurrentThreadInfo: shortstring;
 
 /// enter a process-wide giant lock for thread-safe shared process
 // - shall be protected as such:
@@ -3011,7 +3017,7 @@ begin
     result := 0
   else
     result := (s shr 1) or (m shl 5) or (h shl 11) or
-              integer((DD shl 16) or (MM shl 21) or (word(YY - 1980) shl 25));
+              cardinal((DD shl 16) or (MM shl 21) or (cardinal(YY - 1980) shl 25));
 end;
 
 function ValidHandle(Handle: THandle): boolean;
@@ -3926,6 +3932,11 @@ begin
   ShortStringToAnsi7String(CurrentThreadName, result);
 end;
 
+function GetCurrentThreadInfo: shortstring;
+begin
+  result := ShortString(format('Thread %x [%s]',
+    [PtrUInt(GetCurrentThreadId), CurrentThreadName]));
+end;
 
 function NewSynLocker: PSynLocker;
 begin
