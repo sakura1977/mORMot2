@@ -7,6 +7,7 @@ unit mormot.net.client;
   *****************************************************************************
 
    HTTP Client Classes
+   - THttpMultiPartStream for multipart/formdata HTTP POST
    - THttpClientSocket Implementing HTTP client over plain sockets
    - THttpRequest Abstract HTTP client class
    - TWinHttp TWinINet TWinHttpWebSocketClient TCurlHttp
@@ -43,6 +44,72 @@ uses
   mormot.core.data,
   mormot.core.json; // TSynDictionary for THttpRequestCached
 
+
+{ ******************** THttpMultiPartStream for multipart/formdata HTTP POST }
+
+type
+  /// low-level section information as stored by THttpMultiPartStream
+  THttpMultiPartStreamSection =  record
+    Name: RawUtf8;
+    FileName: RawUtf8;
+    Content: RawByteString;
+    ContentType: RawUtf8;
+    ContentFile: TFileName;
+  end;
+  PHttpMultiPartStreamSection = ^THttpMultiPartStreamSection;
+  THttpMultiPartStreamSections = array of THttpMultiPartStreamSection;
+
+  /// a TStream descendant implementing client multipart/formdata HTTP POST
+  // - AddContent/AddFileContent/AddFile will append name/contents sections
+  // to this instance, then after Flush, send Read() data via TCP to include the
+  // proper multipart formatting as defined by RFC 2488 / RFC 1341
+  // - AddFile() won't load the file content into memory so it is more
+  // efficient than MultiPartFormDataEncode() from mormot.core.buffers
+  THttpMultiPartStream = class(TStreamWithPosition)
+  protected
+    fSections: THttpMultiPartStreamSections;
+    fBounds: TRawUtf8DynArray;
+    fBound: RawUtf8;
+    fMultipartContentType: RawUtf8;
+    fContent: array of TStream;
+    fContentRead: PtrInt;
+    fFilesCount: integer;
+    procedure NewBound;
+    function Add(const name, content, contenttype,
+      filename, encoding: RawUtf8): PHttpMultiPartStreamSection;
+  public
+    /// finalize the internal sections storage
+    destructor Destroy; override;
+    /// append a content section from a binary/text buffer
+    procedure AddContent(const name: RawUtf8; const content: RawByteString;
+      const contenttype: RawUtf8 = ''; const encoding: RawUtf8 = '');
+    /// append a file upload section from a binary/text buffer
+    procedure AddFileContent(const name, filename: RawUtf8;
+      const content: RawByteString; const contenttype: RawUtf8 = '';
+      const encoding: RawUtf8 = '');
+    /// append a file upload section from a local file
+    // - the supplied file won't be loaded into memory, but created as an
+    // internal TFileStream to be retrieved by successive Read() calls
+    procedure AddFile(const name: RawUtf8; const filename: TFileName;
+      const contenttype: RawUtf8 = '');
+    /// you should call this method before any Read() call
+    procedure Flush;
+    /// will read up to Count bytes from the internal sections
+    // - ready to be sent to the HTTP server, with proper multipart markup
+    function Read(var Buffer; Count: Longint): Longint; override;
+    /// the content-type header value for this multipart content
+    // - equals '' if no section has been added
+    // - includes a random boundary field
+    property MultipartContentType: RawUtf8
+      read fMultipartContentType;
+    /// high-level sections parameters as provided to Add* methods
+    // - can be used e.g. by libcurl which makes its own encoding
+    property Sections: THttpMultiPartStreamSections
+      read fSections;
+    /// how many AddFile/AddFileContent have been appended
+    property FilesCount: integer
+      read fFilesCount;
+  end;
 
 
 { ************** THttpClientSocket Implementing HTTP client over plain sockets }
@@ -666,7 +733,7 @@ type
     fHttps: THttpRequest;
     fProxy, fHeaders, fUserAgent: RawUtf8;
     fBody: RawByteString;
-    fSocketTLS: TNetTLSContext;
+    fSocketTLS: TNetTlsContext;
     fOnlyUseClientSocket: boolean;
   public
     /// initialize the instance
@@ -684,7 +751,7 @@ type
       const header: RawUtf8 = ''; const data: RawByteString = '';
       const datatype: RawUtf8 = ''; keepalive: cardinal = 10000): integer; overload;
     /// access to the raw TLS settings for THttpClientSocket
-    function SocketTLS: PNetTLSContext;
+    function SocketTLS: PNetTlsContext;
       {$ifdef HASINLINE} inline; {$endif}
     /// returns the HTTP body as returnsd by a previous call to Request()
     property Body: RawByteString
@@ -851,6 +918,162 @@ function SendEmailSubject(const Text: string): RawUtf8;
 
 
 implementation
+
+
+{ ******************** THttpMultiPartStream for multipart/formdata HTTP POST }
+
+{ THttpMultiPartStream }
+
+destructor THttpMultiPartStream.Destroy;
+var
+  i: PtrInt;
+begin
+  inherited Destroy;
+  for i := 0 to high(fContent) do
+    fContent[i].Free;
+end;
+
+procedure THttpMultiPartStream.NewBound;
+var
+  random: array[0..3] of cardinal;
+begin
+  FillRandom(@random, 4);
+  fBound := BinToBase64uri(@random, SizeOf(random));
+  AddRawUtf8(fBounds, fBound);
+end;
+
+function THttpMultiPartStream.Add(const name, content, contenttype,
+  filename, encoding: RawUtf8): PHttpMultiPartStreamSection;
+var
+  ns, nc: PtrInt;
+  s: RawUtf8;
+begin
+  // same logic than MultiPartFormDataEncode() from mormot.core.buffers
+  ns := length(fSections);
+  SetLength(fSections, ns + 1);
+  result := @fSections[ns];
+  result^.Name := name;
+  result^.Content := content;
+  result^.ContentType := contenttype;
+  if result^.ContentType = '' then
+    result^.ContentType := GetMimeContentType(
+      pointer(content), length(content), Ansi7ToString(filename));
+  if result^.ContentType = '' then
+    if filename = '' then
+      if IsValidJson(content) then
+        result^.ContentType := JSON_CONTENT_TYPE
+      else
+        result^.ContentType := TEXT_CONTENT_TYPE
+    else
+      result^.ContentType := BINARY_CONTENT_TYPE;
+  result^.FileName := filename;
+  nc := length(fContent);
+  if nc = 0 then
+  begin
+    // compute multipart content type with the main random boundary
+    NewBound;
+    fMultipartContentType  := 'multipart/form-data; boundary=' + fBound;
+    SetLength(fContent, 1);
+    fContent[0] := TRawByteStringStream.Create;
+  end
+  else
+    dec(nc);
+  if filename = '' then
+    // simple form field
+    s := FormatUtf8('--%'#13#10'Content-Disposition: form-data; name="%"'#13#10 +
+      'Content-Type: %'#13#10#13#10'%'#13#10'--%'#13#10,
+      [fBound, name, result^.ContentType, content, fBound])
+  else
+  begin
+    if fFilesCount = 0 then
+    begin
+      // if this is the first file, create the header for files
+      if ns <> 0 then
+        NewBound;
+      s := 'Content-Disposition: form-data; name="files"'#13#10 +
+           'Content-Type: multipart/mixed; boundary=' + fBound + #13#10#13#10;
+    end;
+    inc(fFilesCount);
+    s := FormatUtf8('%--%'#13#10 +
+      'Content-Disposition: file; filename="%"'#13#10 +
+      'Content-Type: %'#13#10, [{%H-}s, fBound, filename, result^.ContentType]);
+    if encoding <> '' then
+      s := FormatUtf8('%Content-Transfer-Encoding: %'#13#10, [s, encoding]);
+    if content <> '' then
+      s := s + #13#10 + content + #13#10'--' + fBound + #13#10
+    else
+      s := s + #13#10;
+  end;
+  with fContent[nc] as TRawByteStringStream do
+    DataString := DataString + s;
+end;
+
+procedure THttpMultiPartStream.AddContent(const name: RawUtf8;
+  const content: RawByteString; const contenttype: RawUtf8;
+  const encoding: RawUtf8);
+begin
+  Add(name, content, contenttype, '', encoding);
+end;
+
+procedure THttpMultiPartStream.AddFileContent(const name, filename: RawUtf8;
+  const content: RawByteString; const contenttype: RawUtf8;
+  const encoding: RawUtf8);
+begin
+  Add(name, content, contenttype, filename, encoding);
+end;
+
+procedure THttpMultiPartStream.AddFile(const name: RawUtf8;
+  const filename: TFileName; const contenttype: RawUtf8);
+var
+  n: PtrInt;
+  fs: TFileStream;
+begin
+  fs := TFileStream.Create(filename, fmShareDenyNone or fmOpenRead);
+  // an exception is raised in above line if filename is incorrect
+  Add(name, '', contenttype, StringToUtf8(ExtractFileName(filename)),
+    'binary')^.ContentFile := filename;
+  n := length(fContent);
+  SetLength(fContent, n + 2);
+  fContent[n] := fs; // file content will be streamed when needed
+  fContent[n + 1] := TRawByteStringStream.Create(#13#10'--' + fBound + #13#10);
+end;
+
+procedure THttpMultiPartStream.Flush;
+var
+  i: PtrInt;
+  s: RawUtf8;
+begin
+  if fBounds = nil then
+    exit;
+  for i := length(fBounds) - 1 downto 0 do
+    s := {%H-}s + '--' + fBounds[i] + '--'#13#10;
+  with fContent[high(fContent)] as TRawByteStringStream do
+    DataString := DataString + s;
+end;
+
+function THttpMultiPartStream.Read(var Buffer; Count: Longint): Longint;
+var
+  rd: LongInt;
+  P: PByte;
+begin
+  result := 0;
+  P := @Buffer;
+  repeat
+    if fContentRead = length(fContent) then
+      break;
+    rd := fContent[fContentRead].Read(P^, Count);
+    if rd = 0 then
+    begin
+      // read from next section(s) until we got Count bytes
+      inc(fContentRead);
+      continue;
+    end;
+    inc(P, rd);
+    inc(result, rd);
+    dec(Count, rd);
+  until Count = 0;
+  inc(fPosition, result);
+end;
 
 
 
@@ -2147,7 +2370,7 @@ begin
     result := HTTP_NOTFOUND;
 end;
 
-function TSimpleHttpClient.SocketTLS: PNetTLSContext;
+function TSimpleHttpClient.SocketTLS: PNetTlsContext;
 begin
   if self = nil then
     result := nil
