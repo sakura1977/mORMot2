@@ -152,7 +152,10 @@ type
   protected
     fUserAgent: RawUtf8;
     fProcessName: RawUtf8;
+    fRangeStart, fRangeEnd: Int64;
+    fBasicAuthUserPassword, fAuthBearer: RawUtf8;
     procedure RequestSendHeader(const url, method: RawUtf8); virtual;
+    procedure RequestClear; virtual;
   public
     /// common initialization of all constructors
     // - this overridden method will set the UserAgent with some default value
@@ -207,6 +210,20 @@ type
     /// the associated process name
     property ProcessName: RawUtf8
       read fProcessName write fProcessName;
+    /// optional begining position of a request
+    // - is reset once the Request has been sent
+    property RangeStart: Int64
+      read fRangeStart write fRangeStart;
+    /// optional ending position of a request
+    // - is reset once the Request has been sent
+    property RangeEnd: Int64
+      read fRangeEnd write fRangeEnd;
+    /// optional Authorization: Basic header, encoded as 'User:Password' text
+    property BasicAuthUserPassword: RawUtf8
+      read fBasicAuthUserPassword write fBasicAuthUserPassword;
+    /// optional Authorization: Bearer header value
+    property AuthBearer: RawUtf8
+      read fAuthBearer write fAuthBearer;
   end;
 
   /// class-reference type (metaclass) of a HTTP client socket access
@@ -738,6 +755,7 @@ type
     fBody: RawByteString;
     fSocketTLS: TNetTlsContext;
     fOnlyUseClientSocket: boolean;
+    fTimeOut: integer;
   public
     /// initialize the instance
     // - aOnlyUseClientSocket=true will use THttpClientSocket even for HTTPS
@@ -746,7 +764,7 @@ type
     destructor Destroy; override;
     /// low-level entry point of this instance
     function RawRequest(const Uri: TUri; const Method, Header: RawUtf8;
-     const Data: RawByteString; const DataType: RawUtf8;
+      const Data: RawByteString; const DataType: RawUtf8;
       KeepAlive: cardinal): integer; overload;
     /// simple-to-use entry point of this instance
     // - use Body and Headers properties to retrieve the HTTP body and headers
@@ -768,6 +786,9 @@ type
     /// allows to customize HTTPS connection and allow weak certificates
     property IgnoreSSLCertificateErrors: boolean
       read fSocketTLS.IgnoreCertificateErrors write fSocketTLS.IgnoreCertificateErrors;
+    /// set the timeout value for RawRequest/Request, in milliseconds
+    property TimeOut: integer
+      read fTimeOut write fTimeOut;
     /// alows to customize the connection using a proxy
     property Proxy: RawUtf8
       read fProxy write fProxy;
@@ -1080,7 +1101,23 @@ begin
     SockSend(['Host: ', Server])
   else
     SockSend(['Host: ', Server, ':', Port]);
+  if (fRangeStart > 0) or
+     (fRangeEnd > 0) then
+    if fRangeEnd > fRangeStart then
+      SockSend(['Range: bytes=', fRangeStart, '-', fRangeEnd])
+    else
+      SockSend(['Range: bytes=', fRangeStart, '-']);
+  if fAuthBearer <> '' then
+    SockSend(['Authorization: Bearer ', fAuthBearer]);
+  if fBasicAuthUserPassword <> '' then
+    SockSend(['Authorization: Basic ', BinToBase64Short(fBasicAuthUserPassword)]);
   SockSend(['Accept: */*'#13#10'User-Agent: ', UserAgent]);
+end;
+
+procedure THttpClientSocket.RequestClear;
+begin
+  fRangeStart := 0;
+  fRangeEnd := 0;
 end;
 
 constructor THttpClientSocket.Create(aTimeOut: PtrInt);
@@ -1133,10 +1170,11 @@ begin
     try
       try
         // send request - we use SockSend because writeln() is calling flush()
-        // -> all headers will be sent at once
+        // prepare headers
         RequestSendHeader(url, method);
         if KeepAlive > 0 then
-          SockSend(['Keep-Alive: ', KeepAlive, #13#10'Connection: Keep-Alive'])
+          SockSend(['Keep-Alive: ', KeepAlive,
+              #13#10'Connection: Keep-Alive'])
         else
           SockSend('Connection: Close');
         aData := Data; // local var copy for Data to be compressed in-place
@@ -1146,7 +1184,8 @@ begin
         if fCompressAcceptEncoding <> '' then
           SockSend(fCompressAcceptEncoding);
         SockSendCRLF;
-        SockSendFlush(aData); // flush all pending data to network
+        // flush headers and Data/DataStream body
+        SockSendFlush(aData);
         if DataStream <> nil then
           SockSendStream(DataStream); // may be a THttpMultiPartStream
         // retrieve HTTP command line response
@@ -1196,6 +1235,8 @@ begin
            (IdemPCharArray(pointer(method), ['HEAD', 'OPTIONS']) < 0) then
           // HEAD or status 100..109,204,304 -> no body (RFC 2616 section 4.3)
           GetBody;
+        // successfully sent -> reset some fields for the next request
+        RequestClear;
       except
         on Exception do
           DoRetry(HTTP_NOTFOUND, 'Exception');
@@ -2263,6 +2304,7 @@ end;
 constructor TSimpleHttpClient.Create(aOnlyUseClientSocket: boolean);
 begin
   fOnlyUseClientSocket := aOnlyUseClientSocket;
+  fTimeOut := 5000;
   inherited Create;
 end;
 
@@ -2289,7 +2331,7 @@ begin
       FreeAndNil(fHttp);
       FreeAndNil(fHttps); // need a new HTTPS connection
       fHttps := MainHttpClass.Create(
-        Uri.Server, Uri.Port, Uri.Https, Proxy, '', 5000, 5000, 5000);
+        Uri.Server, Uri.Port, Uri.Https, Proxy, '', fTimeOut, fTimeOut, fTimeOut);
       fHttps.IgnoreSSLCertificateErrors := fSocketTLS.IgnoreCertificateErrors;
       if fUserAgent <> '' then
         fHttps.UserAgent := fUserAgent;
@@ -2311,7 +2353,7 @@ begin
       FreeAndNil(fHttps);
       FreeAndNil(fHttp); // need a new HTTP connection
       fHttp := THttpClientSocket.Open(
-        Uri.Server, Uri.Port, nlTCP, 5000, Uri.Https, @fSocketTLS);
+        Uri.Server, Uri.Port, nlTCP, fTimeOut, Uri.Https, @fSocketTLS);
       if fUserAgent <> '' then
         fHttp.UserAgent := fUserAgent;
     end;
