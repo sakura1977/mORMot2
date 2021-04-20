@@ -603,52 +603,52 @@ end;
 
 procedure TTestCoreBase.FastStringCompare;
 begin
-  Check(CompareText('', '') = 0);
+  CheckEqual(CompareText('', ''), 0);
   Check(CompareText('abcd', '') > 0);
   Check(CompareText('', 'abcd') < 0);
-  Check(StrIComp(nil, nil) = 0);
-  Check(StrIComp(PAnsiChar('abcD'), nil) = 1);
-  Check(StrIComp(nil, PAnsiChar('ABcd')) = -1);
-  Check(StrIComp(PAnsiChar('abcD'), PAnsiChar('ABcd')) = 0);
+  CheckEqual(StrIComp(nil, nil), 0);
+  CheckEqual(StrIComp(PAnsiChar('abcD'), nil), 1);
+  CheckEqual(StrIComp(nil, PAnsiChar('ABcd')), -1);
+  CheckEqual(StrIComp(PAnsiChar('abcD'), PAnsiChar('ABcd')), 0);
   Check(StrIComp(PAnsiChar('abcD'), PAnsiChar('ABcF')) =
     StrComp(PAnsiChar('ABCD'), PAnsiChar('ABCF')));
-  Check(StrComp(PAnsiChar('abcD'), nil) = 1);
-  Check(StrComp(nil, PAnsiChar('ABcd')) = -1);
-  Check(StrComp(nil, nil) = 0);
-  Check(StrComp(PAnsiChar('ABCD'), PAnsiChar('ABCD')) = 0);
-  Check(StrComp(PAnsiChar('ABCD'), PAnsiChar('ABCE')) = -1);
-  Check(StrComp(PAnsiChar('ABCD'), PAnsiChar('ABCC')) = 1);
-  Check(AnsiIComp(pointer(PAnsiChar('abcD')), pointer(PAnsiChar('ABcd'))) = 0);
+  CheckEqual(StrComp(PAnsiChar('abcD'), nil), 1);
+  CheckEqual(StrComp(nil, PAnsiChar('ABcd')), -1);
+  CheckEqual(StrComp(nil, nil), 0);
+  CheckEqual(StrComp(PAnsiChar('ABCD'), PAnsiChar('ABCD')), 0);
+  CheckEqual(StrComp(PAnsiChar('ABCD'), PAnsiChar('ABCE')), -1);
+  CheckEqual(StrComp(PAnsiChar('ABCD'), PAnsiChar('ABCC')), 1);
+  CheckEqual(AnsiIComp(pointer(PAnsiChar('abcD')), pointer(PAnsiChar('ABcd'))), 0);
   Check(AnsiIComp(pointer(PAnsiChar('abcD')), pointer(PAnsiChar('ABcF'))) =
     StrComp(PAnsiChar('ABCD'), PAnsiChar('ABCF')));
   Check(StrIComp(PAnsiChar('abcD'), PAnsiChar('ABcd')) =
     AnsiIComp(PAnsiChar('abcD'), PAnsiChar('ABcd')));
   Check(StrIComp(PAnsiChar('abcD'), PAnsiChar('ABcF')) =
     AnsiIComp(PAnsiChar('ABCD'), PAnsiChar('ABCF')));
-  Check(strcspn(PAnsiChar('ab'), PAnsiChar('a'#0)) = 0);
-  Check(strcspn(PAnsiChar('ab'), PAnsiChar('b'#0)) = 1);
-  Check(strcspn(PAnsiChar('1234ab'), PAnsiChar('a'#0)) = 4);
-  Check(strcspn(PAnsiChar('12345ab'), PAnsiChar('a'#0)) = 5);
-  Check(strcspn(PAnsiChar('123456ab'), PAnsiChar('a'#0)) = 6);
-  Check(strcspn(PAnsiChar('1234567ab'), PAnsiChar('a'#0)) = 7);
-  Check(strcspn(PAnsiChar('12345678ab'), PAnsiChar('a'#0)) = 8);
-  Check(strcspn(PAnsiChar('1234ab'), PAnsiChar('c'#0)) = 6);
-  Check(strcspn(PAnsiChar('12345678901234567ab'),
-    PAnsiChar('cccccccccccccccccccd')) = 19);
-  Assert(strspn(PAnsiChar('abcdef'), PAnsiChar('debca')) = 5);
-  Assert(strspn(PAnsiChar('baabbaabcd'), PAnsiChar('ab')) = 8);
-  Assert(strspn(PAnsiChar('abcdef'), PAnsiChar('g'#0)) = 0);
-  Assert(strspn(PAnsiChar('abcdef'), PAnsiChar('a'#0)) = 1);
-  Assert(strspn(PAnsiChar('bbcdef'), PAnsiChar('b'#0)) = 2);
-  Assert(strspn(PAnsiChar('bbcdef'), PAnsiChar('bf')) = 2);
-  Assert(strspn(PAnsiChar('bcbdef'), PAnsiChar('cb')) = 3);
-  Assert(strspn(PAnsiChar('baabcd'), PAnsiChar('ab')) = 4);
-  Assert(strspn(PAnsiChar('abcdef'), PAnsiChar('debca')) = 5);
-  Assert(strspn(PAnsiChar('baabbaabcd'), PAnsiChar('ab')) = 8);
-  Assert(strspn(PAnsiChar('baabbaabbaabcd'), PAnsiChar('ab')) = 12);
-  Assert(strspn(PAnsiChar('baabbaabbaabbabcd'), PAnsiChar('ab')) = 15);
-  Assert(strspn(PAnsiChar('baabbaabbaabbaabcd'), PAnsiChar('ab')) = 16);
-  Assert(strspn(PAnsiChar('baabbaabbaababaabcd'), PAnsiChar('ab')) = 17);
+  CheckEqual(strcspn(PAnsiChar('ab'), PAnsiChar('a'#0)), 0);
+  CheckEqual(strcspn(PAnsiChar('ab'), PAnsiChar('b'#0)), 1);
+  CheckEqual(strcspn(PAnsiChar('1234ab'), PAnsiChar('a'#0)), 4);
+  CheckEqual(strcspn(PAnsiChar('12345ab'), PAnsiChar('a'#0)), 5);
+  CheckEqual(strcspn(PAnsiChar('123456ab'), PAnsiChar('a'#0)), 6);
+  CheckEqual(strcspn(PAnsiChar('1234567ab'), PAnsiChar('a'#0)), 7);
+  CheckEqual(strcspn(PAnsiChar('12345678ab'), PAnsiChar('a'#0)), 8);
+  CheckEqual(strcspn(PAnsiChar('1234ab'), PAnsiChar('c'#0)), 6);
+  CheckEqual(strcspn(PAnsiChar('12345678901234567ab'),
+    PAnsiChar('cccccccccccccccccccd')), 19);
+  CheckEqual(strspn(PAnsiChar('abcdef'), PAnsiChar('debca')), 5);
+  CheckEqual(strspn(PAnsiChar('baabbaabcd'), PAnsiChar('ab')), 8);
+  CheckEqual(strspn(PAnsiChar('abcdef'), PAnsiChar('g'#0)), 0);
+  CheckEqual(strspn(PAnsiChar('abcdef'), PAnsiChar('a'#0)), 1);
+  CheckEqual(strspn(PAnsiChar('bbcdef'), PAnsiChar('b'#0)), 2);
+  CheckEqual(strspn(PAnsiChar('bbcdef'), PAnsiChar('bf')), 2);
+  CheckEqual(strspn(PAnsiChar('bcbdef'), PAnsiChar('cb')), 3);
+  CheckEqual(strspn(PAnsiChar('baabcd'), PAnsiChar('ab')), 4);
+  CheckEqual(strspn(PAnsiChar('abcdef'), PAnsiChar('debca')), 5);
+  CheckEqual(strspn(PAnsiChar('baabbaabcd'), PAnsiChar('ab')), 8);
+  CheckEqual(strspn(PAnsiChar('baabbaabbaabcd'), PAnsiChar('ab')), 12);
+  CheckEqual(strspn(PAnsiChar('baabbaabbaabbabcd'), PAnsiChar('ab')), 15);
+  CheckEqual(strspn(PAnsiChar('baabbaabbaabbaabcd'), PAnsiChar('ab')), 16);
+  CheckEqual(strspn(PAnsiChar('baabbaabbaababaabcd'), PAnsiChar('ab')), 17);
 end;
 
 procedure TTestCoreBase.IniFiles;
@@ -4913,6 +4913,7 @@ var
   tz: TSynTimeZone;
   d: TTimeZoneData;
   i, bias: integer;
+  m: word;
   hdl, reload: boolean;
   buf: RawByteString;
   dt: TDateTime;
@@ -4927,6 +4928,65 @@ var
   end;
 
 begin
+  bias := -10;
+  Check(not ParseTimeZone('', bias));
+  CheckEqual(bias, -10);
+  Check(ParseTimeZone('-0000', bias));
+  CheckEqual(bias, TimeZoneLocalBias);
+  Check(ParseTimeZone('+0000', bias));
+  CheckEqual(bias, 0);
+  Check(ParseTimeZone('+0100', bias));
+  CheckEqual(bias, 60);
+  Check(ParseTimeZone('+1005', bias));
+  CheckEqual(bias, 605);
+  Check(ParseTimeZone('-1005', bias));
+  CheckEqual(bias, -605);
+  Check(not ParseTimeZone('+1O05', bias));
+  CheckEqual(bias, -605);
+  Check(not ParseTimeZone('+105', bias));
+  CheckEqual(bias, -605);
+  bias := -10;
+  Check(not ParseTimeZone('toto', bias));
+  CheckEqual(bias, -10);
+  Check(ParseTimeZone('z', bias));
+  CheckEqual(bias, 0);
+  Check(ParseTimeZone('M', bias));
+  CheckEqual(bias, 12 * 60);
+  Check(ParseTimeZone('NZDT', bias));
+  CheckEqual(bias, 13 * 60);
+  Check(ParseTimeZone(' NZT ', bias));
+  CheckEqual(bias, 12 * 60);
+  Check(ParseTimeZone('utc', bias));
+  CheckEqual(bias, 0);
+  Check(not ParseTimeZone('uta', bias));
+  CheckEqual(bias, 0);
+  Check(ParseTimeZone(' east', bias));
+  CheckEqual(bias, -10 * 60);
+  Check(ParseTimeZone('gmT ', bias));
+  CheckEqual(bias, 0);
+  Check(ParseTimeZone('    IDLW    ', bias));
+  CheckEqual(bias, -12 * 60);
+  m := 0;
+  Check(ParseMonth('Jan', m));
+  CheckEqual(m, 1);
+  Check(not ParseMonth('Jab', m));
+  CheckEqual(m, 1);
+  Check(ParseMonth(' DEC ', m));
+  CheckEqual(m, 12);
+  CheckEqual(DateTimeToIso8601Text(HttpDateToDateTime(
+    'Sun, 06 Nov 1994 08:49:37 GMT')), '1994-11-06T08:49:37');
+  CheckEqual(DateTimeToIso8601Text(HttpDateToDateTime(
+    'Sunday, 06-DEC-94 08:49:37 UTC')), '1994-12-06T08:49:37');
+  CheckEqual(DateTimeToIso8601Text(HttpDateToDateTime(
+    'Sun Feb  6 08:49:37 1994')), '1994-02-06T08:49:37');
+  CheckEqual(DateTimeToIso8601Text(HttpDateToDateTime(
+    'Sun, 06 Nov 2021 08:49:37 east')), '2021-11-06T18:49:37');
+  CheckEqual(DateTimeToIso8601Text(HttpDateToDateTime(
+    'Sun, 06 Nov 08:49:37 east')), '');
+  CheckEqual(DateTimeToIso8601Text(HttpDateToDateTime(
+    'Sun, 06 Nov 2021 084937 east')), '');
+  CheckEqual(DateTimeToIso8601Text(HttpDateToDateTime(
+    'Tue, 15 Nov 1994 12:45:26 Z')), '1994-11-15T12:45:26');
   tz := TSynTimeZone.Create;
   try
     check(tz.Zone = nil);

@@ -1311,6 +1311,11 @@ function UnixMSTimeUtc: Int64;
 function UnixMSTimeUtcFast: Int64;
   {$ifdef OSPOSIX} inline; {$endif}
 
+/// the number of minutes bias in respect to UTC/GMT date/time
+// - as retrieved via -GetLocalTimeOffset() at startup
+var
+  TimeZoneLocalBias: integer;
+
 {$ifndef NOEXCEPTIONINTERCEPT}
 
 type
