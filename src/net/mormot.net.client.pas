@@ -180,6 +180,8 @@ type
     /// an optional folder to lookup for existing content
     // - the Hash parameter will be used to validate the content
     HashCacheDir: TFileName;
+    /// allow to customize request headers, e.g. a cookie or Auth-Bearer
+    Header: RawUtf8;
     /// can be used to reduce the download speed into supplied bytes per second
     LimitBandwith: integer;
     /// will raise ESynException after TimeOutSec seconds are elapsed
@@ -365,9 +367,9 @@ type
     fServer: RawUtf8;
     fProxyName: RawUtf8;
     fProxyByPass: RawUtf8;
-    fPort: cardinal;
-    fHttps: boolean;
+    fPort: TNetPort;
     fLayer: TNetLayer;
+    fHttps: boolean;
     fKeepAlive: cardinal;
     fExtendedOptions: THttpRequestExtendedOptions;
     /// used by RegisterCompress method
@@ -515,7 +517,7 @@ type
     property Server: RawUtf8
       read fServer;
     /// the remote server port number, as specified to the class constructor
-    property Port: cardinal
+    property Port: TNetPort
       read fPort;
     /// if the remote server uses HTTPS, as specified to the class constructor
     property Https: boolean
@@ -1418,7 +1420,8 @@ var
     partstream.OnLog := OnLog;
     partstream.TimeOut := params.TimeOutSec * 1000;
     partstream.LimitPerSecond := params.LimitBandwith;
-    res := Request(url, 'GET', params.KeepAlive, '', '', '', false, nil, partstream);
+    res := Request(url, 'GET', params.KeepAlive, params.Header, '', '',
+      {retry=}false, nil, partstream);
     if not (res in [HTTP_SUCCESS, HTTP_PARTIALCONTENT]) then
       raise EHttpSocket.Create('WGet: %s:%s/%s failed with %s',
         [fServer, fPort, url, StatusCodeToErrorMsg(res)]);
@@ -2612,7 +2615,7 @@ begin
   try
     if (fHttps = nil) or
        (fHttps.Server <> Uri.Server) or
-       (integer(fHttps.Port) <> Uri.PortInt) then
+       (fHttps.Port <> Uri.PortInt) then
     begin
       FreeAndNil(fHttp);
       FreeAndNil(fHttps); // need a new HTTPS connection
