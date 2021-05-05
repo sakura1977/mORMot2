@@ -342,8 +342,8 @@ function ToText(claims: TJwtClaims): ShortString; overload;
 // text which matches the JWT 'algo.payload.sign' layout
 // - returns '' if no JWT-like pattern was found
 // - it won't validate the exact JWT format, nor any signature, only guess if
-// there is a chance the supplied text contains a JWT
-function ParseTrailingJwt(const aText: RawUtf8): RawUtf8;
+// there is a chance the supplied text contains a JWT, and extract it
+function ParseTrailingJwt(const aText: RawUtf8; noDotCheck: boolean = false): RawUtf8;
 
 
 
@@ -576,9 +576,10 @@ begin
   GetSetNameShort(TypeInfo(TJwtClaims), claims, result);
 end;
 
-function ParseTrailingJwt(const aText: RawUtf8): RawUtf8;
+function ParseTrailingJwt(const aText: RawUtf8; noDotCheck: boolean): RawUtf8;
 var
   txtlen, beg, dotcount: PtrInt;
+  tc: PTextCharSet;
 begin
   result := ''; // no JWT found
   txtlen := length(aText);
@@ -587,18 +588,20 @@ begin
     dec(txtlen);
   beg := txtlen + 1;
   dotcount := 0;
+  tc := @TEXT_CHARS;
   while (beg > 1) and
-        (tcURIUnreserved in TEXT_CHARS[aText[beg - 1]]) do
+        (tcURIUnreserved in tc[aText[beg - 1]]) do
   begin
     dec(beg);
     if aText[beg] = '.' then
       inc(dotcount);
   end;
   dec(txtlen, beg - 1);
-  if (dotcount <> 2) or
-     (txtlen <= 10) then
-    exit;
-  result := copy(aText, beg, txtlen);
+  if not noDotCheck then
+    if (dotcount <> 2) or
+       (txtlen <= 10) then
+      exit;
+  result := copy(aText, beg, txtlen); // trim base64 encoded part
 end;
 
 
