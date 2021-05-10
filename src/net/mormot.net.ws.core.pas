@@ -267,7 +267,7 @@ type
     fUpgradeUri: RawUtf8;
     fLastError: string;
     fEncryption: IProtocol;
-    // focText/focBinary or focContinuation/focConnectionClose from ProcessStart/ProcessStop
+    // focText/focBinary or focContinuation/focConnectionClose from ProcessStart/Stop
     procedure ProcessIncomingFrame(Sender: TWebSocketProcess;
       var request: TWebSocketFrame; const info: RawUtf8); virtual; abstract;
     function SendFrames(Owner: TWebSocketProcess;
@@ -618,8 +618,8 @@ type
   public
     /// initialize the protocol for a given Jwt
     // - if aExpirationMinutes is set, will own a new URI generator
-    // - aPublicUri is mandatory and will be used by NewUri, e.g. '127.0.0.1:888'
-    // or 'publicdomain.com/websockgateway'
+    // - aPublicUri is mandatory and will be used by NewUri, typically equals
+    // '127.0.0.1:888' or 'publicdomain.com/websockgateway'
     // - each time this protocol is setup, a random seed is used for NewUri
     // - aRecordTypeInfo can optionally associate a record to each URI
     constructor Create(const aName, aPublicUri: RawUtf8;
@@ -636,7 +636,8 @@ type
     // - URI are obfuscated and signed with an ephemeral TBinaryCookieGenerator,
     // so will have an unique Session ID, and can be associated with a record
     // - this method is thread-safe
-    function NewUri(PRecordData: pointer = nil): RawUtf8; virtual;
+    function NewUri(out SessionID: TBinaryCookieGeneratorSessionID;
+      PRecordData: pointer = nil): RawUtf8; virtual;
     /// access to the low-level ephemeral URI generator
     property Generator: PBinaryCookieGenerator
       read fGenerator;
@@ -1232,7 +1233,8 @@ begin
           (FrameData(request, 'answer') <> nil) then
   begin
     Sender.fIncoming.AnswerToIgnore(-1);
-    Sender.Log(request, 'Ignored answer after NotifyCallback TIMEOUT', sllWarning);
+    Sender.Log(request,
+      'Ignored answer after NotifyCallback TIMEOUT', sllWarning);
   end
   else
     Sender.fIncoming.Push(request); // e.g. async 'answer'
@@ -1854,9 +1856,11 @@ begin
   result := fSession <> 0;
 end;
 
-function TWebSocketProtocolUri.NewUri(PRecordData: pointer): RawUtf8;
+function TWebSocketProtocolUri.NewUri(
+  out SessionID: TBinaryCookieGeneratorSessionID;
+  PRecordData: pointer): RawUtf8;
 begin
-  fGenerator^.Generate(result, 0, PRecordData, fRecordTypeInfo);
+  SessionID := fGenerator^.Generate(result, 0, PRecordData, fRecordTypeInfo);
   result := fPublicUri + result;
 end;
 
@@ -2078,8 +2082,8 @@ begin
     if not SendFrame(frame) or
        not CanGetFrame(1000, @error) or
        not GetFrame(frame, @error) then
-      WebSocketLog.Add.Log(sllWarning, 'Destroy: no focConnectionClose ACK %',
-        [error], self);
+      WebSocketLog.Add.Log(sllWarning,
+        'Destroy: no focConnectionClose ACK %', [error], self);
   finally
     LockedDec32(@fProcessCount);
   end;
@@ -2096,7 +2100,8 @@ begin
   else if not fConnectionCloseWasSent then
   begin
     if log <> nil then
-      log.Log(sllTrace, 'Destroy: send focConnectionClose', self);
+      log.Log(sllTrace,
+        'Destroy: send focConnectionClose', self);
     Shutdown;
   end;
   fState := wpsDestroy;
@@ -2104,14 +2109,16 @@ begin
      not fProcessEnded then
   begin
     if log <> nil then
-      log.Log(sllDebug, 'Destroy: wait for fProcessCount=%', [fProcessCount], self);
+      log.Log(sllDebug,
+        'Destroy: wait for fProcessCount=%', [fProcessCount], self);
     timeout := GetTickCount64 + 5000;
     repeat
       SleepHiRes(2);
     until ((fProcessCount = 0) and fProcessEnded) or
           (GetTickCount64 > timeout);
     if log <> nil then
-      log.Log(sllDebug, 'Destroy: waited fProcessCount=%', [fProcessCount], self);
+      log.Log(sllDebug,
+        'Destroy: waited fProcessCount=%', [fProcessCount], self);
   end;
   fProtocol.Free;
   fOutgoing.Free;
@@ -2389,8 +2396,8 @@ begin
             break; // it is now safe to send a new 'request'
           if GetTickCount64 < max then
             continue;
-          self.Log(request,
-            'NotifyCallback AnswerToIgnore TIMEOUT -> abort connection', sllInfo);
+          self.Log(request, 'NotifyCallback AnswerToIgnore TIMEOUT -> ' +
+            'abort connection', sllInfo);
           result := HTTP_NOTIMPLEMENTED; // 501 will force recreate connection
           exit;
         until false;
@@ -2427,7 +2434,8 @@ begin
       end
       else if GetTickCount64 > max then
       begin
-        WebSocketLog.Add.Log(sllWarning, 'NotifyCallback TIMEOUT %', [head], self);
+        WebSocketLog.Add.Log(sllWarning,
+          'NotifyCallback TIMEOUT %', [head], self);
         if head = 'answer' then
           fIncoming.AnswerToIgnore(1); // ignore next 'answer'
         exit; // returns HTTP_NOTFOUND
@@ -2448,7 +2456,8 @@ begin
     if fProtocol.SendFrames(self, fOutgoing.List, fOutgoing.Count) then
       result := true
     else
-      WebSocketLog.Add.Log(sllInfo, 'SendPendingOutgoingFrames: SendFrames failed', self);
+      WebSocketLog.Add.Log(sllInfo,
+        'SendPendingOutgoingFrames: SendFrames failed', self);
   finally
     fOutgoing.Safe.UnLock;
   end;
@@ -2472,15 +2481,17 @@ begin
           try
             if (frame.opcode = focText) and
                (logTextFrameContent in fSettings.LogDetails) then
-              log.Log(aEvent, '% % % focText %', [aMethodName, fProtocol.GetRemoteIP,
-                protocol.FrameType(frame), frame.PayLoad], self)
+              log.Log(aEvent, '% % % focText %',
+                [aMethodName, fProtocol.GetRemoteIP,
+                 protocol.FrameType(frame), frame.PayLoad], self)
             else
             begin
               len := length(frame.PayLoad);
-              log.Log(aEvent, '% % % % len=%%', [aMethodName, fProtocol.GetRemoteIP,
-                protocol.FrameType(frame), _TWebSocketFrameOpCode[frame.opcode]^,
-                len, LogEscape(pointer(frame.PayLoad), len, tmp,
-                logBinaryFrameContent in fSettings.LogDetails)], self);
+              log.Log(aEvent, '% % % % len=%%',
+               [aMethodName, fProtocol.GetRemoteIP, protocol.FrameType(frame),
+                _TWebSocketFrameOpCode[frame.opcode]^, len,
+                LogEscape(pointer(frame.PayLoad), len, tmp,
+                  logBinaryFrameContent in fSettings.LogDetails)], self);
             end;
           finally
             log.DisableRemoteLog(false);
@@ -2635,8 +2646,8 @@ begin
             if ErrorWithoutException <> nil then
             begin
               WebSocketLog.Add.Log(sllDebug, 'GetFrame: received %, expected %',
-                [_TWebSocketFrameOpCode[opcode]^, _TWebSocketFrameOpCode[outputframe.opcode]^],
-                process);
+                [_TWebSocketFrameOpCode[opcode]^,
+                 _TWebSocketFrameOpCode[outputframe.opcode]^], process);
               ErrorWithoutException^ := maxInt;
             end
             else
@@ -2712,7 +2723,7 @@ var
 begin
   fSafeOut.Lock;
   try
-    log(Frame, 'SendFrame', sllTrace, true);
+    Log(Frame, 'SendFrame', sllTrace, true);
     try
       result := true;
       if Frame.opcode = focConnectionClose then
@@ -2769,8 +2780,8 @@ end;
 
 { TWebCrtSocketProcess }
 
-constructor TWebCrtSocketProcess.Create(aSocket: TCrtSocket; aProtocol:
-  TWebSocketProtocol; aOwnerConnection: THttpServerConnectionID;
+constructor TWebCrtSocketProcess.Create(aSocket: TCrtSocket;
+  aProtocol: TWebSocketProtocol; aOwnerConnection: THttpServerConnectionID;
   aOwnerThread: TSynThread; aSettings: PWebSocketProcessSettings;
   const aProcessName: RawUtf8);
 begin
