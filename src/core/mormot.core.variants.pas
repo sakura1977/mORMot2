@@ -2914,16 +2914,12 @@ end;
 
 function TDocVariantDataEnumerator.GetCurrent: PVariant;
 begin
-  if dvoIsArray in fValue.VOptions then
-    result := @fValue.VValue[fIndex]
-  else if dvoIsObject in fValue.VOptions then
-  begin
-    RawUtf8ToVariant(fValue.VName[fIndex], fFakeItem.VValue[0]);
-    SetVariantByRef(fValue.VValue[fIndex], fFakeItem.VValue[1]);
-    result := @fFakeItem;
-  end
-  else
-    result := @Null;
+  result := @fValue.VValue[fIndex];
+  if fFakeItem.VCount = 0 then
+    exit;
+  SetVariantByRef(result^, fFakeItem.VValue[1]);
+  RawUtf8ToVariant(fValue.VName[fIndex], fFakeItem.VValue[0]);
+  result := @fFakeItem;
 end;
 
 { TDocVariantDataArrayEnumerator }
@@ -3230,7 +3226,8 @@ end;
 function TSynInvokeableVariantType.FindSynVariantType(aVarType: Word;
   out CustomType: TSynInvokeableVariantType): boolean;
 begin
-  if aVarType = VarType then
+  if (self <> nil) and
+     (aVarType = VarType) then
     CustomType := self
   else
     CustomType := FindSynVariantTypeFromVType(aVarType);
@@ -4493,9 +4490,11 @@ begin
           break;
         v := v^.VPointer;
       until false;
-      if vt <= varNativeString then // simple string/number types copy
+      if vt <= varNativeString then
+        // simple string/number types copy
         VValue[ndx] := variant(v^)
-      else if vt = DocVariantVType then // direct recursive copy for TDocVariant
+      else if vt = DocVariantVType then
+        // direct recursive copy for TDocVariant
         TDocVariantData(VValue[ndx]).InitCopy(variant(v^), VOptions)
       else if FindCustomVariantType(vt, Handler) then
         if Handler.InheritsFrom(TSynInvokeableVariantType) then
