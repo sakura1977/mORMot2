@@ -2704,7 +2704,7 @@ begin
         D := P;
         if P^ <> '"' then
         repeat
-          // escape needed -> inplace unescape from P^ into D^
+          // escape needed -> in-place unescape from P^ into D^
           c := P^;
           if not (jcJsonStringMarker in jsonset[c]) then
           begin
@@ -7302,7 +7302,7 @@ begin
     if Ctxt.WasString then
       Iso8601ToDateTimePUtf8CharVar(Ctxt.Value, Ctxt.ValueLen, Data^)
     else
-      Data^ := GetExtended(Ctxt.Value);
+      Data^ := GetExtended(Ctxt.Value); // was propbably stored as double
 end;
 
 procedure _JL_GUID(Data: PByteArray; var Ctxt: TJsonParserContext);
@@ -10546,7 +10546,6 @@ begin
       'Rtti.Count=% at mormot.core.json start', [Rtti.Count]);
   Rtti.GlobalClass := TRttiJson;
   GetDataFromJson := _GetDataFromJson;
-  _VariantToUtf8DateTimeToIso8601 := DateTimeToIso8601TextVar;
 end;
 
 
