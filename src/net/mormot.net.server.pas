@@ -344,6 +344,10 @@ type
     fKeepAliveClient: boolean;
     fRemoteConnectionID: THttpServerConnectionID;
     fServer: THttpServer;
+    // from TSynThreadPoolTHttpServer.Task - return true for custom process
+    procedure TaskProcess(aCaller: TSynThreadPoolWorkThread); virtual;
+    function TaskProcessBody(aCaller: TSynThreadPoolWorkThread;
+      aHeaderResult: THttpServerSocketGetRequestResult): boolean;
   public
     /// create the socket according to a server
     // - will register the THttpSocketCompress functions from the server
@@ -431,7 +435,8 @@ type
     function QueueLength: integer; override;
     {$endif USE_WINIOCP}
     // here aContext is a THttpServerSocket instance
-    procedure Task(aCaller: TSynThread; aContext: Pointer); override;
+    procedure Task(aCaller: TSynThreadPoolWorkThread;
+      aContext: Pointer); override;
     procedure TaskAbort(aContext: Pointer); override;
   public
     /// initialize a thread pool with the supplied number of threads
@@ -1169,7 +1174,8 @@ type
     function NeedStopOnIOError: boolean; override;
     // aContext is a PHttpApiWebSocketConnection, or fServer.fServiceOverlaped
     // (SendServiceMessage) or fServer.fSendOverlaped (WriteData)
-    procedure Task(aCaller: TSynThread; aContext: Pointer); override;
+    procedure Task(aCaller: TSynThreadPoolWorkThread;
+      aContext: Pointer); override;
   public
     /// initialize the thread pool
     constructor Create(Server: THttpApiWebSocketServer;
@@ -1938,6 +1944,74 @@ end;
 
 { THttpServerSocket }
 
+procedure THttpServerSocket.TaskProcess(aCaller: TSynThreadPoolWorkThread);
+var
+  freeme: boolean;
+  headertix: Int64;
+begin
+  // process this THttpServerSocket in the thread pool
+  freeme := true;
+  try
+    headertix := fServer.HeaderRetrieveAbortDelay;
+    if headertix > 0 then
+      headertix := headertix + GetTickCount64;
+    freeme := TaskProcessBody(aCaller, GetRequest({withbody=}false, headertix));
+  finally
+    if freeme then
+      Free;
+  end;
+end;
+
+function THttpServerSocket.TaskProcessBody(aCaller: TSynThreadPoolWorkThread;
+  aHeaderResult: THttpServerSocketGetRequestResult): boolean;
+var
+  pool: TSynThreadPoolTHttpServer;
+begin
+  result := true;
+  if (fServer = nil) or
+     fServer.Terminated  then
+    exit;
+  // properly get the incoming body and process the request
+  LockedInc32(@fServer.fStats[aHeaderResult]);
+  case aHeaderResult of
+    grHeaderReceived:
+      begin
+        pool := TSynThreadPoolTHttpServer(aCaller.Owner);
+        // connection and header seem valid -> process request further
+        if (fServer.ServerKeepAliveTimeOut > 0) and
+           (fServer.fInternalHttpServerRespList.Count < pool.MaxBodyThreadCount) and
+           (KeepAliveClient or
+            (ContentLength > pool.BigBodySize)) then
+        begin
+          // HTTP/1.1 Keep Alive (including WebSockets) or posted data > 16 MB
+          // -> process in dedicated background thread
+          fServer.fThreadRespClass.Create(self, fServer);
+          result := false; // THttpServerResp will own and free srvsock
+        end
+        else
+        begin
+          // no Keep Alive = multi-connection -> process in the Thread Pool
+          if not (hfConnectionUpgrade in HeaderFlags) and
+             (IdemPCharArray(pointer(Method), ['HEAD', 'OPTIONS']) < 0) then
+          begin
+            GetBody; // we need to get it now
+            LockedInc32(@fServer.fStats[grBodyReceived]);
+          end;
+          // multi-connection -> process now
+          fServer.Process(self, RemoteConnectionID, aCaller);
+          fServer.OnDisconnect;
+          // no Shutdown here: will be done client-side
+        end;
+      end;
+    grOwned:
+      // e.g. for asynchrounous WebSockets
+      result := false; // to ignore FreeAndNil(srvsock) below
+  else if Assigned(fServer.Sock.OnLog) then
+    fServer.Sock.OnLog(sllTrace, 'Task: close after GetRequest=% from %',
+        [ToText(aHeaderResult)^, RemoteIP], self);
+  end;
+end;
+
 constructor THttpServerSocket.Create(aServer: THttpServer);
 begin
   inherited Create(5000);
@@ -2294,65 +2368,15 @@ begin
 end;
 {$endif USE_WINIOCP}
 
-procedure TSynThreadPoolTHttpServer.Task(aCaller: TSynThread; aContext: Pointer);
-var
-  srvsock: THttpServerSocket;
-  headertix: Int64;
-  res: THttpServerSocketGetRequestResult;
+procedure TSynThreadPoolTHttpServer.Task(
+  aCaller: TSynThreadPoolWorkThread; aContext: Pointer);
 begin
-  srvsock := aContext;
-  try
-    if fServer.Terminated then
-      exit;
-    // get Header of incoming request in the thread pool
-    headertix := fServer.HeaderRetrieveAbortDelay;
-    if headertix > 0 then
-      headertix := headertix + GetTickCount64;
-    res := srvsock.GetRequest({withbody=}false, headertix);
-    if (fServer = nil) or
-       fServer.Terminated then
-      exit;
-    // properly get the incoming body and process the request
-    LockedInc32(@fServer.fStats[res]);
-    case res of
-      grHeaderReceived:
-        begin
-          // connection and header seem valid -> process request further
-          if (fServer.ServerKeepAliveTimeOut > 0) and
-             (fServer.fInternalHttpServerRespList.Count < fMaxBodyThreadCount) and
-             (srvsock.KeepAliveClient or
-              (srvsock.ContentLength > fBigBodySize)) then
-          begin
-            // HTTP/1.1 Keep Alive (including WebSockets) or posted data > 16 MB
-            // -> process in dedicated background thread
-            fServer.fThreadRespClass.Create(srvsock, fServer);
-            srvsock := nil; // THttpServerResp will own and free srvsock
-          end
-          else
-          begin
-            // no Keep Alive = multi-connection -> process in the Thread Pool
-            if not (hfConnectionUpgrade in srvsock.HeaderFlags) and
-               (IdemPCharArray(pointer(srvsock.fMethod), ['HEAD', 'OPTIONS']) < 0) then
-            begin
-              srvsock.GetBody; // we need to get it now
-              LockedInc32(@fServer.fStats[grBodyReceived]);
-            end;
-            // multi-connection -> process now
-            fServer.Process(srvsock, srvsock.RemoteConnectionID, aCaller);
-            fServer.OnDisconnect;
-            // no Shutdown here: will be done client-side
-          end;
-        end;
-      grOwned:
-        // e.g. for asynchrounous WebSockets
-        srvsock := nil; // to ignore FreeAndNil(srvsock) below
-    else if Assigned(fServer.Sock.OnLog) then
-      fServer.Sock.OnLog(sllTrace, 'Task: close after GetRequest=% from %',
-          [ToText(res)^, srvsock.RemoteIP], self);
-    end;
-  finally
-    srvsock.Free;
-  end;
+  // process this THttpServerSocket in the thread pool
+  if (fServer = nil) or
+     fServer.Terminated then
+    THttpServerSocket(aContext).Free
+  else
+    THttpServerSocket(aContext).TaskProcess(aCaller);
 end;
 
 procedure TSynThreadPoolTHttpServer.TaskAbort(aContext: Pointer);
@@ -4251,8 +4275,8 @@ begin
     fServer.OnWSThreadTerminate(Sender);
 end;
 
-procedure TSynThreadPoolHttpApiWebSocketServer.Task(aCaller: TSynThread;
-  aContext: Pointer);
+procedure TSynThreadPoolHttpApiWebSocketServer.Task(
+  aCaller: TSynThreadPoolWorkThread; aContext: Pointer);
 var
   conn: PHttpApiWebSocketConnection;
 begin

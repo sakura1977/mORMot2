@@ -146,7 +146,7 @@ type
   // any Sec-WebSocket-Protocol application content
   TWebSocketServer = class(THttpServer)
   protected
-    fWebSocketConnections: TSynObjectListLocked;
+    fWebSocketConnections: TSynObjectListLocked; // of TWebSocketServerResp
     fProtocols: TWebSocketProtocolList;
     fSettings: TWebSocketProcessSettings;
     fProcessClass: TWebSocketProcessServerClass;
@@ -222,10 +222,10 @@ type
 
 
   TWebSocketServerSocket = class(THttpServerSocket)
-  public
-    /// overriden to detect upgrade: websocket header and return grOwned
-    function GetRequest(withBody: boolean;
-      headerMaxTix: Int64): THttpServerSocketGetRequestResult; override;
+  protected
+    fProcess: TWebCrtSocketProcess; // set once upgraded
+    /// overriden to detect upgrade, or process WebSockets in the thread pool
+    procedure TaskProcess(aCaller: TSynThreadPoolWorkThread); override;
   end;
 
   /// main HTTP/WebSockets server Thread using the standard Sockets API (e.g. WinSock)
@@ -491,9 +491,11 @@ function TWebSocketServer.WebSocketProcessUpgrade(ClientSock: THttpServerSocket;
 var
   protocol: TWebSocketProtocol;
 begin
+  // validate the WebSockets upgrade handshake
   result := HttpServerWebSocketUpgrade(ClientSock, fProtocols, protocol);
   if result <> HTTP_SUCCESS then
     exit;
+  // if we reached here, we switched/upgraded to WebSockets bidir frames
   ClientSock.KeepAliveClient := false; // close connection with WebSockets
   Context.fProcess := fProcessClass.Create(ClientSock, protocol,
     Context.ConnectionID, Context, @fSettings, fProcessName);
@@ -524,8 +526,8 @@ begin
   end;
 end;
 
-procedure TWebSocketServer.Process(ClientSock: THttpServerSocket; ConnectionID:
-  THttpServerConnectionID; ConnectionThread: TSynThread);
+procedure TWebSocketServer.Process(ClientSock: THttpServerSocket;
+  ConnectionID: THttpServerConnectionID; ConnectionThread: TSynThread);
 var
   err: integer;
 begin
@@ -535,6 +537,7 @@ begin
      IdemPropNameU(ClientSock.Upgrade, 'websocket') and
      ConnectionThread.InheritsFrom(TWebSocketServerResp) then
   begin
+    // upgrade and run fProcess.ProcessLoop
     err := WebSocketProcessUpgrade(ClientSock, TWebSocketServerResp(ConnectionThread));
     if err <> HTTP_SUCCESS then
       WebSocketLog.Add.Log(sllTrace,
@@ -690,16 +693,39 @@ end;
 
 { TWebSocketServerSocket }
 
-function TWebSocketServerSocket.GetRequest(withBody: boolean;
-  headerMaxTix: Int64): THttpServerSocketGetRequestResult;
+procedure TWebSocketServerSocket.TaskProcess(aCaller: TSynThreadPoolWorkThread);
+var
+  freeme: boolean;
+  headertix: Int64;
+  res: THttpServerSocketGetRequestResult;
 begin
-  result := inherited GetRequest(withBody, headerMaxTix);
-{  if (result = grHeaderReceived) and
-     (hfConnectionUpgrade in HeaderFlags) and
-     KeepAliveClient and
-     IdemPropNameU(Method, 'GET') and
-     IdemPropNameU(Upgrade, 'websocket') then
-    result := grOwned; }
+  // from TSynThreadPoolTHttpServer.Task
+  freeme := true;
+  try
+    if Assigned(fProcess) then
+    begin
+      freeme := false;
+      exit;
+    end;
+    headertix := fServer.HeaderRetrieveAbortDelay;
+    if headertix > 0 then
+      headertix := headertix + GetTickCount64;
+    res := GetRequest({withbody=}false, headertix);
+    if (res = grHeaderReceived) and
+       (hfConnectionUpgrade in HeaderFlags) and
+       KeepAliveClient and
+       IdemPropNameU(Method, 'GET') and
+       IdemPropNameU(Upgrade, 'websocket') then
+    begin
+      // perform a WebSockets upgrade
+      res := grHeaderReceived;
+    end;
+    // regular HTTP request process
+    freeme := TaskProcessBody(aCaller, res);
+  finally
+    if freeme then
+      Free;
+  end;
 end;
 
 
