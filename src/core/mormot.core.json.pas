@@ -1386,8 +1386,9 @@ type
   /// thread-safe dictionary to store some values from associated keys
   // - will maintain a dynamic array of values, associated with a hash table
   // for the keys, so that setting or retrieving values would be O(1)
-  // - all process is protected by a TSynLocker, so will be thread-safe
-  // - TDynArray is a wrapper which do not store anything, whereas this class
+  // - thread-safe by default, since most methods are protected by a TSynLocker;
+  // set the doSingleThreaded option if you don't need thread-safety
+  // - TDynArray is a wrapper which does not store anything, whereas this class
   // is able to store both keys and values, and provide convenient methods to
   // access the stored data, including JSON serialization and binary storage
   TSynDictionary = class(TSynLocked)
@@ -8830,7 +8831,7 @@ end;
 
 { TSynDictionary }
 
-const
+const // use fSafe.Padding[DIC_*] slots for Keys/Values place holders
   DIC_KEYCOUNT = 0;
   DIC_KEY = 1;
   DIC_VALUECOUNT = 2;
@@ -8850,7 +8851,8 @@ var
 begin
   for i := 0 to fKeys.Info.Cache.ItemSize - 1 do
   begin
-    result := TByteArray(A)[i] - TByteArray(B)[i];
+    result := TByteArray(A)[i];
+    dec(result, TByteArray(B)[i]); // in two steps for better asm generation
     if result <> 0 then
       exit;
   end;
@@ -8862,13 +8864,13 @@ constructor TSynDictionary.Create(aKeyTypeInfo, aValueTypeInfo: PRttiInfo;
   aCompressAlgo: TAlgoCompress; aHasher: THasher);
 begin
   inherited Create;
-  fSafe.Padding[DIC_KEYCOUNT].VType := varInteger;
-  fSafe.Padding[DIC_KEY].VType := varUnknown;
-  fSafe.Padding[DIC_VALUECOUNT].VType := varInteger;
-  fSafe.Padding[DIC_VALUE].VType := varUnknown;
-  fSafe.Padding[DIC_TIMECOUNT].VType := varInteger;
-  fSafe.Padding[DIC_TIMESEC].VType := varInteger;
-  fSafe.Padding[DIC_TIMETIX].VType := varInteger;
+  fSafe.Padding[DIC_KEYCOUNT].VType := varInteger;    // Keys.Count integer
+  fSafe.Padding[DIC_VALUECOUNT].VType := varInteger;  // Values.Count integer
+  fSafe.Padding[DIC_KEY].VType := varUnknown;         // Key.Value pointer
+  fSafe.Padding[DIC_VALUE].VType := varUnknown;       // Values.Value pointer
+  fSafe.Padding[DIC_TIMECOUNT].VType := varInteger;   // Timeouts.Count integer
+  fSafe.Padding[DIC_TIMESEC].VType := varInteger;     // Timeouts Seconds
+  fSafe.Padding[DIC_TIMETIX].VType := varInteger;  // last GetTickCount64 shr 10
   fSafe.PaddingUsedCount := DIC_TIMETIX + 1;
   fKeys.Init(aKeyTypeInfo, fSafe.Padding[DIC_KEY].VAny, nil, nil, aHasher,
     @fSafe.Padding[DIC_KEYCOUNT].VInteger, aKeyCaseInsensitive);

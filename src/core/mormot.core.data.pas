@@ -2313,7 +2313,7 @@ function FindIniNameValue(P: PUtf8Char; UpperName: PAnsiChar;
 // current section
 // - expect UpperName e.g. as 'CONTENT-TYPE: '
 // - expect UpperValues to be any upper value with left side matching, e.g. as
-// used by IsHTMLContentTypeTextual() function:
+// used by IsHtmlContentTypeTextual() function:
 // ! result := ExistsIniNameValue(htmlHeaders,HEADER_CONTENT_TYPE_UPPER,
 // !  ['TEXT/','APPLICATION/JSON','APPLICATION/XML']);
 // - warning: this function calls IdemPCharArray(), so expects UpperValues[]
@@ -2336,7 +2336,7 @@ function UpdateIniNameValue(var Content: RawUtf8;
 
 /// returns TRUE if the supplied HTML Headers contains 'Content-Type: text/...',
 // 'Content-Type: application/json' or 'Content-Type: application/xml'
-function IsHTMLContentTypeTextual(Headers: PUtf8Char): boolean;
+function IsHtmlContentTypeTextual(Headers: PUtf8Char): boolean;
 
 
 
@@ -3855,7 +3855,7 @@ begin
   FileFromString(Content, FileName);
 end;
 
-function IsHTMLContentTypeTextual(Headers: PUtf8Char): boolean;
+function IsHtmlContentTypeTextual(Headers: PUtf8Char): boolean;
 begin
   result := ExistsIniNameValue(Headers, HEADER_CONTENT_TYPE_UPPER,
     [JSON_CONTENT_TYPE_UPPER, 'TEXT/', 'APPLICATION/XML',
@@ -6095,7 +6095,7 @@ begin
 end;
 
 function TDynArray.GetCount: PtrInt;
-begin
+begin // use result as a single temporary variable for better FPC asm generation
   result := PtrUInt(fCountP);
   if result <> 0 then
     result := PInteger(result)^ // count is external
@@ -6316,7 +6316,7 @@ end;
 
 function TDynArray.ItemPtr(index: PtrInt): pointer;
 label
-  ok;
+  ok, ko;
 var
   c: PtrUInt;
 begin
@@ -6331,9 +6331,9 @@ begin
   if c <> 0 then
   begin
     if PtrUInt(index) < PCardinal(c)^ then
-ok:   inc(PByte(result), index * fInfo.Cache.ItemSize)
+ok:   inc(PByte(result), index * fInfo.Cache.ItemSize) // branchless ext count
     else
-      result := nil
+      goto ko;
   end
   else
     {$ifdef FPC} // FPC stores high() in TDALen=PtrInt
@@ -6343,7 +6343,7 @@ ok:   inc(PByte(result), index * fInfo.Cache.ItemSize)
     {$endif FPC}
       goto ok
     else
-      result := nil;
+ko:   result := nil;
 end;
 
 procedure TDynArray.ItemCopyAt(index: PtrInt; Dest: pointer);
