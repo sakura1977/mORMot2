@@ -339,11 +339,11 @@ type
   /// Socket API based HTTP/1.1 server class used by THttpServer Threads
   THttpServerSocket = class(THttpSocket)
   protected
+    fRemoteConnectionID: THttpServerConnectionID;
     fMethod: RawUtf8;
     fURL: RawUtf8;
-    fKeepAliveClient: boolean;
-    fRemoteConnectionID: THttpServerConnectionID;
     fServer: THttpServer;
+    fKeepAliveClient: boolean;
     // from TSynThreadPoolTHttpServer.Task - return true for custom process
     procedure TaskProcess(aCaller: TSynThreadPoolWorkThread); virtual;
     function TaskProcessBody(aCaller: TSynThreadPoolWorkThread;
@@ -378,6 +378,9 @@ type
     // THttpServerGeneric.RemoteConnIDHeader='X-Conn-ID' for nginx
     property RemoteConnectionID: THttpServerConnectionID
       read fRemoteConnectionID;
+    /// the associated HTTP Server instance - may be nil
+    property Server: THttpServer
+      read fServer;
   end;
 
   /// HTTP response Thread as used by THttpServer Socket API based class
@@ -388,11 +391,11 @@ type
   // (change the protocol, e.g.) THttpServer.Process() method itself
   THttpServerResp = class(TSynThread)
   protected
+    fConnectionID: THttpServerConnectionID;
     fServer: THttpServer;
     fServerSock: THttpServerSocket;
     fClientSock: TNetSocket;
     fClientSin: TNetAddr;
-    fConnectionID: THttpServerConnectionID;
     /// main thread loop: read request from socket, send back answer
     procedure Execute; override;
   public
@@ -1310,7 +1313,8 @@ begin
   else
   begin
     thrd := THttpServerRequest(Ctxt).ConnectionThread;
-    if not Assigned(thrd.StartNotified) then
+    if Assigned(thrd) and
+       not Assigned(thrd.StartNotified) then
       NotifyThreadStart(thrd);
     if Assigned(OnRequest) then
       result := OnRequest(Ctxt)
@@ -2163,9 +2167,10 @@ begin
   fServerSock := aServerSock;
   fOnThreadTerminate := fServer.fOnThreadTerminate;
   fServer.InternalHttpServerRespListAdd(self);
-  fConnectionID := aServerSock.RemoteConnectionID;
-  if fConnectionID = 0 then
-    fConnectionID := fServer.NextConnectionID; // fallback to 31-bit sequence
+  if aServerSock.fRemoteConnectionID = 0 then
+    // fallback to 31-bit sequence
+    aServerSock.fRemoteConnectionID := fServer.NextConnectionID;
+  fConnectionID := aServerSock.fRemoteConnectionID;
   FreeOnTerminate := true;
   inherited Create(false);
 end;
