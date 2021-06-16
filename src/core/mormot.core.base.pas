@@ -1303,11 +1303,11 @@ function WordScanIndex(P: PWordArray; Count: PtrInt; Value: word): PtrInt;
 // - Count is the number of entries in P^[]
 // - return index of P^[index]=Elem^, comparing ElemSize bytes
 // - return -1 if Value was not found
-function AnyScanIndex(P,Elem: pointer; Count,ElemSize: PtrInt): PtrInt;
+function AnyScanIndex(P,Elem: pointer; Count, ElemSize: PtrInt): PtrInt;
 
 /// fast search of a binary value position in a fixed-size array
 // - Count is the number of entries in P^[]
-function AnyScanExists(P,Elem: pointer; Count,ElemSize: PtrInt): boolean;
+function AnyScanExists(P,Elem: pointer; Count, ElemSize: PtrInt): boolean;
 
 /// sort an integer array, low values first
 procedure QuickSortInteger(ID: PIntegerArray; L, R: PtrInt); overload;
@@ -1339,6 +1339,9 @@ procedure QuickSortPtrInt(P: PPtrIntArray; L, R: PtrInt);
 /// sort a pointer array, low values first
 procedure QuickSortPointer(P: PPointerArray; L, R: PtrInt);
   {$ifdef HASINLINE}inline;{$endif}
+
+/// sort a double array, low values first
+procedure QuickSortDouble(ID: PDoubleArray; L, R: PtrInt);
 
 type
   /// event handler called by NotifySortedIntegerChanges()
@@ -2815,14 +2818,17 @@ function BufferLineLength(Text, TextEnd: PUtf8Char): PtrInt;
 type
   /// function prototype to be used for 32-bit hashing of an element
   // - it must return a cardinal hash, with as less collision as possible
+  // - is the function signature of DefaultHasher and InterningHasher
   THasher = function(crc: cardinal; buf: PAnsiChar; len: cardinal): cardinal;
 
   /// function prototype to be used for 64-bit hashing of an element
   // - it must return a QWord hash, with as less collision as possible
+  // - is the function signature of DefaultHasher64
   THasher64 = function(crc: QWord; buf: PAnsiChar; len: cardinal): QWord;
 
   /// function prototype to be used for 128-bit hashing of an element
   // - the input hash buffer is used as seed, and contains the 128-bit result
+  // - is the function signature of DefaultHasher128
   THasher128 = procedure(hash: PHash128; buf: PAnsiChar; len: cardinal);
 
 
@@ -6472,6 +6478,51 @@ begin
       begin
         if I < R then
           QuickSortQWord(ID, I, R);
+        R := J;
+      end;
+    until L >= R;
+end;
+
+procedure QuickSortDouble(ID: PDoubleArray; L, R: PtrInt);
+var
+  I, J, P: PtrInt;
+  tmp: double;
+begin
+  if L < R then
+    repeat
+      I := L;
+      J := R;
+      P := (L + R) shr 1;
+      repeat
+        tmp := ID[P];
+        while ID[I] < tmp do
+          inc(I);
+        while ID[J] > tmp do
+          dec(J);
+        if I <= J then
+        begin
+          tmp := ID[J];
+          ID[J] := ID[I];
+          ID[I] := tmp;
+          if P = I then
+            P := J
+          else if P = J then
+            P := I;
+          inc(I);
+          dec(J);
+        end;
+      until I > J;
+      if J - L < R - I then
+      begin
+        // use recursion only for smaller range
+        if L < J then
+          QuickSortDouble(ID, L, J);
+        L := I;
+      end
+      else
+      begin
+        if I < R then
+          QuickSortDouble(ID, I, R);
         R := J;
       end;
     until L >= R;

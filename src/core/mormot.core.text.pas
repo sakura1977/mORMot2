@@ -1100,6 +1100,15 @@ type
     // - TypeInfo is a PRttiInfo instance - but not available in this early unit
     procedure AddTypedJson(Value: pointer; TypeInfo: pointer;
       WriteOptions: TTextWriterWriteObjectOptions = []); virtual;
+    /// write some #0 ended UTF-8 text, according to the specified format
+    // - use overriden TTextWriter version instead!
+    procedure Add(P: PUtf8Char; Escape: TTextWriterKind); overload; virtual;
+    /// write some #0 ended UTF-8 text, according to the specified format
+    // - use overriden TTextWriter version instead!
+    procedure Add(P: PUtf8Char; Len: PtrInt; Escape: TTextWriterKind); overload; virtual;
+    /// write some data Base64 encoded
+    // - use overriden TTextWriter version instead!
+    procedure WrBase64(P: PAnsiChar; Len: PtrUInt; withMagic: boolean); virtual;
 
     /// serialize as JSON the given object
     // - use overriden TTextWriter version instead!
@@ -1277,7 +1286,7 @@ type
 type
   /// function prototype used internally for UTF-8 buffer comparison
   // - also used e.g. in mormot.core.variants unit
-  TUtf8Compare = function(P1,P2: PUtf8Char): PtrInt;
+  TUtf8Compare = function(P1, P2: PUtf8Char): PtrInt;
 
 /// returns TRUE if Value is nil or all supplied Values[] equal ''
 function IsZero(const Values: TRawUtf8DynArray): boolean; overload;
@@ -4742,6 +4751,24 @@ begin
     '%.AddJsonReformat unimplemented: use TTextWriter', [self]);
 end;
 
+procedure TBaseWriter.Add(P: PUtf8Char; Escape: TTextWriterKind);
+begin
+  raise ESynException.CreateUtf8(
+    '%.Add(..,Escape: TTextWriterKind) unimplemented: use TTextWriter', [self]);
+end;
+
+procedure TBaseWriter.Add(P: PUtf8Char; Len: PtrInt; Escape: TTextWriterKind);
+begin
+  raise ESynException.CreateUtf8(
+    '%.Add(..,Escape: TTextWriterKind) unimplemented: use TTextWriter', [self]);
+end;
+
+procedure TBaseWriter.WrBase64(P: PAnsiChar; Len: PtrUInt; withMagic: boolean);
+begin
+  raise ESynException.CreateUtf8(
+    '%.WrBase64() unimplemented: use TTextWriter', [self]);
+end;
+
 procedure TBaseWriter.AddShorter(const Text: TShort8);
 var
   L: PtrInt;
@@ -6685,8 +6712,8 @@ type
 procedure TQuickSortRawUtf8.Sort(L, R: PtrInt);
 var
   I, J, P: PtrInt;
-  Tmp: Pointer;
-  TmpInt: integer;
+  tmp: Pointer;
+  int: integer;
 begin
   if L < R then
     repeat
@@ -6696,26 +6723,26 @@ begin
       repeat
         pivot := Values^[P];
         while Compare(Values^[I], pivot) < 0 do
-          Inc(I);
+          inc(I);
         while Compare(Values^[J], pivot) > 0 do
-          Dec(J);
+          dec(J);
         if I <= J then
         begin
-          Tmp := Values^[J];
+          tmp := Values^[J];
           Values^[J] := Values^[I];
-          Values^[I] := Tmp;
+          Values^[I] := tmp;
           if CoValues <> nil then
           begin
-            TmpInt := CoValues^[J];
+            int := CoValues^[J];
             CoValues^[J] := CoValues^[I];
-            CoValues^[I] := TmpInt;
+            CoValues^[I] := int;
           end;
           if P = I then
             P := J
           else if P = J then
             P := I;
-          Inc(I);
-          Dec(J);
+          inc(I);
+          dec(J);
         end;
       until I > J;
       if J - L < R - I then
