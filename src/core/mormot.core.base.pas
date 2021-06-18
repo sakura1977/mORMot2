@@ -333,6 +333,8 @@ type
   TDoubleDynArray = array of double;
   PCurrencyDynArray = ^TCurrencyDynArray;
   TCurrencyDynArray = array of currency;
+  PExtendedDynArray = ^TExtendedDynArray;
+  TExtendedDynArray = array of Extended;
   TWordDynArray = array of word;
   PWordDynArray = ^TWordDynArray;
   TByteDynArray = array of byte;
@@ -360,7 +362,6 @@ type
   TClassDynArray = array of TClass;
   TWinAnsiDynArray = array of WinAnsiString;
   PWinAnsiDynArray = ^TWinAnsiDynArray;
-  TRawByteStringDynArray = array of RawByteString;
   TStringDynArray = array of string;
   PStringDynArray = ^TStringDynArray;
   PShortStringDynArray = array of PShortString;
@@ -380,6 +381,14 @@ type
   PWideStringDynArray = ^TWideStringDynArray;
   TSynUnicodeDynArray = array of SynUnicode;
   PSynUnicodeDynArray = ^TSynUnicodeDynArray;
+  TRawByteStringDynArray = array of RawByteString;
+  PRawByteStringDynArray = ^TRawByteStringDynArray;
+  {$ifdef HASVARUSTRING}
+  TUnicodeStringDynArray = array of UnicodeString;
+  PUnicodeStringDynArray = ^TUnicodeStringDynArray;
+  {$endif HASVARUSTRING}
+  TRawJsonDynArray = array of RawJson;
+  PRawJsonDynArray = ^TRawJsonDynArray;
   TGuidDynArray = array of TGUID;
   PGuidDynArray = array of PGUID;
 
@@ -1303,17 +1312,17 @@ function WordScanIndex(P: PWordArray; Count: PtrInt; Value: word): PtrInt;
 // - Count is the number of entries in P^[]
 // - return index of P^[index]=Elem^, comparing ElemSize bytes
 // - return -1 if Value was not found
-function AnyScanIndex(P,Elem: pointer; Count, ElemSize: PtrInt): PtrInt;
+function AnyScanIndex(P, Elem: pointer; Count, ElemSize: PtrInt): PtrInt;
 
 /// fast search of a binary value position in a fixed-size array
 // - Count is the number of entries in P^[]
-function AnyScanExists(P,Elem: pointer; Count, ElemSize: PtrInt): boolean;
+function AnyScanExists(P, Elem: pointer; Count, ElemSize: PtrInt): boolean;
 
 /// sort an integer array, low values first
 procedure QuickSortInteger(ID: PIntegerArray; L, R: PtrInt); overload;
 
 /// sort an integer array, low values first
-procedure QuickSortInteger(ID,CoValues: PIntegerArray; L, R: PtrInt); overload;
+procedure QuickSortInteger(ID, CoValues: PIntegerArray; L, R: PtrInt); overload;
 
 /// sort an integer array, low values first
 procedure QuickSortInteger(var ID: TIntegerDynArray); overload;
@@ -1330,7 +1339,7 @@ procedure QuickSortInt64(ID: PInt64Array; L, R: PtrInt); overload;
 procedure QuickSortQWord(ID: PQWordArray; L, R: PtrInt); overload;
 
 /// sort a 64-bit integer array, low values first
-procedure QuickSortInt64(ID,CoValues: PInt64Array; L, R: PtrInt); overload;
+procedure QuickSortInt64(ID, CoValues: PInt64Array; L, R: PtrInt); overload;
 
 /// sort a PtrInt array, low values first
 procedure QuickSortPtrInt(P: PPtrIntArray; L, R: PtrInt);
@@ -2268,18 +2277,19 @@ type
    cf_c16, cfPCID,  cfDCA,  cfSSE41, cfSSE42, cfX2A,  cfMOVBE, cfPOPCNT,
    cfTSC2, cfAESNI, cfXS,   cfOSXS,  cfAVX,   cfF16C, cfRAND,  cfHYP,
    { extended features CPUID 7 in EBX, ECX, EDX }
-   cfFSGS, cf_b01, cfSGX, cfBMI1, cfHLE, cfAVX2, cf_b06, cfSMEP,
+   cfFSGS, cfTSCADJ, cfSGX, cfBMI1, cfHLE, cfAVX2, cfFDPEO, cfSMEP,
    cfBMI2, cfERMS, cfINVPCID, cfRTM, cfPQM, cf_b13, cfMPX, cfPQE,
-   cfAVX512F, cfAVX512DQ, cfRDSEED, cfADX, cfSMAP, cfAVX512IFMA, cfPCOMMIT, cfCLFLUSH,
-   cfCLWB, cfIPT, cfAVX512PF, cfAVX512ER, cfAVX512CD, cfSHA, cfAVX512BW, cfAVX512VL,
-   cfPREFW1, cfAVX512VBMI, cfUMIP, cfPKU, cfOSPKE, cf_c05, cfAVX512VBMI2, cf_c07,
-   cfGFNI, cfVAES, cfVCLMUL, cfAVX512NNI, cfAVX512BITALG, cf_c13, cfAVX512VPC, cf_c15,
-   cf_cc16, cf_c17, cf_c18, cf_c19, cf_c20, cf_c21, cfRDPID, cf_c23,
-   cf_c24, cf_CLDEMOTE, cf_c26, cf_MOVDIRI, cf_MOVDIR64B, cf_ENQCMD, cfSGXLC, cf_c31,
-   cf_d0, cf_d1, cfAVX512NNIW, cfAVX512MAS, cfFSRM, cf_d5, cf_d6, cf_d7,
-   cf_AVX512VP2I, cf_d9, cf_dMDCLR, cf_d11, cf_d12, cf_TSXFA, cf_SER, cf_HYBRID,
-   cf_TSXLDTRK, cf_d17, cf_PCFG, cf_d19, cf_IBT, cf_d21, cf_d22, cf_d34,
-   cf_d24, cf_d25, cf_IBRSPB, cf_STIBP, cf_dL1DFL, cf_ARCAB, cf_d30, cf_SSBD);
+   cfAVX512F, cfAVX512DQ, cfRDSEED, cfADX, cfSMAP, cfAVX512IFMA, cfPCOMMIT,
+   cfCLFLUSH, cfCLWB, cfIPT, cfAVX512PF, cfAVX512ER, cfAVX512CD, cfSHA,
+   cfAVX512BW, cfAVX512VL, cfPREFW1, cfAVX512VBMI, cfUMIP, cfPKU, cfOSPKE,
+   cf_c05, cfAVX512VBMI2, cfCETSS, cfGFNI, cfVAES, cfVCLMUL, cfAVX512NNI,
+   cfAVX512BITALG, cf_c13, cfAVX512VPC, cf_c15, cfFLP, cf_c17, cf_c18,
+   cf_c19, cf_c20, cf_c21, cfRDPID, cf_c23, cf_c24, cfCLDEMOTE, cf_c26,
+   cfMOVDIRI, cfMOVDIR64B, cfENQCMD, cfSGXLC, cfPKS, cf_d0, cf_d1,
+   cfAVX512NNIW, cfAVX512MAPS, cfFSRM, cf_d5, cf_d6, cf_d7, cfAVX512VP2I,
+   cfSRBDS, cfMDCLR, cf_d11, cf_d12, cfTSXFA, cfSER, cfHYBRID,
+   cfTSXLDTRK, cf_d17, cfPCFG, cfLBR, cfIBT, cf_d21, cfAMXBF16, cf_d23,
+   cfAMXTILE, cfAMXINT8, cfIBRSPB, cfSTIBP, cfL1DFL, cfARCAB, cfCORCAB, cfSSBD);
 
   /// all CPU features flags, as retrieved from an Intel/AMD CPU
   TIntelCpuFeatures = set of TIntelCpuFeature;
@@ -2419,8 +2429,16 @@ procedure FillZero(var dest; count: PtrInt); overload;
 procedure FillZeroSmall(P: pointer; Length: PtrInt);
   {$ifdef HASINLINE}inline;{$endif}
 
-/// our fast version of CompareMem() with optimized asm for x86 and tune pascal
+{$ifdef CPUX64}
+/// a fast SSE2 asm version of the C function memcmp()
+// - defined here to properly inline CompareMem()
+function MemCmpSse2(P1, P2: Pointer; Length: PtrInt): integer;
+{$endif CPUX64}
+
+/// our fast version of CompareMem()
+// - tuned asm for x86, call MemCmpSse2 for x64, or fallback to tuned pascal
 function CompareMem(P1, P2: Pointer; Length: PtrInt): boolean;
+  {$ifdef CPUX64}inline;{$endif}
 
 {$ifdef HASINLINE}
 function CompareMemFixed(P1, P2: Pointer; Length: PtrInt): boolean; inline;
@@ -2567,13 +2585,26 @@ type
     // - as executed by the Next method at thread startup, and after 2^20 values
     // - calls XorEntropy(), so RdRand32/Rdtsc opcodes on Intel/AMD CPUs
     procedure Seed(entropy: PByteArray; entropylen: PtrInt);
+    /// compute the next 32-bit generated value with no Seed - internal call
+    function RawNext: cardinal;
     /// compute the next 32-bit generated value
     // - will automatically reseed after around 2^20 generated values, which is
     // very conservative since this generator has a period of 2^88
     function Next: cardinal; overload;
+      {$ifdef HASINLINE}inline;{$endif}
     /// compute the next 32-bit generated value, in range [0..max-1]
     function Next(max: cardinal): cardinal; overload;
       {$ifdef HASINLINE}inline;{$endif}
+    /// compute a 64-bit integer value
+    function NextQWord: QWord;
+    /// compute a 64-bit floating point value
+    function NextDouble: double;
+    /// fill some memory buffer with random bytes
+    procedure Fill(dest: PByte; count: integer);
+    /// fill some string[size] with 7-bit ASCII random text
+    procedure FillShort(var dest: shortstring; size: PtrUInt);
+    /// fill some string[31] with 7-bit ASCII random text
+    procedure FillShort31(var dest: TShort31);
   end;
   PLecuyer = ^TLecuyer;
 
@@ -2601,6 +2632,10 @@ function Random32(max: cardinal): cardinal; overload;
 /// fast compute of a 64-bit random value, using the gsl_rng_taus2 generator
 // - thread-safe function: each thread will maintain its own TLecuyer table
 function Random64: QWord;
+
+/// fast compute of a 64-bit random floating point, using the gsl_rng_taus2 generator
+// - thread-safe function: each thread will maintain its own TLecuyer table
+function RandomDouble: double;
 
 /// fill some memory buffer with random values from the gsl_rng_taus2 generator
 // - the destination buffer is expected to be allocated as 32-bit items
@@ -5395,9 +5430,8 @@ begin
       if PtrUInt(P) >= PtrUInt(Count) then
         break;
       if P^[0] = Value then
-        exit
-      else
-        P := @P[1];
+        exit;
+      P := @P[1];
     until false;
   end;
   result := false;
@@ -5436,9 +5470,8 @@ begin
     if PtrUInt(result) >= PtrUInt(Count) then
       break;
     if result^ = Value then
-      exit
-    else
-      inc(result);
+      exit;
+    inc(result);
   until false;
   result := nil;
 end;
@@ -5485,9 +5518,8 @@ begin
       if result >= Count then
         break;
       if P^[result] = Value then
-        exit
-      else
-        inc(result);
+        exit;
+      inc(result);
     until false;
   end;
   result := -1;
@@ -5566,9 +5598,8 @@ begin
       if result >= Count then
         break;
       if P^[result] = Value then
-        exit
-      else
-        inc(result);
+        exit;
+      inc(result);
     until false;
   result := -1;
 end;
@@ -5581,9 +5612,8 @@ begin
       if result >= Count then
         break;
       if P^[result] = Value then
-        exit
-      else
-        inc(result);
+        exit;
+      inc(result);
     until false;
   result := -1;
 end;
@@ -7998,20 +8028,22 @@ end;
 function StrComp(Str1, Str2: pointer): PtrInt;
 var
   c: byte;
-begin
+label
+  eq;
+{%H-}begin
   if Str1 <> Str2 then
     if Str1 <> nil then
       if Str2 <> nil then
       begin
-        c := PByte(Str1)^;
-        if c = PByte(Str2)^ then
-          repeat
-            if c = 0 then
-              break;
-            inc(PByte(Str1));
-            inc(PByte(Str2));
-            c := PByte(Str1)^;
-          until c <> PByte(Str2)^;
+        repeat
+          c := PByte(Str1)^;
+          if c <> PByte(Str2)^ then
+            break;
+          if c = 0 then
+            goto eq;
+          inc(PByte(Str1));
+          inc(PByte(Str2));
+        until false;
         result := c - PByte(Str2)^;
         exit;
       end
@@ -8020,7 +8052,7 @@ begin
     else
       result := -1  // Str1=''
   else
-    result := 0;    // Str1=Str2
+eq: result := 0;    // Str1=Str2
 end;
 
 // from A. Sharahov's PosEx_Sha_Pas_2() - refactored for cross-platform/compiler
@@ -8640,15 +8672,11 @@ begin
         (rs3 > 15);
   seedcount := 1;
   for i := 1 to e.i3 and 15 do
-    Next; // warm up
+    RawNext; // warm up
 end;
 
-function TLecuyer.Next: cardinal;
-begin
-  if (seedcount and $fffff) = 0 then
-    Seed(nil, 0) // seed at startup, and after 2^20 output values (4MB of data)
-  else
-    inc(seedcount);
+function TLecuyer.RawNext: cardinal;
+begin // not inlined for better code generation
   result := rs1;
   rs1 := ((result and -2) shl 12) xor (((result shl 13) xor result) shr 19);
   result := rs2;
@@ -8658,9 +8686,88 @@ begin
   result := rs1 xor rs2 xor result;
 end;
 
+function TLecuyer.Next: cardinal;
+begin
+  if seedcount and $fffff = 0 then
+    Seed(nil, 0) // seed at startup, and after 2^20 output data = 4MB
+  else
+    inc(seedcount);
+  result := RawNext;
+end;
+
 function TLecuyer.Next(max: cardinal): cardinal;
 begin
   result := (QWord(Next) * max) shr 32;
+end;
+
+function TLecuyer.NextQWord: QWord;
+begin
+  with PQWordRec(@result)^ do
+  begin
+    L := Next;
+    H := RawNext;
+  end;
+end;
+
+function TLecuyer.NextDouble: double;
+const
+  COEFF64: double = (1.0 / $80000000) / $100000000;  // 2^-63
+begin
+  result := (Int64(NextQWord) and $7fffffffffffffff) * COEFF64;
+end;
+
+procedure TLecuyer.Fill(dest: PByte; count: integer);
+var
+  c: cardinal;
+begin
+  if count <= 0 then
+    exit;
+  c := Next;
+  repeat
+    if count < 4 then
+      break;
+    PCardinal(dest)^ := c;
+    inc(PCardinal(dest));
+    dec(count, 4);
+    if count = 0 then
+      exit;
+    c := RawNext;
+  until false;
+  repeat
+    dest^ := c;
+    inc(dest);
+    c := c shr 8;
+    dec(count);
+  until count = 0;
+end;
+
+procedure TLecuyer.FillShort(var dest: shortstring; size: PtrUInt);
+begin
+  if size > 255 then
+    size := 255;
+  Fill(@dest, size + 1);
+  size := PByte(@dest)^ mod size;
+  dest[0] := AnsiChar(size);
+  if size <> 0 then
+    repeat
+      PByteArray(@dest)[size] := (cardinal(PByteArray(@dest)[size]) and 63) + 32;
+      dec(size);
+    until size = 0;
+end;
+
+procedure TLecuyer.FillShort31(var dest: TShort31);
+var
+  size: PtrUInt;
+begin
+  Fill(@dest, 32);
+  size := PByte(@dest)^;
+  size := size and 31;
+  dest[0] := AnsiChar(size);
+  if size <> 0 then
+    repeat
+      PByteArray(@dest)[size] := (cardinal(PByteArray(@dest)[size]) and 63) + 32;
+      dec(size);
+    until size = 0;
 end;
 
 procedure Random32Seed(entropy: pointer; entropylen: PtrInt);
@@ -8679,35 +8786,19 @@ begin
 end;
 
 function Random64: QWord;
-var
-  gen: PLecuyer; // with _Lecuyer do ... get twice the threadvar on FPC :(
 begin
-  gen := @_Lecuyer;
-  result := QWord(gen^.Next) * gen^.Next;
+  result := _Lecuyer.NextQWord;
+end;
+
+function RandomDouble: double;
+begin
+  result := _Lecuyer.NextDouble;
 end;
 
 procedure FillRandom(Dest: PCardinal; CardinalCount: PtrInt);
-var
-  c: cardinal;
-  gen: PLecuyer;
 begin
-  if CardinalCount <= 0 then
-    exit;
-  {$ifdef CPUINTEL}
-  if cfRAND in CpuFeatures then
-    c := RdRand32 // won't hurt
-  else
-    c := Rdtsc;   // lowest 32-bit part of RDTSC is highly unpredictable
-  {$else}
-  c := PtrUInt(Dest); // naive but good enough as seed
-  {$endif CPUINTEL}
-  gen := @_Lecuyer;
-  repeat
-    c := c xor gen^.Next;
-    Dest^ := Dest^ xor c;
-    inc(Dest);
-    dec(CardinalCount);
-  until CardinalCount = 0;
+  if CardinalCount > 0 then
+    _Lecuyer.Fill(pointer(Dest), CardinalCount shl 2);
 end;
 
 
@@ -10092,6 +10183,12 @@ end;
 
 {$else} // those functions have their tuned x86 asm version
 
+{$ifdef CPUX64}
+function CompareMem(P1, P2: Pointer; Length: PtrInt): boolean;
+begin
+  result := MemCmpSse2(P1, P2, Length) = 0; // use SSE2 optimized asm
+end;
+{$else}
 function CompareMem(P1, P2: Pointer; Length: PtrInt): boolean;
 label
   zero;
@@ -10159,6 +10256,7 @@ begin
 zero:
   result := false;
 end;
+{$endif CPUX64}
 
 function IntegerScanIndex(P: PCardinalArray; Count: PtrInt; Value: cardinal): PtrInt;
 begin
@@ -10190,9 +10288,8 @@ begin
       if result >= Count then
         break;
       if P^[result] = Value then
-        exit
-      else
-        inc(result);
+        exit;
+      inc(result);
     until false;
   end;
   result := -1;
@@ -10231,9 +10328,8 @@ begin
     if PtrUInt(result) >= PtrUInt(Count) then
       break;
     if result^ = Value then
-      exit
-    else
-      inc(result);
+      exit;
+    inc(result);
   until false;
   result := nil;
 end;
@@ -10259,9 +10355,8 @@ begin
       if PtrUInt(P) >= PtrUInt(Count) then
         break;
       if P^[0] = Value then
-        exit
-      else
-        P := @P[1];
+        exit;
+      P := @P[1];
     until false;
   end;
   result := false;
@@ -11510,6 +11605,7 @@ begin
   begin
     Hi := 2; // optimistic approach :)
     Lo := 0;
+    Reason := ReasonCache[2, 0];
   end
   else
   begin
@@ -11518,11 +11614,11 @@ begin
     if not ((Hi in [1..5]) and
             (Lo in [0..13])) then
     begin
-      StatusCode2Reason(Code, Reason);
-      exit;
+      Hi := 5;
+      Lo := 13; // returns cached 'Invalid Request'
     end;
+    Reason := ReasonCache[Hi, Lo];
   end;
-  Reason := ReasonCache[Hi, Lo];
   if Reason <> '' then
     exit;
   StatusCode2Reason(Code, Reason);

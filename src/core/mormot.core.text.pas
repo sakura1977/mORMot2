@@ -127,7 +127,7 @@ procedure FillZero(var secret: RawByteString); overload;
 procedure FillZero(var secret: RawUtf8); overload;
 
 /// fill all bytes of this UTF-8 string with zeros, i.e. 'toto' -> #0#0#0#0
-// - SpiUtf8 type has been defined explicitely to store Sensitive Personal
+// - SpiUtf8 type has been defined explicitly to store Sensitive Personal
 // Information
 procedure FillZero(var secret: SpiUtf8); overload;
 
@@ -6532,7 +6532,7 @@ function FastFindPUtf8CharSorted(P: PPUtf8CharArray; R: PtrInt; Value: PUtf8Char
         cmovnc  r9, r13
 @nxt:   cmp     r9, R
         jle     @s
-@err:   or      rax, -1
+@err:   mov     rax, -1
 @found: pop     r13
         pop     r12
         {$ifdef win64}
@@ -6556,7 +6556,7 @@ function FastFindPUtf8CharSorted(P: PPUtf8CharArray; R: PtrInt; Value: PUtf8Char
         cmp     r9, R
         jle     @s
         jmp     @err
-@void:  or      rax, -1
+@void:  mov     rax, -1
         cmp     qword ptr [P], 0
         cmove   rax, Value
         jmp     @found
