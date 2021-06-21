@@ -589,7 +589,7 @@ type
     case TRttiKind of
       rkFloat: (
         RttiFloat: TRttiFloat);
-      rkLString: (
+      rkLString: ( // from TypeInfo() on older Delphi with no CP RTTI
         CodePage: cardinal; // RawBlob=CP_RAWBYTESTRING not CP_RAWBLOB
         Engine: TSynAnsiConvert);
       rkEnumeration, rkSet: (
@@ -3089,7 +3089,7 @@ begin
       end
       else
       begin
-        Cache.CodePage := AnsiStringCodePage;
+        Cache.CodePage := AnsiStringCodePage; // use TypeInfo() on old Delphi
         Cache.Engine := TSynAnsiConvert.Engine(Cache.CodePage);
       end;
    end;
@@ -5230,6 +5230,11 @@ begin
   V^ := Rtti.fRandomGenerator.NextDouble;
 end;
 
+procedure _DateTimeRandom(V: PDouble; Rtti: TRttiCustom);
+begin
+  V^ := 38000 + Int64(Rtti.fRandomGenerator.Next) / (maxInt shr 12);
+end;
+
 procedure _SingleRandom(V: PSingle; Rtti: TRttiCustom);
 begin
   V^ := Rtti.fRandomGenerator.NextDouble;
@@ -5246,7 +5251,7 @@ var
   // ptString, ptSynUnicode,
   @_NoRandom, {$ifdef HASVARUSTRING} @_UStringRandom {$else} @_WStringRandom {$endif},
   // ptDateTime, ptDateTimeMS, ptGuid, ptHash128, ptHash256, ptHash512,
-  @_DoubleRandom, @_DoubleRandom, nil, nil, nil, nil,
+  @_DateTimeRandom, @_DateTimeRandom, nil, nil, nil, nil,
   // ptOrm, ptTimeLog, ptUnicodeString,
   @_NoRandom, nil, {$ifdef HASVARUSTRING} @_UStringRandom {$else} @_NoRandom {$endif},
   // ptUnixTime, ptUnixMSTime, ptVariant, ptWideString, ptWinAnsi,

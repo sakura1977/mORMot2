@@ -6257,7 +6257,7 @@ begin
       J := R;
       P := (L + R) shr 1;
       repeat
-        tmp := ID^[P];
+        tmp := ID[P];
         if ID[I] < tmp then
           repeat
             inc(I)
@@ -8702,11 +8702,8 @@ end;
 
 function TLecuyer.NextQWord: QWord;
 begin
-  with PQWordRec(@result)^ do
-  begin
-    L := Next;
-    H := RawNext;
-  end;
+  PQWordRec(@result)^.L := Next;
+  PQWordRec(@result)^.H := RawNext;
 end;
 
 function TLecuyer.NextDouble: double;
