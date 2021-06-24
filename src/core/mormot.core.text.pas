@@ -9631,13 +9631,11 @@ end;
 constructor ESynException.CreateLastOSError(const Format: RawUtf8;
   const Args: array of const);
 var
-  tmp: RawUtf8;
   error: integer;
 begin
   error := GetLastError;
-  FormatUtf8(Format, Args, tmp);
-  CreateUtf8('OSError 0x% [%] %',
-    [CardinalToHexShort(error), StringToUtf8(SysErrorMessage(error)), tmp]);
+  CreateUtf8(FormatUtf8('OSError 0x% [%] %', [CardinalToHexShort(error),
+    StringToUtf8(SysErrorMessage(error)), Format]), Args);
 end;
 
 {$ifndef NOEXCEPTIONINTERCEPT}

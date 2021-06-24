@@ -527,7 +527,7 @@ type
       WorkingMem: QWord = 1 shl 20; const OnAdd: TOnZipWriteCreateFrom = nil); overload;
     /// open an existing .zip archive, ready to add some new files
     // - overloaded constructor converting a file list into a corresponding
-    // TOnZipWriteCreateFrom callback
+    // TOnZipWriteCreateFrom callback for case-insensitive file exclusion
     // - this is a convenient way of updating a .zip in-place: e.g. to replace a
     // file, supply it to the IgnoreZipFiles array, then call AddDeflate
     constructor CreateFrom(const aFileName: TFileName;
@@ -655,6 +655,21 @@ function CompressDeflate(var Data: RawByteString; Compress: boolean): RawUtf8;
 // side, so use CompressGZip() instead - https://stackoverflow.com/a/5186177
 // - can use faster libdeflate instead of plain zlib if available
 function CompressZLib(var Data: RawByteString; Compress: boolean): RawUtf8;
+
+{$ifndef PUREMORMOT2}
+// backward compatibility functions
+
+/// compress some data, with a proprietary format (deflate + Adler32)
+// - for backward compatibility - consider using TAlgoCompress instead
+function CompressString(const data: RawByteString; failIfGrow: boolean = false;
+  CompressionLevel: integer = 6) : RawByteString;
+
+/// uncompress some data, with a proprietary format (deflate + Adler32)
+// - for backward compatibility - consider using TAlgoCompress instead
+// - return '' in case of a decompression failure
+function UncompressString(const data: RawByteString) : RawByteString;
+
+{$endif PUREMORMOT2}
 
 
 type
@@ -1403,7 +1418,8 @@ var
 begin
   result := false;
   for i := 0 to length(fOnCreateFromFiles) - 1 do
-    if AnsiCompareFileName(Entry.zipName, fOnCreateFromFiles[i]) = 0 then
+    // case-insensitive even on POSIX (no AnsiCompareFileName)
+    if CompareText(Entry.zipName, fOnCreateFromFiles[i]) = 0 then
       exit;
   result := true;
 end;
@@ -2766,6 +2782,45 @@ begin
   CompressInternal(Data, Compress, {zlib=}true);
   result := 'zlib';
 end;
+
+{$ifndef PUREMORMOT2}
+
+function CompressString(const data: RawByteString; failIfGrow: boolean;
+  CompressionLevel: integer): RawByteString;
+var
+  len : integer;
+begin
+  result := '';
+  SetLength(result, 12 + (Int64(length(data)) * 11) div 10 + 12);
+  PInt64(result)^ := length(data);
+  PCardinalArray(result)^[2] := adler32(0, pointer(data), length(data));
+  // use faster libdeflate instead of plain zlib if available
+  len := CompressMem(pointer(data), @PByteArray(result)[12], length(data),
+    length(result) - 12, CompressionLevel);
+  if (len > 0) and
+     ( (12 + len < length(data)) or
+       not failIfGrow ) then
+    SetLength(result, 12 + len)
+  else
+    result := '';
+end;
+
+function UncompressString(const data: RawByteString): RawByteString;
+begin
+  result := '';
+  if Length(data) > 12 then
+  begin
+    SetLength(result, PCardinal(data)^);
+    // use faster libdeflate instead of plain zlib if available
+    SetLength(result, UncompressMem(@PByteArray(data)[12], pointer(result),
+      length(data) - 12, length(result)));
+    if (result <> '') and
+       ((Adler32(0, pointer(result), length(result))) <> PCardinalArray(data)^[2]) then
+      result := '';
+  end;
+end;
+
+{$endif PUREMORMOT2}
 
 
 { TStreamRedirectCrc32 }
