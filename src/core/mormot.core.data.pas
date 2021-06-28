@@ -1567,7 +1567,7 @@ type
       CustomVariantOptions: PDocVariantOptions = nil;
       Tolerant: boolean = false): PUtf8Char;
     ///  select a sub-section (slice) of a dynamic array content
-    procedure Slice(var Dest; aCount: cardinal; aFirstIndex: cardinal = 0);
+    procedure Slice(var Dest; Limit: cardinal; Offset: cardinal = 0);
     /// assign the current dynamic array content into a variable
     // - by default (Offset=Limit=0), the whole array is set with no memory
     // (re)allocation, just finalize the Dest slot, then make Inc(RefCnt) and
@@ -1636,7 +1636,7 @@ type
     // slower and more error prone method (such pointer access lacks of strong
     // typing abilities), which is designed for TDynArray abstract/internal use
     function ItemPtr(index: PtrInt): pointer;
-      {$ifdef FPC}inline;{$endif}
+      {$ifdef HASGETTYPEKIND}inline;{$endif}
     /// just a convenient wrapper of Info.Cache.ItemSize
     function ItemSize: PtrUInt;
       {$ifdef HASINLINE}inline;{$endif}
@@ -1654,7 +1654,7 @@ type
     // if the source item is a copy of Values[index] with some dynamic arrays
     procedure ItemCopyFrom(Source: pointer; index: PtrInt;
       ClearBeforeCopy: boolean = false);
-      {$ifdef FPC}inline;{$endif}
+      {$ifdef HASGETTYPEKIND}inline;{$endif}
     /// compare the content of two items, returning TRUE if both values equal
     // - use the Compare() property function (if set) or using Info.Cache.ItemInfo
     // if available - and fallbacks to binary comparison
@@ -1665,10 +1665,10 @@ type
     function ItemCompare(A, B: pointer; CaseInSensitive: boolean = false): integer;
     /// will reset the element content
     procedure ItemClear(Item: pointer);
-      {$ifdef FPC}inline;{$endif}
+      {$ifdef HASGETTYPEKIND}inline;{$endif}
     /// will copy one element content
     procedure ItemCopy(Source, Dest: pointer);
-      {$ifdef FPC}inline;{$endif}
+      {$ifdef HASGETTYPEKIND}inline;{$endif}
     /// will copy the first field value of an array element
     // - will use the array KnownType to guess the copy routine to use
     // - returns false if the type information is not enough for a safe copy
@@ -5189,6 +5189,32 @@ begin
   result := SizeOf(pointer);
 end;
 
+{$ifdef CPUX64}
+function MemCmp(P1, P2: PByteArray; L: PtrInt): PtrInt; inline;
+begin
+  result := MemCmpSse2(P1, P2, L);
+end;
+{$else}
+function MemCmp(P1, P2: PByteArray; L: PtrInt): integer;
+  {$ifdef HASINLINE} inline; {$endif}
+begin
+  // caller ensured that P1<>nil, P2<>nil and L>0 -> aggressively inlined asm
+  inc(PtrUInt(P1), PtrUInt(L));
+  inc(PtrUInt(P2), PtrUInt(L));
+  L := -L;
+  repeat
+    if P1[L] <> P2[L] then
+      break;
+    inc(L);
+    if L <> 0 then
+      continue;
+    result := 0;
+    exit;
+  until false;
+  result := P1[L] - P2[L];
+end;
+{$endif CPUX64}
+
 function DynArrayCompare(A, B: PAnsiChar; ExternalCountA, ExternalCountB: PInteger;
   Info: PRttiInfo; CaseInSensitive: boolean): integer;
 var
@@ -5251,8 +5277,8 @@ begin
         dec(n); // both items are equal -> continue to next items
       until n = 0
     else
-    begin
-      result := StrCompL(A, B, n * itemsize); // binary comparison with length
+    begin // binary comparison with length
+      result := MemCmp(pointer(A), pointer(B), n * itemsize);
       if result <> 0 then
         exit;
     end;
@@ -5387,7 +5413,7 @@ begin
       offset := f^.Offset - offset;
       if offset <> 0 then
       begin
-        result := StrCompL(A, B, offset); // binary comparison with length
+        result := MemCmp(pointer(A), pointer(B), offset); // binary comparison
         if result <> 0 then
           exit;
         inc(A, offset);
@@ -5404,7 +5430,7 @@ begin
   end;
   offset := PtrUInt(fields.Size) - offset;
   if offset > 0 then
-    result := StrCompL(A, B, offset); // compare trailing binary
+    result := MemCmp(pointer(A), pointer(B), offset); // trailing binary
 end;
 
 function _BC_Record(A, B: pointer; Info: PRttiInfo; out Compared: integer): PtrInt;
@@ -5471,7 +5497,7 @@ var
 begin
   Info := Info^.ArrayItemType(n, ArraySize);
   if Info = nil then
-    result := StrCompL(A, B, ArraySize) // binary comparison with length
+    result := MemCmp(pointer(A), pointer(B), ArraySize) // binary comparison
   else
   begin
     cmp := RTTI_COMPARE[CaseInSensitive, Info^.Kind];
@@ -6214,7 +6240,7 @@ begin
   if Assigned(fCompare) then
     result := fCompare(A^, B^)
   else if not(rcfArrayItemManaged in fInfo.Flags) then
-bin:result := StrCompL(A, B, fInfo.Cache.ItemSize) // binary compare with length
+bin:result := MemCmp(A, B, fInfo.Cache.ItemSize) // binary compare with length
   else
   begin
     rtti := fInfo.Cache.ItemInfo;
@@ -7445,7 +7471,7 @@ begin
   end
   else if not(rcfArrayItemManaged in fInfo.Flags) then
     // binary comparison with length
-    result := StrCompL(fValue^, B.fValue^, n * fInfo.Cache.ItemSize)
+    result := MemCmp(fValue^, B.fValue^, n * fInfo.Cache.ItemSize)
   else if rcfObjArray in fInfo.Flags then
     result := DynArrayCompare(pointer(fValue), pointer(B.fValue),
       fCountP, B.fCountP, TypeInfo(TObjectDynArray), casesensitive)
@@ -7655,7 +7681,7 @@ begin
       capa := PDALen(arrayptr - _DALEN)^ + _DAOFF;
       if delta > 0 then
       begin
-        // size-up - Add()
+        // size-up - Add() - is handled branchless
         if capa >= aCount then
           exit; // no need to grow
         capa := NextGrow(capa);
@@ -7721,7 +7747,7 @@ begin
   end;
 end;
 
-procedure TDynArray.Slice(var Dest; aCount, aFirstIndex: cardinal);
+procedure TDynArray.Slice(var Dest; Limit, Offset: cardinal);
 var
   n: cardinal;
   dst: TDynArray;
@@ -7729,19 +7755,19 @@ begin
   if fValue = nil then
     exit; // avoid GPF if void
   n := GetCount;
-  if aFirstIndex >= n then
-    aCount := 0
+  if Offset >= n then
+    Limit := 0
   else
   begin
-    dec(n, aFirstIndex);
-    if aCount >= n  then
-      aCount := n;
+    dec(n, Offset);
+    if Limit >= n  then
+      Limit := n;
   end;
   dst.InitRtti(fInfo, Dest);
-  dst.SetCapacity(aCount);
+  dst.SetCapacity(Limit);
   CopySeveral(pointer(Dest),
-    @(PByteArray(fValue^)[aFirstIndex * cardinal(fInfo.Cache.ItemSize)]),
-    aCount, fInfo.Cache.ItemInfo, fInfo.Cache.ItemSize);
+    @(PByteArray(fValue^)[Offset * cardinal(fInfo.Cache.ItemSize)]),
+    Limit, fInfo.Cache.ItemInfo, fInfo.Cache.ItemSize);
 end;
 
 procedure TDynArray.SliceAsDynArray(Dest: PPointer; Offset, Limit: integer);
@@ -7752,20 +7778,22 @@ begin
   if dest^ <> nil then
     FastDynArrayClear(dest, fInfo.Cache.ItemInfo); // reset Dest variable slot
   n := GetCount;
-  if Offset >= n then // also handles n = 0
-    exit;
   if Offset < 0 then begin
     // ! SliceAsDynArray(DA, -10);  // last Count-10..Count-1 items
     inc(Offset, n);
     if Offset < 0 then
       Offset := 0;
   end;
+  if Offset >= n then // also handles n = 0
+    exit;
   if (Offset = 0) and
      ((Limit = 0) or
       (Limit >= n)) then
   begin
-    // we can return the current dynamic array with proper COW
+    // we can return the current dynamic array with proper Copy-On-Write
     p := fValue^;
+    if p = nil then
+      exit;
     dec(p);
     inc(p^.refCnt); // reuse existing dynamic array instance
     p^.Length := n; // no memory realloc/copy, just force Capacity=Length=Count
