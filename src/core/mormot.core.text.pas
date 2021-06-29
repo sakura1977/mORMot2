@@ -1434,7 +1434,12 @@ function DeleteRawUtf8(var Values: TRawUtf8DynArray;
 // - by default, exact (case-sensitive) match is used; you can specify a custom
 // compare function if needed in Compare optional parameter
 procedure QuickSortRawUtf8(var Values: TRawUtf8DynArray; ValuesCount: integer;
-  CoValues: PIntegerDynArray = nil; Compare: TUtf8Compare = nil);
+  CoValues: PIntegerDynArray = nil; Compare: TUtf8Compare = nil); overload;
+
+/// sort a RawUtf8 array, low values first
+procedure QuickSortRawUtf8(Values: PRawUtf8Array; L, R: PtrInt;
+  caseInsensitive: boolean = false); overload;
+
 
 
 { ************ Numbers (integers or floats) and Variants to Text Conversion }
@@ -4933,6 +4938,7 @@ end;
 procedure TBaseWriter.SetText(out result: RawUtf8; reformat: TTextWriterJsonFormat);
 var
   Len: cardinal;
+  temp: TBaseWriter;
 begin
   FlushFinal;
   Len := fTotalFileSize - fInitialStreamPosition;
@@ -4951,10 +4957,14 @@ begin
   end;
   if reformat <> jsonCompact then
   begin
-    // reformat using the very same instance
-    CancelAll;
-    AddJsonReformat(pointer(result), reformat, nil);
-    SetText(result);
+    // reformat using the very same temp buffer but not the same RawUtf8
+    temp := DefaultTextWriterSerializer.CreateOwnedStream(fTempBuf, fTempBufSize);
+    try
+      temp.AddJsonReformat(pointer(result), reformat, nil);
+      temp.SetText(result);
+    finally
+      temp.Free;
+    end;
   end;
 end;
 
@@ -6776,6 +6786,20 @@ begin
   else
     QS.CoValues := pointer(CoValues^);
   QS.Sort(0, ValuesCount - 1);
+end;
+
+procedure QuickSortRawUtf8(Values: PRawUtf8Array; L, R: PtrInt;
+  caseInsensitive: boolean);
+var
+  QS: TQuickSortRawUtf8;
+begin
+  QS.Values := pointer(Values);
+  if caseInsensitive then
+    QS.Compare := @StrIComp
+  else
+    QS.Compare := @StrComp;
+  QS.CoValues := nil;
+  QS.Sort(L, R);
 end;
 
 function DeleteRawUtf8(var Values: TRawUtf8DynArray; Index: integer): boolean;
