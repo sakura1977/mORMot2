@@ -4146,7 +4146,7 @@ begin
       include(aOptions, dvoIsObject);
   opt := word(aOptions);
   TRttiVarData(self).VType := DocVariantVType + opt shl 16;
-  pointer(VName) := nil;
+  pointer(VName) := nil; // reset garbage content -> explicit Clear call needed
   pointer(VValue) := nil;
   VCount := 0;
 end;
@@ -4451,7 +4451,6 @@ procedure TDocVariantData.InitObjectFromVariants(const aNames: TRawUtf8DynArray;
   const aValues: TVariantDynArray; aOptions: TDocVariantOptions);
 begin
   if (aNames = nil) or
-     (aValues = nil) or
      (length(aNames) <> length(aValues)) then
     VType := varNull
   else
@@ -4476,7 +4475,7 @@ begin
     VCount := 1;
     SetLength(VName, 1);
     SetLength(VValue, 1);
-    split(aPath, '.', VName[0], right);
+    Split(aPath, '.', VName[0], right);
     if right = '' then
       VValue[0] := aValue
     else

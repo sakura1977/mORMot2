@@ -638,7 +638,6 @@ type
   /// may be used to allocate on stack a 8KB work buffer for a TBaseWriter
   // - via the TBaseWriter.CreateOwnedStream overloaded constructor
   TTextWriterStackBuffer = array[0..8191] of AnsiChar;
-
   PTextWriterStackBuffer = ^TTextWriterStackBuffer;
 
   /// available options for TBaseWriter.WriteObject() method
@@ -673,7 +672,7 @@ type
   // woIDAsIDstr to append an additional "ID_str":"##########" field
   // - by default, RawBlob properties are serialized as null, unless
   // woRawBlobAsBase64 is defined
-  // - if woHideSensitivePersonalInformation is set, rcfSPI types (e.g. the
+  // - if woHideSensitivePersonalInformation is set, rcfSpi types (e.g. the
   // TSynPersistentWithPassword.Password field) will be serialized as "***"
   // to prevent security issues (e.g. in log)
   // - by default, TObjectList will set the woStoreClassName for its nested

@@ -57,9 +57,9 @@
 // all crc32c and aesenc/aesdec opcodes - is set for FPC DARWIN target
 
 {.$define WITH_ERMS}
-// you may define this to enable REP MOVSB/STOSB for Fillchar/Move if cfERMS
-// flag is available in Intel's CpuFeatures
-// -> disabled by default, since in practice it is (much) slower for small blocks
+// you may define this to enable REP MOVSB/STOSB for x86_64 FillcharFast/MoveFast
+// if cfERMS flag is available in Intel's CpuFeatures
+// -> disabled by default, since in practice it is slower than non-temporal mov
 
 {.$define NOXPOWEREDNAME}
 // define this to avoid sending "X-Powered-By: Synopse mORMot" HTTP header
@@ -518,11 +518,9 @@
 
 {$ifdef CPUINTEL}
   {$ifdef OSWINDOWS}
-    {$ifdef CPUX86} // safest to reset x87 exceptions on Win32
-      {$define RESETFPUEXCEPTION}
-    {$else}
+    {$ifdef CPUX64}
       {$define WIN64ABI} // for asm on x86_64
-    {$endif CPUX86}
+    {$endif CPUX64}
   {$endif OSWINDOWS}
   {$ifdef OSPOSIX}
     {$ifdef CPUX64}
@@ -583,7 +581,7 @@
       // other Win32/Win64 Delphi platforms "should work" (tm) as expected
       {$define NOSQLITE3STATIC}
     {$ifend}
-    {$define LIBQUICKJSSTATIC}
+    {$define LIBQUICKJSSTATIC} // seems fine BUT on Delphi 10.4 Win64
   {$endif}
 {$endif FPC}
 
