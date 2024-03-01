@@ -1,0 +1,72 @@
+﻿<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+    <PropertyGroup>
+        <ProjectGuid>{07072958-FA44-40EB-9ECA-BB135F855E21}</ProjectGuid>
+    </PropertyGroup>
+    <ItemGroup>
+        <Projects Include="restws_chatclient.dproj">
+            <Dependencies/>
+        </Projects>
+        <Projects Include="restws_chatserver.dproj">
+            <Dependencies/>
+        </Projects>
+        <Projects Include="restws_longworkclient.dproj">
+            <Dependencies/>
+        </Projects>
+        <Projects Include="restws_longworkserver.dproj">
+            <Dependencies/>
+        </Projects>
+    </ItemGroup>
+    <ProjectExtensions>
+        <Borland.Personality>Default.Personality.12</Borland.Personality>
+        <Borland.ProjectType/>
+        <BorlandProject>
+            <Default.Personality/>
+        </BorlandProject>
+    </ProjectExtensions>
+    <Target Name="restws_chatclient">
+        <MSBuild Projects="restws_chatclient.dproj"/>
+    </Target>
+    <Target Name="restws_chatclient:Clean">
+        <MSBuild Projects="restws_chatclient.dproj" Targets="Clean"/>
+    </Target>
+    <Target Name="restws_chatclient:Make">
+        <MSBuild Projects="restws_chatclient.dproj" Targets="Make"/>
+    </Target>
+    <Target Name="restws_chatserver">
+        <MSBuild Projects="restws_chatserver.dproj"/>
+    </Target>
+    <Target Name="restws_chatserver:Clean">
+        <MSBuild Projects="restws_chatserver.dproj" Targets="Clean"/>
+    </Target>
+    <Target Name="restws_chatserver:Make">
+        <MSBuild Projects="restws_chatserver.dproj" Targets="Make"/>
+    </Target>
+    <Target Name="restws_longworkclient">
+        <MSBuild Projects="restws_longworkclient.dproj"/>
+    </Target>
+    <Target Name="restws_longworkclient:Clean">
+        <MSBuild Projects="restws_longworkclient.dproj" Targets="Clean"/>
+    </Target>
+    <Target Name="restws_longworkclient:Make">
+        <MSBuild Projects="restws_longworkclient.dproj" Targets="Make"/>
+    </Target>
+    <Target Name="restws_longworkserver">
+        <MSBuild Projects="restws_longworkserver.dproj"/>
+    </Target>
+    <Target Name="restws_longworkserver:Clean">
+        <MSBuild Projects="restws_longworkserver.dproj" Targets="Clean"/>
+    </Target>
+    <Target Name="restws_longworkserver:Make">
+        <MSBuild Projects="restws_longworkserver.dproj" Targets="Make"/>
+    </Target>
+    <Target Name="Build">
+        <CallTarget Targets="restws_chatclient;restws_chatserver;restws_longworkclient;restws_longworkserver"/>
+    </Target>
+    <Target Name="Clean">
+        <CallTarget Targets="restws_chatclient:Clean;restws_chatserver:Clean;restws_longworkclient:Clean;restws_longworkserver:Clean"/>
+    </Target>
+    <Target Name="Make">
+        <CallTarget Targets="restws_chatclient:Make;restws_chatserver:Make;restws_longworkclient:Make;restws_longworkserver:Make"/>
+    </Target>
+    <Import Project="$(BDS)\Bin\CodeGear.Group.Targets" Condition="Exists('$(BDS)\Bin\CodeGear.Group.Targets')"/>
+</Project>
