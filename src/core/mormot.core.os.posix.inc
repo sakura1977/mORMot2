@@ -597,6 +597,7 @@ const
   MicroSecsPerMilliSec = 1000;
   NanoSecsPerMicroSec  = 1000;
   NanoSecsPerMilliSec  = 1000000;
+  NanoSecsPerSec       = 1000000000;
 
 const
   // Date Translation - see http://en.wikipedia.org/wiki/Julian_day
@@ -656,6 +657,9 @@ type
 function mach_absolute_time: UInt64;
   cdecl external clib name 'mach_absolute_time';
 
+function mach_continuous_time: UInt64;
+  cdecl external clib name 'mach_continuous_time';
+
 function mach_timebase_info(var TimebaseInfoData: TTimebaseInfoData): integer;
   cdecl external clib name 'mach_timebase_info';
 
@@ -664,37 +668,38 @@ var
   mach_timecoeff: double;
   mach_timenanosecond: boolean; // very likely to be TRUE on Intel CPUs
 
-procedure QueryPerformanceNanosec(out Value: Int64);
+procedure machtimetonanosec(var Value: Int64); inline;
 begin
-  // Win32-API like function which returns time in nano second resolution
-  Value := mach_absolute_time;
-  if mach_timeinfo.Denom = 1 then
-    if mach_timeinfo.Numer = 1 then
-      // seems to be the case on Intel CPUs
-      exit
-    else
+  if not mach_timenanosecond then
+    if mach_timeinfo.Denom = 1 then
+      // integer resolution is enough
       Value := Value * mach_timeinfo.Numer
-  else
-    // use floating point to avoid potential overflow
-    Value := round(Value * mach_timecoeff);
+    else
+      // use floating point to avoid potential overflow
+      Value := round(Value * mach_timecoeff);
 end;
 
 procedure QueryPerformanceMicroSeconds(out Value: Int64);
 begin
-  if mach_timenanosecond then
-    Value := mach_absolute_time
-  else
-    QueryPerformanceNanosec(Value);
+  Value := mach_absolute_time;
+  machtimetonanosec(Value);
   Value := Value div NanoSecsPerMicroSec; // ns to us
 end;
 
 function GetTickCount64: Int64;
 begin
-  if mach_timenanosecond then
-    result := mach_absolute_time
-  else
-    QueryPerformanceNanosec(result);
+  result := mach_absolute_time;
+  machtimetonanosec(result);
   result := result div NanoSecsPerMilliSec; // ns to ms
+end;
+
+function GetUptimeSec: cardinal;
+var
+  v: Int64;
+begin
+  v := mach_continuous_time;
+  machtimetonanosec(v);
+  result := v div NanoSecsPerSec; // ns to s
 end;
 
 function UnixTimeUtc: TUnixTime;
@@ -739,11 +744,21 @@ end;
 {$ifdef OSBSD}
 
 const
+  {$ifdef OSFREEBSD}
   // see https://github.com/freebsd/freebsd/blob/master/sys/sys/time.h
-  CLOCK_REALTIME = 0;
+  CLOCK_REALTIME  = 0;
   CLOCK_MONOTONIC = 4;
-  CLOCK_REALTIME_COARSE = 10; // named CLOCK_REALTIME_FAST in FreeBSD 8.1+
+  CLOCK_BOOTTIME  = 5;
+  CLOCK_REALTIME_COARSE  = 10; // named CLOCK_REALTIME_FAST in FreeBSD 8.1+
   CLOCK_MONOTONIC_COARSE = 12;
+  {$else}
+  // see https://github.com/openbsd/src/blob/master/sys/sys/_time.h#L63
+  CLOCK_REALTIME  = 0;
+  CLOCK_MONOTONIC = 3;
+  CLOCK_BOOTTIME  = 6;
+  CLOCK_REALTIME_COARSE  = CLOCK_REALTIME; // no FAST/COARSE version
+  CLOCK_MONOTONIC_COARSE = CLOCK_MONOTONIC;
+  {$endif OSFREEBSD}
 
 function clock_gettime(clk_id: cardinal; tp: ptimespec): integer;
   cdecl external clib name 'clock_gettime';
@@ -754,10 +769,11 @@ function clock_getres(clk_id: cardinal; tp: ptimespec): integer;
 {$else}
 
 const
-  CLOCK_REALTIME = 0;
-  CLOCK_MONOTONIC = 1;
-  CLOCK_REALTIME_COARSE = 5; // see http://lwn.net/Articles/347811
+  CLOCK_REALTIME         = 0;
+  CLOCK_MONOTONIC        = 1;
+  CLOCK_REALTIME_COARSE  = 5; // see http://lwn.net/Articles/347811
   CLOCK_MONOTONIC_COARSE = 6;
+  CLOCK_BOOTTIME         = 7; // includes asleep time (2.6.39+)
 
 // libc's clock_gettime function uses vDSO (avoid syscall) while FPC by default
 // is compiled without FPC_USE_LIBC defined and do a syscall each time
@@ -782,6 +798,8 @@ var
   // - so that QueryPerformanceMicroSeconds() is not subject to NTP adjustments
   CLOCK_MONOTONIC_HIRES: integer = CLOCK_MONOTONIC;
 
+  // contains CLOCK_BOOTTIME since kernel 2.6.39
+  CLOCK_UPTIME: integer = CLOCK_MONOTONIC;
 
 function UnixMSTimeUtc: TUnixMSTime;
 var
@@ -842,6 +860,16 @@ begin
   // convert from nanoseconds into milliseconds
   result := QWord(PtrUInt(tp.tv_nsec) div PtrUInt(NanoSecsPerMilliSec)) +
             QWord(tp.tv_sec) * MilliSecsPerSec;
+end;
+
+function GetUptimeSec: cardinal;
+var
+  tp: timespec;
+begin
+  tp.tv_sec := 0;
+  clock_gettime(CLOCK_UPTIME, @tp);
+  // convert from nanoseconds into milliseconds
+  result := tp.tv_sec;
 end;
 
 {$endif OSDARWIN}
@@ -2326,7 +2354,7 @@ begin
   result := ''; // not implemented yet on BSD/Darwin
   // use fpsysctl with CTL_KERN + KERN_PROC + KERN_PROC_PID
   //  https://man.openbsd.org/sysctl.2#KERN_PROC_PID
-  // the trouble with is the name is likely to be truncated to 16 chars
+  // another trouble is that the name is likely to be truncated to 16 chars
   // because it is defined p_comm[MAXCOMLEN + 1] in the very complex headers
 end;
 
@@ -2480,27 +2508,25 @@ procedure XorOSEntropy(var e: THash512Rec);
 var
   mem: TMemoryInfo;
   avg: TLoadAvg absolute mem;
-  us: Int64 absolute mem;
-  {$ifndef OSDARWIN}
-  guid: THash128Rec absolute mem;
-  {$endif OSDARWIN}
+  us: Int64 absolute mem.vmtotal; // =0 after above GetMemoryInfo()
+  guid: THash128Rec absolute mem.filetotal; // also = 0
 begin
-  // this is the very minimal OS entropy we could get for BSD/Darwin
+  //some minimal OS entropy we could get for BSD/Darwin
   QueryPerformanceMicroSeconds(us);
   e.i[0] := e.i[0] xor us;
+  e.i[1] := e.i[1] xor GetTickCount64;
   getloadavg(avg, 3);
   DefaultHasher128(@e.h1, @avg, SizeOf(avg)); // may be AesNiHash128
   GetMemoryInfo(mem, {withalloc=}false);
   DefaultHasher128(@e.h2, @mem, SizeOf(mem));
   {$ifdef OSDARWIN} // FPC CreateGuid calls /dev/urandom which is not advised
-  e.i[6] := e.i[6] xor mach_absolute_time; // monotonic clock in nanoseconds
+  guid.Lo := mach_absolute_time; // monotonic clock in nanoseconds
+  guid.Hi := mach_continuous_time;
   {$else}
   CreateGuid(guid.guid); // use e.g. FreeBSD syscall or /dev/urandom
-  e.r[3].L := e.r[3].L xor guid.L;
-  e.r[3].H := e.r[3].H xor guid.H;
   {$endif OSDARWIN}
   QueryPerformanceMicroSeconds(us); // should have changed in-between
-  e.i[7] := e.i[7] xor us;
+  crcblocks(@e.h3, @mem, SizeOf(mem) shr 4); // another algo
 end;
 
 {$else} // Linux-specific code
@@ -2674,6 +2700,8 @@ begin
   DoHash128File(e.h0, '/proc/self/statm');
   DoHash128File(e.h0, '/proc/self/stat');
   DoHash128File(e.h1, '/proc/stat');
+  clock_gettime(CLOCK_UPTIME, @rt);
+  DefaultHasher128(@e.h2, @rt, SizeOf(rt)); // maybe AesNiHash128
   // read-only 122-bit random UUID text '6fd5a44b-35f4-4ad4-a9b9-6b9be13e1fe9'
   DoHash128File(e.h2, '/proc/sys/kernel/random/uuid');
   DoHash128File(e.h3, '/proc/sys/kernel/random/boot_id');
@@ -3592,10 +3620,8 @@ begin
   result := '';
 end;
 
-function getpagesize: integer;
-begin
-  result := 4096;
-end;
+const
+  getpagesize = 4096;
 
 {$else}
 function getpagesize: integer;
@@ -4142,6 +4168,7 @@ begin
   @LeaveCriticalSection    := @tm.LeaveCriticalSection;
   {$endif NODIRECTTHREADMANAGER}
   {$ifdef OSDARWIN}
+  OSVersionText := ToText(OSVersion32) + ' (' + OSVersionText + ')';
   mach_timebase_info(mach_timeinfo);
   mach_timecoeff := mach_timeinfo.Numer / mach_timeinfo.Denom;
   mach_timenanosecond := (mach_timeinfo.Numer = 1) and
@@ -4156,6 +4183,8 @@ begin
   if clock_gettime(CLOCK_MONOTONIC_RAW, @tp) = 0 then
     CLOCK_MONOTONIC_HIRES := CLOCK_MONOTONIC_RAW;
   {$endif OSLINUX}
+  if clock_gettime(CLOCK_BOOTTIME, @tp) = 0 then
+    CLOCK_UPTIME := CLOCK_BOOTTIME;
   if (clock_gettime(CLOCK_REALTIME_FAST, @tp) <> 0) or // paranoid check
      (clock_gettime(CLOCK_MONOTONIC_FAST, @tp) <> 0) or
      (clock_gettime(CLOCK_MONOTONIC_HIRES, @tp) <> 0) then

@@ -166,21 +166,18 @@ const
   /// the successful HTTP response codes after a GET request
   HTTP_GET_OK = [HTTP_SUCCESS, HTTP_NOCONTENT, HTTP_PARTIALCONTENT];
 
-/// retrieve the HTTP reason text from its integer code
-// - e.g. StatusCodeToReason(200)='OK'
+/// retrieve the HTTP reason text from its integer code as PRawUtf8
+// - e.g. StatusCodeToText(200)^='OK'
 // - as defined in http://www.w3.org/Protocols/rfc2616/rfc2616-sec10.html
-// - returns the generic 'Invalid Request' for unknown Code
-// - use an internal cache for efficiency
-// - see also StatusCodeToShort and StatusCodeToErrorMsg from mormot.core.text
-function StatusCodeToReason(Code: cardinal): RawUtf8; overload;
-  {$ifdef HASINLINE}inline;{$endif}
+// - returns the generic 'Invalid Request' for any unknown Code
+function StatusCodeToText(Code: cardinal): PRawUtf8;
 
 /// retrieve the HTTP reason text from its integer code
 // - as defined in http://www.w3.org/Protocols/rfc2616/rfc2616-sec10.html
-procedure StatusCodeToReason(Code: cardinal; var Reason: RawUtf8); overload;
+procedure StatusCodeToReason(Code: cardinal; var Reason: RawUtf8);
 
 /// convert any HTTP_* constant to an integer status code and its English text
-// - returns e.g. '200 OK' or '404 Not Found', calling StatusCodeToReason()
+// - returns e.g. '200 OK' or '404 Not Found', calling StatusCodeToText()
 function StatusCodeToShort(Code: cardinal): TShort47;
 
 /// returns true for successful HTTP status codes, i.e. in 200..399 range
@@ -628,6 +625,27 @@ type
   end;
 
 const
+  /// the recognized MacOS versions, as plain text
+  // - indexed from OSVersion32.utsrelease[2] kernel revision
+  MACOS_NAME: array[8 .. 24] of RawUtf8 = (
+    '10.4 Tiger',
+    '10.5 Leopard',
+    '10.6 Snow Leopard',
+    '10.7 Lion',
+    '10.8 Mountain Lion',
+    '10.9 Mavericks',
+    '10.10 Yosemite',
+    '10.11 El Capitan',
+    '10.12 Sierra',
+    '10.13 High Sierra',
+    '10.14 Mojave',
+    '10.15 Catalina',
+    '11 Big Sur',
+    '12 Monterey',
+    '13 Ventura',
+    '14 Sonoma',
+    '15 Next');
+
   /// the recognized Windows versions, as plain text
   // - defined even outside OSWINDOWS to allow process e.g. from monitoring tools
   WINDOWS_NAME: array[TWindowsVersion] of RawUtf8 = (
@@ -838,6 +856,7 @@ var
   /// the current Operating System version, as retrieved for the current process
   // - contains e.g. 'Windows Seven 64 SP1 (6.1.7601)' or
   // 'Ubuntu 16.04.5 LTS - Linux 3.13.0 110 generic#157 Ubuntu SMP Mon Feb 20 11:55:25 UTC 2017'
+  // or 'macOS 13 Ventura (Darwin 22.3.0)'
   OSVersionText: RawUtf8;
   /// some addition system information as text, e.g. 'Wine 1.1.5'
   // - also always appended to OSVersionText high-level description
@@ -845,7 +864,8 @@ var
   OSVersionInfoEx: RawUtf8;
   /// the current Operating System version, as retrieved for the current process
   // and computed by ToTextOS(OSVersionInt32)
-  // - contains e.g. 'Windows Vista' or 'Ubuntu Linux 5.4.0'
+  // - contains e.g. 'Windows Vista' or 'Ubuntu Linux 5.4.0' or
+  // 'macOS 13 Ventura 22.3.0'
   OSVersionShort: RawUtf8;
 
   /// some textual information about the current CPU
@@ -888,11 +908,11 @@ var
   OSVersionInt32: integer absolute OSVersion32;
 
 /// convert an Operating System type into its text representation
-// - returns e.g. 'Windows Vista' or 'Ubuntu'
+// - returns e.g. 'Windows Vista' or 'Ubuntu' or 'macOS 13 Ventura'
 function ToText(const osv: TOperatingSystemVersion): RawUtf8; overload;
 
 /// convert an Operating System type into its one-word text representation
-// - returns e.g. 'Vista' or 'Ubuntu'
+// - returns e.g. 'Vista' or 'Ubuntu' or 'OSX'
 function ToTextShort(const osv: TOperatingSystemVersion): RawUtf8;
 
 /// convert a 32-bit Operating System type into its full text representation
@@ -971,7 +991,12 @@ type
     actCortexX1C,
     actCortexA715,
     actCortexX3,
-    actNeoverseV2);
+    actNeoverseV2,
+    actCortexA520,
+    actCortexA720,
+    actCortexX4,
+    actNeoverseV3,
+    actNeoverseN3);
   /// a set of recognized ARM/AARCH64 CPU types
   TArmCpuTypes = set of TArmCpuType;
 
@@ -995,6 +1020,7 @@ type
     aciApple,
     aciFaraday,
     aciIntel,
+    aciMicrosoft,
     aciPhytium,
     aciAmpere);
   /// a set of recognized ARM/AARCH64 CPU hardware implementers
@@ -3032,6 +3058,13 @@ var
 {$else}
 function GetTickCount64: Int64;
 {$endif OSWINDOWS}
+
+/// returns how many seconds the system was up, accouting for time when
+// the computer is asleep
+// - on Windows, computes GetTickCount64 div 1000
+// - on Linux/BSD, will use CLOCK_BOOTTIME/CLOCK_UPTIME clock
+// - on MacOS, will use mach_continuous_time() API
+function GetUptimeSec: cardinal;
 
 /// returns the current UTC time
 // - wrap UnixMSTimeUtcFast, so use e.g. clock_gettime(CLOCK_REALTIME_COARSE)
@@ -5684,143 +5717,133 @@ implementation
 
 { ****************** Some Cross-System Type and Constant Definitions }
 
+const
+  // StatusCodeToReason() StatusCodeToText() table to avoid memory allocations
+  // - roughly sorted by actual usage order for WordScanIndex()
+  HTTP_REASON: array[0..43] of RawUtf8 = (
+   'OK',                                // HTTP_SUCCESS - should be first
+   'No Content',                        // HTTP_NOCONTENT
+   'Temporary Redirect',                // HTTP_TEMPORARYREDIRECT
+   'Permanent Redirect',                // HTTP_PERMANENTREDIRECT
+   'Moved Permanently',                 // HTTP_MOVEDPERMANENTLY
+   'Bad Request',                       // HTTP_BADREQUEST
+   'Unauthorized',                      // HTTP_UNAUTHORIZED
+   'Forbidden',                         // HTTP_FORBIDDEN
+   'Not Found',                         // HTTP_NOTFOUND
+   'Method Not Allowed',                // HTTP_NOTALLOWED
+   'Not Modified',                      // HTTP_NOTMODIFIED
+   'Not Acceptable',                    // HTTP_NOTACCEPTABLE
+   'Partial Content',                   // HTTP_PARTIALCONTENT
+   'Payload Too Large',                 // HTTP_PAYLOADTOOLARGE
+   'Created',                           // HTTP_CREATED
+   'See Other',                         // HTTP_SEEOTHER
+   'Continue',                          // HTTP_CONTINUE
+   'Switching Protocols',               // HTTP_SWITCHINGPROTOCOLS
+   'Accepted',                          // HTTP_ACCEPTED
+   'Non-Authoritative Information',     // HTTP_NONAUTHORIZEDINFO
+   'Reset Content',                     // HTTP_RESETCONTENT
+   'Multi-Status',                      // 207
+   'Multiple Choices',                  // HTTP_MULTIPLECHOICES
+   'Found',                             // HTTP_FOUND
+   'Use Proxy',                         // HTTP_USEPROXY
+   'Proxy Authentication Required',     // HTTP_PROXYAUTHREQUIRED
+   'Request Timeout',                   // HTTP_TIMEOUT
+   'Conflict',                          // HTTP_CONFLICT
+   'Gone',                              // 410
+   'Length Required',                   // 411
+   'Precondition Failed',               // 412
+   'URI Too Long',                      // 414
+   'Unsupported Media Type',            // 415
+   'Requested Range Not Satisfiable',   // HTTP_RANGENOTSATISFIABLE
+   'I''m a teapot',                     // HTTP_TEAPOT
+   'Upgrade Required',                  // 426
+   'Internal Server Error',             // HTTP_SERVERERROR
+   'Not Implemented',                   // HTTP_NOTIMPLEMENTED
+   'Bad Gateway',                       // HTTP_BADGATEWAY
+   'Service Unavailable',               // HTTP_UNAVAILABLE
+   'Gateway Timeout',                   // HTTP_GATEWAYTIMEOUT
+   'HTTP Version Not Supported',        // HTTP_HTTPVERSIONNONSUPPORTED
+   'Network Authentication Required',   // 511
+   'Invalid Request');                  // 513 - should be last
+
+  HTTP_CODE: array[0..43] of word = (
+    HTTP_SUCCESS,
+    HTTP_NOCONTENT,
+    HTTP_TEMPORARYREDIRECT,
+    HTTP_PERMANENTREDIRECT,
+    HTTP_MOVEDPERMANENTLY,
+    HTTP_BADREQUEST,
+    HTTP_UNAUTHORIZED,
+    HTTP_FORBIDDEN,
+    HTTP_NOTFOUND,
+    HTTP_NOTALLOWED,
+    HTTP_NOTMODIFIED,
+    HTTP_NOTACCEPTABLE,
+    HTTP_PARTIALCONTENT,
+    HTTP_PAYLOADTOOLARGE,
+    HTTP_CREATED,
+    HTTP_SEEOTHER,
+    HTTP_CONTINUE,
+    HTTP_SWITCHINGPROTOCOLS,
+    HTTP_ACCEPTED,
+    HTTP_NONAUTHORIZEDINFO,
+    HTTP_RESETCONTENT,
+    207,
+    HTTP_MULTIPLECHOICES,
+    HTTP_FOUND,
+    HTTP_USEPROXY,
+    HTTP_PROXYAUTHREQUIRED,
+    HTTP_TIMEOUT,
+    HTTP_CONFLICT,
+    410,
+    411,
+    412,
+    414,
+    415,
+    HTTP_RANGENOTSATISFIABLE,
+    HTTP_TEAPOT,
+    426,
+    HTTP_SERVERERROR,
+    HTTP_NOTIMPLEMENTED,
+    HTTP_BADGATEWAY,
+    HTTP_UNAVAILABLE,
+    HTTP_GATEWAYTIMEOUT,
+    HTTP_HTTPVERSIONNONSUPPORTED,
+    511,
+    513);
+
+function StatusCodeToText(Code: cardinal): PRawUtf8;
 var
-  // StatusCodeToReason() cache to avoid memory allocations
-  ReasonCache: array[1..5, 0..13] of RawUtf8;
-
-procedure StatusCode2Reason(Code: cardinal; var Reason: RawUtf8);
+  i: PtrInt;
 begin
-  case Code of
-    // HTTP_SUCCESS: is set at startup
-    HTTP_CONTINUE:
-      Reason := 'Continue';
-    HTTP_SWITCHINGPROTOCOLS:
-      Reason := 'Switching Protocols';
-    HTTP_CREATED:
-      Reason := 'Created';
-    HTTP_ACCEPTED:
-      Reason := 'Accepted';
-    HTTP_NONAUTHORIZEDINFO:
-      Reason := 'Non-Authoritative Information';
-    HTTP_NOCONTENT:
-      Reason := 'No Content';
-    HTTP_RESETCONTENT:
-      Reason := 'Reset Content';
-    HTTP_PARTIALCONTENT:
-      Reason := 'Partial Content';
-    207:
-      Reason := 'Multi-Status';
-    HTTP_MULTIPLECHOICES:
-      Reason := 'Multiple Choices';
-    HTTP_MOVEDPERMANENTLY:
-      Reason := 'Moved Permanently';
-    HTTP_FOUND:
-      Reason := 'Found';
-    HTTP_SEEOTHER:
-      Reason := 'See Other';
-    HTTP_NOTMODIFIED:
-      Reason := 'Not Modified';
-    HTTP_USEPROXY:
-      Reason := 'Use Proxy';
-    HTTP_TEMPORARYREDIRECT:
-      Reason := 'Temporary Redirect';
-    HTTP_PERMANENTREDIRECT:
-      Reason := 'Permanent Redirect';
-    HTTP_BADREQUEST:
-      Reason := 'Bad Request';
-    HTTP_UNAUTHORIZED:
-      Reason := 'Unauthorized';
-    HTTP_FORBIDDEN:
-      Reason := 'Forbidden';
-    HTTP_NOTFOUND:
-      Reason := 'Not Found';
-    HTTP_NOTALLOWED:
-      Reason := 'Method Not Allowed';
-    HTTP_NOTACCEPTABLE:
-      Reason := 'Not Acceptable';
-    HTTP_PROXYAUTHREQUIRED:
-      Reason := 'Proxy Authentication Required';
-    HTTP_TIMEOUT:
-      Reason := 'Request Timeout';
-    HTTP_CONFLICT:
-      Reason := 'Conflict';
-    410:
-      Reason := 'Gone';
-    411:
-      Reason := 'Length Required';
-    412:
-      Reason := 'Precondition Failed';
-    HTTP_PAYLOADTOOLARGE:
-      Reason := 'Payload Too Large';
-    414:
-      Reason := 'URI Too Long';
-    415:
-      Reason := 'Unsupported Media Type';
-    HTTP_RANGENOTSATISFIABLE:
-      Reason := 'Requested Range Not Satisfiable';
-    HTTP_TEAPOT:
-      Reason := 'I''m a teapot';
-    426:
-      Reason := 'Upgrade Required';
-    HTTP_SERVERERROR:
-      Reason := 'Internal Server Error';
-    HTTP_NOTIMPLEMENTED:
-      Reason := 'Not Implemented';
-    HTTP_BADGATEWAY:
-      Reason := 'Bad Gateway';
-    HTTP_UNAVAILABLE:
-      Reason := 'Service Unavailable';
-    HTTP_GATEWAYTIMEOUT:
-      Reason := 'Gateway Timeout';
-    HTTP_HTTPVERSIONNONSUPPORTED:
-      Reason := 'HTTP Version Not Supported';
-    511:
-      Reason := 'Network Authentication Required';
+  if Code <> 200 then // optimistic approach :)
+    if (Code < 513) and
+       (Code >= 100) then
+    begin
+      i := WordScanIndex(@HTTP_CODE, length(HTTP_CODE), Code); // may use SSE2
+      if i < 0 then
+        i := high(HTTP_CODE); // returns cached 513 'Invalid Request'
+    end
+    else
+      i := high(HTTP_CODE)
   else
-    Reason := 'Invalid Request';
-  end;
-end;
-
-function StatusCodeToReason(Code: cardinal): RawUtf8;
-begin
-  StatusCodeToReason(Code, result);
+    i := 0;
+  result := @HTTP_REASON[i];
 end;
 
 procedure StatusCodeToReason(Code: cardinal; var Reason: RawUtf8);
-var
-  Hi, Lo: cardinal;
 begin
-  if Code = 200 then
-  begin
-    Reason := ReasonCache[2, 0]; // optimistic approach :)
-    exit;
-  end;
-  Hi := Code div 100;
-  Lo := Code - Hi * 100;
-  if not ((Hi in [1..5]) and
-          (Lo in [0..13])) then
-  begin
-    Hi := 5;
-    Lo := 13; // returns cached 'Invalid Request'
-  end;
-  Reason := ReasonCache[Hi, Lo];
-  if Reason <> '' then
-    exit;
-  StatusCode2Reason(Code, Reason);
-  ReasonCache[Hi, Lo] := Reason;
+  Reason := StatusCodeToText(Code)^;
 end;
 
 function StatusCodeToShort(Code: cardinal): TShort47;
-var
-  msg: RawUtf8;
 begin
   if Code > 599 then
     Code := 999; // ensure stay in TShort47
-  StatusCodeToReason(Code, msg); // max length = 32 chars
   result[0] := #0;
   AppendShortCardinal(Code, result);
   AppendShortChar(' ', result);
-  AppendShortAnsi7String(msg, result);
+  AppendShortAnsi7String(StatusCodeToText(Code)^, result);
 end;
 
 function StatusCodeIsSuccess(Code: integer): boolean;
@@ -6284,18 +6307,26 @@ end;
 
 function ToText(const osv: TOperatingSystemVersion): RawUtf8;
 begin
-  if osv.os = osWindows then
-    result := 'Windows ' + WINDOWS_NAME[osv.win]
-  else
-    result := OS_NAME[osv.os];
+  result := OS_NAME[osv.os];
+  case osv.os of
+    osWindows:
+      result := 'Windows ' + WINDOWS_NAME[osv.win];
+    osOSX:
+      if osv.utsrelease[2] in [low(MACOS_NAME) .. high(MACOS_NAME)] then
+        result := 'macOS ' + MACOS_NAME[osv.utsrelease[2]];
+  end;
 end;
 
 function ToTextShort(const osv: TOperatingSystemVersion): RawUtf8;
 begin
-  if osv.os = osWindows then
-    result := WINDOWS_NAME[osv.win]
-  else
-    result := OS_NAME[osv.os];
+  result := OS_NAME[osv.os];
+  case osv.os of
+    osWindows:
+      result := WINDOWS_NAME[osv.win];
+    osOSX:
+      if osv.utsrelease[2] in [low(MACOS_NAME) .. high(MACOS_NAME)] then
+        result := MACOS_NAME[osv.utsrelease[2]];
+  end;
 end;
 
 const
@@ -6407,7 +6438,12 @@ const
     $0d4c,  // actCortexX1C
     $0d4d,  // actCortexA715
     $0d4e,  // actCortexX3
-    $0d4f); // actNeoverseV2
+    $0d4f,  // actNeoverseV2
+    $0d80,  // actCortexA520
+    $0d81,  // actCortexA720
+    $0d82,  // actCortexX4
+    $0d84,  // actNeoverseV3
+    $0d8e); // actNeoverseN3
 
   ARMCPU_IMPL: array[TArmCpuImplementer] of byte = (
     0,    // aciUnknown
@@ -6427,6 +6463,7 @@ const
     $61,  // aciApple
     $66,  // aciFaraday
     $69,  // aciIntel
+    $6d,  // aciMicrosoft
     $70,  // aciPhytium
     $c0); // aciAmpere
 
@@ -6443,13 +6480,13 @@ const
      'Cortex-A77', 'Cortex-A76AE', 'Cortex-R52', 'Cortex-M23', 'Cortex-M33',
      'Neoverse-V1', 'Cortex-A78', 'Cortex-A78AE', 'Cortex-X1', 'Cortex-510',
      'Cortex-710', 'Cortex-X2', 'Neoverse-N2', 'Neoverse-E1', 'Cortex-A78C',
-     'Cortex-X1C', 'Cortex-A715', 'Cortex-X3', 'Neoverse-V2');
-
+     'Cortex-X1C', 'Cortex-A715', 'Cortex-X3', 'Neoverse-V2', 'Cortex-A520',
+     'Cortex-A720', 'Cortex-X4', 'Neoverse-V3', 'Neoverse-N3');
   ARMCPU_IMPL_TXT: array[TArmCpuImplementer] of string[18] = (
       '',
       'ARM', 'Broadcom', 'Cavium', 'DEC', 'FUJITSU', 'HiSilicon', 'Infineon',
       'Motorola/Freescale', 'NVIDIA', 'APM', 'Qualcomm', 'Samsung', 'Marvell',
-      'Apple', 'Faraday', 'Intel', 'Phytium', 'Ampere');
+      'Apple', 'Faraday', 'Intel', 'Microsoft', 'Phytium', 'Ampere');
 
 function ArmCpuType(id: word): TArmCpuType;
 begin
@@ -10719,7 +10756,6 @@ begin
   NULL_STR_VAR := 'null';
   BOOL_UTF8[false] := 'false';
   BOOL_UTF8[true]  := 'true';
-  ReasonCache[2, 0] := 'OK'; // HTTP_SUCCESS (optimistic approach)
   // minimal stubs which will be properly implemented in mormot.core.log.pas
   GetExecutableLocation := _GetExecutableLocation;
   SetThreadName := _SetThreadName;

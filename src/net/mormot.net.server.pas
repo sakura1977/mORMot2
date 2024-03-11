@@ -126,6 +126,8 @@ type
     ToUriErrorStatus: {$ifdef CPU32} word {$else} cardinal {$endif};
     /// the callback registered by Run() for this URI
     Execute: TOnHttpServerRequest;
+    /// an additional pointer value, assigned to Ctxt.RouteOpaque of Execute()
+    ExecuteOpaque: pointer;
   end;
 
   /// implement a Radix Tree node to hold one URI registration
@@ -174,7 +176,7 @@ type
     fTreeNodeClass: TRadixTreeNodeClass;
     procedure Setup(aFrom: TUriRouterMethod; const aFromUri: RawUtf8;
       aTo: TUriRouterMethod; const aToUri: RawUtf8;
-      const aExecute: TOnHttpServerRequest);
+      const aExecute: TOnHttpServerRequest; aExecuteOpaque: pointer);
   public
     /// initialize this URI routing engine
     constructor Create(aNodeClass: TRadixTreeNodeClass;
@@ -232,20 +234,26 @@ type
     // $ Route.Run([urmGet, urmPost, urmPut, urmDelete],
     // $    '/user/<user>/pic/<id>', DoUserPic) // CRUD picture access
     procedure Run(aFrom: TUriRouterMethods; const aFromUri: RawUtf8;
-      const aExecute: TOnHttpServerRequest);
+      const aExecute: TOnHttpServerRequest; aExecuteOpaque: pointer = nil);
     /// just a wrapper around Run([urmGet], aUri, aExecute) registration method
     // - e.g. Route.Get('/plaintext', DoPlainText);
-    procedure Get(const aUri: RawUtf8; const aExecute: TOnHttpServerRequest); overload;
+    procedure Get(const aUri: RawUtf8; const aExecute: TOnHttpServerRequest;
+      aExecuteOpaque: pointer = nil); overload;
     /// just a wrapper around Run([urmPost], aUri, aExecute) registration method
-    procedure Post(const aUri: RawUtf8; const aExecute: TOnHttpServerRequest); overload;
+    procedure Post(const aUri: RawUtf8; const aExecute: TOnHttpServerRequest;
+      aExecuteOpaque: pointer = nil); overload;
     /// just a wrapper around Run([urmPut], aUri, aExecute) registration method
-    procedure Put(const aUri: RawUtf8; const aExecute: TOnHttpServerRequest); overload;
+    procedure Put(const aUri: RawUtf8; const aExecute: TOnHttpServerRequest;
+      aExecuteOpaque: pointer = nil); overload;
     /// just a wrapper around Run([urmDelete], aUri, aExecute) registration method
-    procedure Delete(const aUri: RawUtf8; const aExecute: TOnHttpServerRequest); overload;
+    procedure Delete(const aUri: RawUtf8; const aExecute: TOnHttpServerRequest;
+      aExecuteOpaque: pointer = nil); overload;
     /// just a wrapper around Run([urmOptions], aUri, aExecute) registration method
-    procedure Options(const aUri: RawUtf8; const aExecute: TOnHttpServerRequest); overload;
+    procedure Options(const aUri: RawUtf8; const aExecute: TOnHttpServerRequest;
+      aExecuteOpaque: pointer = nil); overload;
     /// just a wrapper around Run([urmHead], aUri, aExecute) registration method
-    procedure Head(const aUri: RawUtf8; const aExecute: TOnHttpServerRequest); overload;
+    procedure Head(const aUri: RawUtf8; const aExecute: TOnHttpServerRequest;
+      aExecuteOpaque: pointer = nil); overload;
     /// assign the published methods of a class instance to their URI via RTTI
     // - the signature of each method should match TOnHttpServerRequest
     // - the method name is used for the URI, e.g. Instance.user as '/user',
@@ -368,6 +376,8 @@ type
     /// serialize a given TObject as JSON into OutContent and OutContentType fields
     procedure SetOutJson(Value: TObject); overload;
       {$ifdef HASINLINE} inline; {$endif}
+    /// an additional custom parameter, as provided to TUriRouter.Setup
+    function RouteOpaque: pointer; override;
     /// notify the server that it should wait for the OnAsyncResponse callback
     // - would raise an EHttpServer exception if OnAsyncResponse is not set
     // - returns HTTP_ASYNCRESPONSE (777) internal code as recognized e.g. by
@@ -520,6 +530,10 @@ type
     // root URI registered at http.sys level - there is no such limitation with
     // the socket servers, which bind to a port, so handle all URIs on it
     function Route: TUriRouter;
+    /// thread-safe replace the TUriRouter instance
+    // - returns the existing instance: caller should keep it for a few seconds
+    // untouched prior to Free it, to let finish any pending background process
+    function ReplaceRoute(another: TUriRouter): TUriRouter;
     /// will route a GET to /favicon.ico to the given .ico file content
     // - if none is supplied, the default Synopse/mORMot icon is used
     // - if '' is supplied, /favicon.ico will return a 404 error status
@@ -2583,7 +2597,7 @@ end;
 
 procedure TUriRouter.Setup(aFrom: TUriRouterMethod; const aFromUri: RawUtf8;
   aTo: TUriRouterMethod; const aToUri: RawUtf8;
-  const aExecute: TOnHttpServerRequest);
+  const aExecute: TOnHttpServerRequest; aExecuteOpaque: pointer);
 var
   n: TUriTreeNode;
   u: PUtf8Char;
@@ -2619,8 +2633,11 @@ begin
         raise EUriRouter.CreateUtf8('%.Setup(''%''): already registered',
           [self, aFromUri]);
     if Assigned(aExecute) then
+    begin
       // this URI should redirect to a TOnHttpServerRequest callback
-      n.Data.Execute := aExecute
+      n.Data.Execute := aExecute;
+      n.Data.ExecuteOpaque := aExecuteOpaque;
+    end
     else
     begin
       n.Data.ToUriMethod := aTo;
@@ -2683,17 +2700,17 @@ end;
 procedure TUriRouter.Rewrite(aFrom: TUriRouterMethod; const aFromUri: RawUtf8;
   aTo: TUriRouterMethod; const aToUri: RawUtf8);
 begin
-  Setup(aFrom, aFromUri, aTo, aToUri, nil);
+  Setup(aFrom, aFromUri, aTo, aToUri, nil, nil);
 end;
 
 procedure TUriRouter.Run(aFrom: TUriRouterMethods; const aFromUri: RawUtf8;
-  const aExecute: TOnHttpServerRequest);
+  const aExecute: TOnHttpServerRequest; aExecuteOpaque: pointer);
 var
   m: TUriRouterMethod;
 begin
   for m := low(fTree) to high(fTree) do
     if m in aFrom then
-      Setup(m, aFromUri, m, '', aExecute);
+      Setup(m, aFromUri, m, '', aExecute, aExecuteOpaque);
 end;
 
 procedure TUriRouter.Get(const aFrom, aTo: RawUtf8; aToMethod: TUriRouterMethod);
@@ -2728,39 +2745,39 @@ begin
 end;
 
 procedure TUriRouter.Get(const aUri: RawUtf8;
-  const aExecute: TOnHttpServerRequest);
+  const aExecute: TOnHttpServerRequest; aExecuteOpaque: pointer);
 begin
-  Run([urmGet], aUri, aExecute);
+  Run([urmGet], aUri, aExecute, aExecuteOpaque);
 end;
 
 procedure TUriRouter.Post(const aUri: RawUtf8;
-  const aExecute: TOnHttpServerRequest);
+  const aExecute: TOnHttpServerRequest; aExecuteOpaque: pointer);
 begin
-  Run([urmPost], aUri, aExecute);
+  Run([urmPost], aUri, aExecute, aExecuteOpaque);
 end;
 
 procedure TUriRouter.Put(const aUri: RawUtf8;
-  const aExecute: TOnHttpServerRequest);
+  const aExecute: TOnHttpServerRequest; aExecuteOpaque: pointer);
 begin
-  Run([urmPut], aUri, aExecute);
+  Run([urmPut], aUri, aExecute, aExecuteOpaque);
 end;
 
 procedure TUriRouter.Delete(const aUri: RawUtf8;
-  const aExecute: TOnHttpServerRequest);
+  const aExecute: TOnHttpServerRequest; aExecuteOpaque: pointer);
 begin
-  Run([urmDelete], aUri, aExecute);
+  Run([urmDelete], aUri, aExecute, aExecuteOpaque);
 end;
 
 procedure TUriRouter.Options(const aUri: RawUtf8;
-  const aExecute: TOnHttpServerRequest);
+  const aExecute: TOnHttpServerRequest; aExecuteOpaque: pointer);
 begin
-  Run([urmOptions], aUri, aExecute);
+  Run([urmOptions], aUri, aExecute, aExecuteOpaque);
 end;
 
 procedure TUriRouter.Head(const aUri: RawUtf8;
-  const aExecute: TOnHttpServerRequest);
+  const aExecute: TOnHttpServerRequest; aExecuteOpaque: pointer);
 begin
-  Run([urmHead], aUri, aExecute);
+  Run([urmHead], aUri, aExecute, aExecuteOpaque);
 end;
 
 procedure TUriRouter.RunMethods(RouterMethods: TUriRouterMethods;
@@ -2978,15 +2995,19 @@ begin
     ProcessErrorMessage;
   // append Command
   h := @Context.Head;
-  h^.Reset; // reuse main 2KB buffer
+  h^.Reset; // reuse 2KB header buffer
   if fRespStatus = HTTP_SUCCESS then // optimistic approach
     h^.AppendShort(_CMD_200[
       rfWantRange in Context.ResponseFlags, // HTTP_PARTIALCONTENT=206 support
       rfHttp10 in Context.ResponseFlags])   // HTTP/1.0 support
   else
-  begin // other less common cases
+  begin // other cases
     h^.AppendShort(_CMD_XXX[rfHttp10 in Context.ResponseFlags]);
-    h^.AppendShort(StatusCodeToShort(fRespStatus));
+    if cardinal(fRespStatus) > 999 then
+      fRespStatus := 999; // avoid SmallUInt32Utf8[] overflow
+    h^.Append(SmallUInt32Utf8[fRespStatus]);
+    h^.Append(' ');
+    h^.Append(StatusCodeToText(fRespStatus)^);
     h^.AppendCRLF;
   end;
   // append (and sanitize) custom headers from Request() method
@@ -3044,6 +3065,13 @@ procedure THttpServerRequest.SetOutJson(Value: TObject);
 begin
   ObjectToJson(Value, RawUtf8(fOutContent), []);
   fOutContentType := JSON_CONTENT_TYPE_VAR;
+end;
+
+function THttpServerRequest.RouteOpaque: pointer;
+begin
+  result := fRouteNode;
+  if result <> nil then
+    result := TUriTreeNode(result).Data.ExecuteOpaque;
 end;
 
 function THttpServerRequest.SetAsyncResponse: integer;
@@ -3108,25 +3136,41 @@ end;
 
 function THttpServerGeneric.Route: TUriRouter;
 begin
+  result := nil; // avoid GPF
   if self = nil then
-    result := nil // avoid GPF
-  else
-  begin
+    exit;
+  result := fRoute;
+  if result <> nil then
+    exit;
+  GlobalLock; // paranoid thread-safety
+  try
     if fRoute = nil then
     begin
-      GlobalLock; // paranoid thread-safety
-      try
-        if fRoute = nil then
-        begin
-          if fRouterClass = nil then
-            fRouterClass := TUriTreeNode;
-          fRoute := TUriRouter.Create(fRouterClass);
-        end;
-      finally
-        GlobalUnLock;
-      end;
+      if fRouterClass = nil then
+        fRouterClass := TUriTreeNode;
+      fRoute := TUriRouter.Create(fRouterClass);
     end;
+  finally
+    GlobalUnLock;
+  end;
+  result := fRoute;
+end;
+
+function THttpServerGeneric.ReplaceRoute(another: TUriRouter): TUriRouter;
+begin
+  result := nil;
+  if self = nil then
+    exit;
+  GlobalLock; // paranoid thread-safety
+  try
     result := fRoute;
+    if result <> nil then
+      result.Safe.WriteLock;
+    fRoute := another;
+    if result <> nil then
+      result.Safe.WriteUnLock;
+  finally
+    GlobalUnLock;
   end;
 end;
 
@@ -3146,7 +3190,8 @@ function THttpServerGeneric.GetFavIcon(Ctxt: THttpServerRequestAbstract): cardin
 begin
   if fFavIcon = '' then
     result := HTTP_NOTFOUND
-  else begin
+  else
+  begin
     Ctxt.OutContent := fFavIcon;
     Ctxt.OutContentType := 'image/x-icon';
     result := HTTP_SUCCESS;
@@ -4365,7 +4410,7 @@ begin
             break; // finished (set e.g. by ClientSock.Http.ProcessBody)
           hrsSendBody:
             begin
-              dest.Clear; // body is retrieved from Content/ContentStream
+              dest.Reset; // body is retrieved from Content/ContentStream
               case ClientSock.Http.ProcessBody(dest, fServerSendBufferSize) of
                 hrpSend:
                   if ClientSock.TrySndLow(dest.Buffer, dest.Len) then

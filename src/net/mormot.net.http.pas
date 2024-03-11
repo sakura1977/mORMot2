@@ -746,7 +746,7 @@ type
     fConnectionOpaque: PHttpServerConnectionOpaque;
     fUrlParamPos: PUtf8Char; // may be set by TUriTreeNode.LookupParam
     fRouteNode: TRadixTreeNodeParams; // is a TUriTreeNode
-    fRouteName: pointer; // set by TUriTreeNode.LookupParam
+    fRouteName: pointer; // TRawUtf8DynArray set by TUriTreeNode.LookupParam
     fRouteValuePosLen: TIntegerDynArray; // [pos1,len1,...] pairs in fUri
     fHttp: PHttpRequestContext; // as supplied to Prepare()
     function GetRouteValuePosLen(const Name: RawUtf8;
@@ -802,6 +802,8 @@ type
     /// check a TUriRouter <parameter> value parsed from URI
     // - both Name lookup and value comparison are case-sensitive
     function RouteEquals(const Name, ExpectedValue: RawUtf8): boolean;
+    /// an additional custom parameter, as provided to TUriRouter.Setup
+    function RouteOpaque: pointer; virtual; abstract;
     /// retrieve and decode an URI-encoded parameter as UTF-8 text
     // - UpperName should follow the UrlDecodeValue() format, e.g. 'NAME='
     function UrlParam(const UpperName: RawUtf8; out Value: RawUtf8): boolean; overload;
@@ -4380,6 +4382,8 @@ begin
      (Name = '') or
      (fRouteName = nil) then
     exit;
+  // fRouteName = pointer(TRawUtf8DynArray) of all the <param1> <param2> names,
+  // in order, up to this parameter
   i := FindNonVoidRawUtf8(fRouteName, pointer(Name), length(Name),
                           PDALen(PAnsiChar(fRouteName) - _DALEN)^ + _DAOFF);
   if i < 0 then
