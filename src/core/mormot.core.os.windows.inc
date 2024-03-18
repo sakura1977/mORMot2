@@ -881,30 +881,44 @@ begin // return the search record timestamp with no local time conversion
   result := FileTimeToUnixTime(F.FindData.ftLastWriteTime);
 end;
 
-function FileInfoByHandle(aFileHandle: THandle; out FileId, FileSize: Int64;
- out LastWriteAccess, FileCreateDateTime: TUnixMSTime): boolean;
+function FileInfoByHandle(aFileHandle: THandle; FileId, FileSize: PInt64;
+  LastWriteAccess, FileCreateDateTime: PUnixMSTime): boolean;
 var
-  lastreadaccess: TUnixMSTime;
+  mtime, atime, ctime: Int64;
   lp: TByHandleFileInformation;
 begin
   result := GetFileInformationByHandle(aFileHandle, lp);
   if not result then
     exit;
-  LastWriteAccess    := FileTimeToUnixMSTime(lp.ftLastWriteTime);
-  FileCreateDateTime := FileTimeToUnixMSTime(lp.ftCreationTime);
-  lastreadaccess     := FileTimeToUnixMSTime(lp.ftLastAccessTime);
-  PInt64Rec(@FileSize).lo := lp.nFileSizeLow;
-  PInt64Rec(@FileSize).hi := lp.nFileSizeHigh;
-  PInt64Rec(@FileId).lo   := lp.nFileIndexLow;
-  PInt64Rec(@FileId).hi   := lp.nFileIndexHigh;
-  if LastWriteAccess <> 0 then
-    if (FileCreateDateTime = 0) or
-       (FileCreateDateTime > LastWriteAccess) then
-      FileCreateDateTime := LastWriteAccess;
-  if lastreadaccess <> 0 then
-    if (FileCreateDateTime = 0) or
-       (FileCreateDateTime > lastreadaccess) then
-      FileCreateDateTime := lastreadaccess;
+  if FileId <> nil then
+  begin
+    PInt64Rec(FileId)^.lo := lp.nFileIndexLow;
+    PInt64Rec(FileId)^.hi := lp.nFileIndexHigh;
+  end;
+  if FileSize <> nil then
+  begin
+    PInt64Rec(FileSize)^.lo := lp.nFileSizeLow;
+    PInt64Rec(FileSize)^.hi := lp.nFileSizeHigh;
+  end;
+  if (LastWriteAccess = nil) and
+     (FileCreateDateTime = nil) then
+    exit;
+  mtime := FileTimeToUnixMSTime(lp.ftLastWriteTime);
+  if LastWriteAccess <> nil then
+    LastWriteAccess^ := mtime;
+  if FileCreateDateTime = nil then
+    exit;
+  atime := FileTimeToUnixMSTime(lp.ftLastAccessTime);
+  ctime := FileTimeToUnixMSTime(lp.ftCreationTime);
+  if mtime <> 0 then
+    if (ctime = 0) or
+       (ctime > mtime) then
+      ctime := mtime;
+  if atime <> 0 then
+    if (ctime = 0) or
+       (ctime > atime) then
+      ctime := atime;
+  FileCreateDateTime^ := ctime;
 end;
 
 function FileIsExecutable(const FileName: TFileName): boolean;
@@ -2382,12 +2396,13 @@ var
   fn: TFileName;
   volume: SynUnicode;
   av, fr, tot: QWord;
+  p: ^TDiskPartition;
 begin
   result := nil;
   n := 0;
   fn := '#:';
   drives := GetLogicalDrives;
-  m := 1 shl 2;
+  m := 1 shl 2; // bit 2 = drive C
   for drive := 3 to 26 do
   begin
     // retrieve partitions mounted as C..Z drives
@@ -2397,10 +2412,11 @@ begin
       if GetDiskInfo(fn, av, fr, tot, @volume) then
       begin
         SetLength(result, n + 1);
-        Win32PWideCharToUtf8(pointer(volume), length(volume), result[n].name);
+        p := @result[n];
+        Win32PWideCharToUtf8(pointer(volume), length(volume), p^.name);
+        p^.mounted := fn;
+        p^.size := tot;
         volume := '';
-        result[n].mounted := fn;
-        result[n].size := tot;
         inc(n);
       end;
     end;
@@ -5434,9 +5450,10 @@ begin
     end;
   if Vers >= wVista then
   begin
+    // see https://en.wikipedia.org/wiki/List_of_Microsoft_Windows_versions
     if OSVersionInfo.wProductType <> VER_NT_WORKSTATION then
     begin
-      // Server edition - see https://shorturl.at/aryAY for build numbers
+      // Server edition
       inc(Vers, 2); // e.g. wEight -> wServer2012
       if Vers = wServer2016 then
         // we identify only LTSC server versions
@@ -5448,24 +5465,16 @@ begin
     end
     else if (Vers = wTen) and
             (OSVersionInfo.dwBuildNumber >= 22000) then
-      // Windows 11 has always 22000.### build https://shorturl.at/fntPS
+      // Windows 11 has always 22000.###
       Vers := wEleven;
     if (SystemInfo.wProcessorArchitecture = PROCESSOR_ARCHITECTURE_AMD64) and
        (Vers < wServer2019_64) then
       inc(Vers);   // e.g. wEight -> wEight64
   end;
   OSVersion := Vers;
-  if OSVersion >= wVista then
-    OpenProcessAccess := PROCESS_QUERY_LIMITED_INFORMATION
-  else
+  OpenProcessAccess := PROCESS_QUERY_LIMITED_INFORMATION;
+  if Vers < wVista then
     OpenProcessAccess := PROCESS_QUERY_INFORMATION or PROCESS_VM_READ;
-  with OSVersionInfo do
-    if wServicePackMajor = 0 then
-      _fmt('Windows %s (%d.%d.%d)', [WINDOWS_NAME[Vers],
-        dwMajorVersion, dwMinorVersion, dwBuildNumber], OSVersionText)
-    else
-      _fmt('Windows %s SP%d (%d.%d.%d)', [WINDOWS_NAME[Vers], wServicePackMajor,
-        dwMajorVersion, dwMinorVersion, dwBuildNumber], OSVersionText);
   OSVersion32.os := osWindows;
   OSVersion32.win := Vers;
   OSVersion32.winbuild := OSVersionInfo.dwBuildNumber;
@@ -5479,15 +5488,32 @@ begin
       OSVersionInfoEx := TrimU('Wine ' + TrimU(OSVersionInfoEx));
     end;
     NtQueryInformationProcess := GetProcAddress(h, 'NtQueryInformationProcess');
-    RtlInitUnicodeString := GetProcAddress(h, 'RtlInitUnicodeString');
-    NtOpenSection := GetProcAddress(h, 'NtOpenSection');
-    NtMapViewOfSection := GetProcAddress(h, 'NtMapViewOfSection');
-    NtUnmapViewOfSection := GetProcAddress(h, 'NtUnmapViewOfSection');
+    RtlInitUnicodeString      := GetProcAddress(h, 'RtlInitUnicodeString');
+    NtOpenSection             := GetProcAddress(h, 'NtOpenSection');
+    NtMapViewOfSection        := GetProcAddress(h, 'NtMapViewOfSection');
+    NtUnmapViewOfSection      := GetProcAddress(h, 'NtUnmapViewOfSection');
   end;
+  // retrieve Software/Hardware information from Registry
+  if reg.ReadOpen(wrLocalMachine, 'Software\Microsoft\Windows NT\CurrentVersion') then
+  begin
+    WindowsUbr := reg.ReadDword('UBR');
+    WindowsProductName := reg.ReadString('ProductName');
+    WindowsDisplayVersion := reg.ReadString('DisplayVersion');
+  end;
+  with OSVersionInfo do
+  begin
+    _fmt('Windows %s (%d.%d.%d)', [WINDOWS_NAME[Vers],
+      dwMajorVersion, dwMinorVersion, dwBuildNumber], OSVersionText);
+    if wServicePackMajor <> 0 then
+      insert(_fmt('SP%d ', [wServicePackMajor]), OSVersionText, PosExChar('(', OSVersionText));
+  end;
+  if WindowsUbr <> 0 then
+    insert(_fmt('.%d', [WindowsUbr]), OSVersionText, length(OSVersionText));
+  if WindowsDisplayVersion <> '' then
+    insert(WindowsDisplayVersion + ' ', OSVersionText, PosExChar('(', OSVersionText));
   if OSVersionInfoEx <> '' then
     OSVersionText := OSVersionText + ' - ' + OSVersionInfoEx;
-  // retrieve Hardware information from Registry
-  if reg.ReadOpen(wrLocalMachine, 'Hardware\Description\System\CentralProcessor\0') then
+  if reg.ReadOpen(wrLocalMachine, 'Hardware\Description\System\CentralProcessor\0', true) then
   begin
     cpu := reg.ReadString('ProcessorNameString');
     if cpu = '' then

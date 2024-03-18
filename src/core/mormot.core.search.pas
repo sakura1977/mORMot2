@@ -278,6 +278,37 @@ type
     function MatchString(const aText: string): integer;
   end;
 
+  /// store a decoded URI as full path and file/resource name
+  {$ifdef USERECORDWITHMETHODS}
+  TUriMatchName = record
+  {$else}
+  TUriMatchName = object
+  {$endif USERECORDWITHMETHODS}
+  public
+    Path, Name: TValuePUtf8Char;
+    /// to be called once Path has been populated to compute Name
+    procedure ParsePath;
+  end;
+
+  /// efficient GLOB path or resource name lockup for an URI
+  // - using mORMot fast TMatch engine
+  {$ifdef USERECORDWITHMETHODS}
+  TUriMatch = record
+  {$else}
+  TUriMatch = object
+  {$endif USERECORDWITHMETHODS}
+  private
+    Init: TLightLock;
+    Names, Paths: TMatchDynArray;
+    procedure DoInit(csv: PUtf8Char; caseinsensitive: boolean);
+  public
+    /// main entry point of the GLOB resource/path URI pattern matching
+    // - will thread-safe initialize the internal TMatch instances if necessary
+    function Check(const csv: RawUtf8; const uri: TUriMatchName;
+      caseinsensitive: boolean): boolean;
+  end;
+
+
 
 /// fill the Match[] dynamic array with all glob patterns supplied as CSV
 // - returns how many patterns have been set in Match[|]
@@ -302,8 +333,15 @@ function MatchExists(const One: TMatch; const Several: TMatchDynArray): boolean;
 /// add one TMach if not already registered in the Several[] dynamic array
 function MatchAdd(const One: TMatch; var Several: TMatchDynArray): boolean;
 
+/// allocate one TMach in the Several[] dynamic array
+function MatchNew(var Several: TMatchDynArray): PMatch;
+
 /// returns TRUE if Match=nil or if any Match[].Match(Text) is TRUE
-function MatchAny(const Match: TMatchDynArray; const Text: RawUtf8): boolean;
+function MatchAny(const Match: TMatchDynArray; const Text: RawUtf8): boolean; overload;
+  {$ifdef HASINLINE} inline; {$endif}
+
+/// returns TRUE if Match=nil or if any Match[].Match(Text, TextLen) is TRUE
+function MatchAny(Match: PMatch; Text: PUtf8Char; TextLen: PtrInt): boolean; overload;
 
 /// apply the CSV-supplied glob patterns to an array of RawUtf8
 // - any text not matching the pattern will be deleted from the array
@@ -1519,7 +1557,6 @@ function LocalToUtc(const LocalDateTime: TDateTime; const TzID: TTimeZoneID): TD
 
 
 implementation
-
 
 
 { ****************** Files Search in Folders }
@@ -2799,8 +2836,9 @@ end;
 
 function TMatch.Match(const aText: RawUtf8): boolean;
 begin
-  if aText <> '' then
-    result := Search(@self, pointer(aText), length(aText))
+  if pointer(aText) <> nil then
+    result := Search(@self,
+                pointer(aText), PStrLen(PAnsiChar(pointer(aText)) - _STRLEN)^)
   else
     result := pmax < 0;
 end;
@@ -2868,6 +2906,69 @@ end;
 function TMatch.CaseInsensitive: boolean;
 begin
   result := Upper = @NormToUpperAnsi7;
+end;
+
+
+{ TUriMatchName }
+
+procedure TUriMatchName.ParsePath;
+var
+  i: PtrInt;
+begin
+  Name := Path;
+  i := Name.Len;
+  while i > 0 do // retrieve
+  begin
+    dec(i);
+    if Name.Text[i] <> '/' then
+      continue;
+    inc(i);
+    inc(Name.Text, i);
+    dec(Name.Len, i);
+    break;
+  end;
+end;
+
+
+{ TUriMatch }
+
+procedure TUriMatch.DoInit(csv: PUtf8Char; caseinsensitive: boolean);
+var
+  s: PUtf8Char;
+  m: ^TMatchDynArray;
+begin
+  if csv <> nil then
+    repeat
+      m := @Names; // default 'file.ext' pattern
+      csv := GotoNextNotSpace(csv);
+      s := csv;
+      repeat
+        case csv^ of
+          #0,
+          ',':
+            break;
+          '/':
+            m := @Paths; // is a 'path/to/file.ext' pattern
+        end;
+        inc(csv);
+      until false;
+      if csv <> s then
+        MatchNew(m^)^.Prepare(s, csv - s, caseinsensitive, true);
+      if csv^ = #0 then
+        break;
+      inc(csv);
+    until false;
+end;
+
+function TUriMatch.Check(const csv: RawUtf8;
+  const uri: TUriMatchName; caseinsensitive: boolean): boolean;
+begin
+  if Init.TryLock then // thread-safe init once from supplied csv
+    DoInit(pointer(csv), caseinsensitive);
+  result := ((Names <> nil) and
+             MatchAny(pointer(Names), uri.Name.Text, uri.Name.Len)) or
+            ((Paths <> nil) and
+             MatchAny(pointer(Paths), uri.Path.Text, uri.Path.Len));
 end;
 
 
@@ -2940,7 +3041,6 @@ function SetMatchs(const CsvPattern: RawUtf8; CaseInsensitive: boolean;
 var
   P, S: PUtf8Char;
 begin
-  result := 0;
   P := pointer(CsvPattern);
   if P <> nil then
     repeat
@@ -2948,15 +3048,12 @@ begin
       while not (P^ in [#0, CsvSep]) do
         inc(P);
       if P <> S then
-      begin
-        SetLength(Match, result + 1);
-        Match[result].Prepare(S, P - S, CaseInsensitive, {reuse=}true);
-        inc(result);
-      end;
+        MatchNew(Match)^.Prepare(S, P - S, CaseInsensitive, {reuse=}true);
       if P^ = #0 then
         break;
       inc(P);
     until false;
+  result := length(Match);
 end;
 
 function SetMatchs(CsvPattern: PUtf8Char; CaseInsensitive: boolean;
@@ -2990,39 +3087,55 @@ var
   i: PtrInt;
 begin
   result := true;
-  for i := 0 to high(Several) do
+  for i := 0 to length(Several) - 1 do
     if Several[i].Equals(One) then
       exit;
   result := false;
 end;
 
 function MatchAdd(const One: TMatch; var Several: TMatchDynArray): boolean;
-var
-  n: PtrInt;
 begin
   result := not MatchExists(One, Several);
   if result then
-  begin
-    n := length(Several);
-    SetLength(Several, n + 1);
-    Several[n] := One;
-  end;
+    MatchNew(Several)^ := One;
+end;
+
+function MatchNew(var Several: TMatchDynArray): PMatch;
+var
+  n: PtrInt;
+begin
+  n := length(Several);
+  SetLength(Several, n + 1);
+  result := @Several[n];
 end;
 
 function MatchAny(const Match: TMatchDynArray; const Text: RawUtf8): boolean;
+begin
+  result := MatchAny(pointer(Match), pointer(Text), length(Text));
+end;
+
+function MatchAny(Match: PMatch; Text: PUtf8Char; TextLen: PtrInt): boolean;
 var
-  m: PMatch;
-  i: integer;
+  n: integer;
 begin
   result := true;
   if Match = nil then
     exit;
-  m := pointer(Match);
-  for i := 1 to length(Match) do
-    if m^.Match(Text) then
-      exit
-    else
-      inc(m);
+  if TextLen <= 0 then
+    Text := nil;
+  n := PDALen(PAnsiChar(pointer(Match)) - _DALEN)^ + (_DAOFF - 1);
+  repeat
+    // inlined Match^.Match() to avoid internal error on Delphi
+    if Text <> nil then
+    begin
+      if Match^.Search(Match, Text, TextLen) then
+        exit;
+    end
+    else if Match^.pmax < 0 then
+      exit;
+    inc(Match);
+    dec(n);
+  until n = 0;
   result := false;
 end;
 
@@ -3121,7 +3234,7 @@ var
   len: integer;
 begin
   len := StringToUtf8(aText, temp);
-  result := match(temp.buf, len);
+  result := Match(temp.buf, len);
   temp.Done;
 end;
 
@@ -5977,7 +6090,7 @@ begin
         begin
           // warning: never defined on XP/2003, and not for all entries
           first := reg.ReadDword('FirstEntry');
-          last := reg.ReadDword('LastEntry');
+          last  := reg.ReadDword('LastEntry');
           if (first > 0) and
              (last >= first) then
           begin

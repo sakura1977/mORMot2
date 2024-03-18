@@ -644,7 +644,7 @@ const
     '12 Monterey',
     '13 Ventura',
     '14 Sonoma',
-    '15 Next');
+    '15 Glow'); // use known internal codename for upcoming version
 
   /// the recognized Windows versions, as plain text
   // - defined even outside OSWINDOWS to allow process e.g. from monitoring tools
@@ -854,9 +854,9 @@ var
     {$endif OSWINDOWS};
 
   /// the current Operating System version, as retrieved for the current process
-  // - contains e.g. 'Windows Seven 64 SP1 (6.1.7601)' or
+  // - contains e.g. 'Windows Seven 64 SP1 (6.1.7601)' or 'Windows XP SP3 (5.1.2600)' or
+  // 'Windows 10 64bit 22H2 (10.0.19045.4046)' or 'macOS 13 Ventura (Darwin 22.3.0)' or
   // 'Ubuntu 16.04.5 LTS - Linux 3.13.0 110 generic#157 Ubuntu SMP Mon Feb 20 11:55:25 UTC 2017'
-  // or 'macOS 13 Ventura (Darwin 22.3.0)'
   OSVersionText: RawUtf8;
   /// some addition system information as text, e.g. 'Wine 1.1.5'
   // - also always appended to OSVersionText high-level description
@@ -867,6 +867,18 @@ var
   // - contains e.g. 'Windows Vista' or 'Ubuntu Linux 5.4.0' or
   // 'macOS 13 Ventura 22.3.0'
   OSVersionShort: RawUtf8;
+
+  {$ifdef OSWINDOWS}
+  /// on Windows, the Update Build Revision as shown with the "ver/winver" command
+  // - to track the current update state of the system
+  WindowsUbr: integer;
+  /// on Windows, the ready-to-be-displayed text version of the system
+  // - e.g. 'Windows 10 Entreprise N'
+  WindowsProductName: RawUtf8;
+  /// on Windows, the ready-to-be-displayed text version of the system
+  // - e.g. '22H2'
+  WindowsDisplayVersion: RawUtf8;
+  {$endif OSWINDOWS}
 
   /// some textual information about the current CPU
   // - contains e.g. '4 x Intel(R) Core(TM) i5-7300U CPU @ 2.60GHz 3MB cache'
@@ -3293,12 +3305,13 @@ function FileInfoByName(const FileName: TFileName; out FileSize: Int64;
 
 /// get low-level file information, in a cross-platform way
 // - returns true on success
+// - you can specify nil for any returned value if you don't need
 // - here file write/creation time are given as TUnixMSTime values, for better
 // cross-platform process - note that FileCreateDateTime may not be supported
 // by most Linux file systems, so the oldest timestamp available is returned
 // as failover on such systems (probably the latest file metadata writing)
-function FileInfoByHandle(aFileHandle: THandle; out FileId, FileSize: Int64;
-  out LastWriteAccess, FileCreateDateTime: TUnixMSTime): boolean;
+function FileInfoByHandle(aFileHandle: THandle; FileId, FileSize: PInt64;
+  LastWriteAccess, FileCreateDateTime: PUnixMSTime): boolean;
 
 /// check if a given file is likely to be an executable
 // - will check the DOS/WinPE executable header in its first bytes on Windows

@@ -37,6 +37,7 @@ uses
   mormot.core.buffers,
   mormot.core.datetime,
   mormot.core.threads,
+  mormot.core.search,
   mormot.core.log,
   mormot.core.rtti,
   mormot.core.json,
@@ -994,13 +995,59 @@ type
 { ******************** THttpProxyCache HTTP Proxy with Cache }
 
 type
-  /// define one remote content source for THttpProxyCache
-  THttpProxyCacheSource = class(TSynPersistent)
+  /// define the caching settings of remote content source for THttpProxyCache
+  THttpProxyMem = class(TSynPersistent)
+  protected
+    fMaxSize: Int64;
+    fTimeoutSec: integer;
+    fIgnoreCsv, fForceCsv: RawUtf8;
+    fIgnore, fForce: TUriMatch;
+  public
+    /// setup the default values of this cache
+    constructor Create; override;
+  published
+    /// size (in bytes) below which the file should be included in this cache
+    // - default -1 will use the main THttpProxySettings value
+    property MaxSize: Int64
+      read fMaxSize write fMaxSize;
+    /// how many seconds this file should remain in this cache
+    // - default -1 will use the main THttpProxySettings value
+    property TimeoutSec: integer
+      read fTimeoutSec write fTimeoutSec;
+    /// CSV list of GLOB file names to be excluded to this cache
+    // - e.g. '*.changelog,*.tmp'
+    property IgnoreCsv: RawUtf8
+      read fIgnoreCsv write fIgnoreCsv;
+    /// CSV list of GLOB file names to be included in this cache even if
+    // its size does not match MaxSize
+    // - e.g. '*.xml'
+    property ForceCsv: RawUtf8
+      read fForceCsv write fForceCsv;
+  end;
+
+  /// define disk cache settings of remote content source for THttpProxyCache
+  THttpProxyDisk = class(THttpProxyMem)
+  protected
+    fPath: TFileName;
+  published
+    /// default '' will use the main THttpProxySettings value
+    property Path: TFileName
+      read fPath write fPath;
+  end;
+
+  /// define one remote content source settings for THttpProxyCache
+  THttpProxySource = class(TSynAutoCreateFields)
   protected
     fRemote, fLocal: RawUtf8;
-    fCachePath: TFileName;
     fDisabled: boolean;
-    fThreadCount: integer;
+    fMethods: TUriRouterMethods;
+    fMemCache: THttpProxyMem;
+    fDiskCache: THttpProxyDisk;
+    fRejectCsv: RawUtf8;
+    fReject: TUriMatch;
+  public
+    /// setup the default values of this remote source
+    constructor Create; override;
   published
     /// this source won't be processed if this property is set to true
     property Disabled: boolean
@@ -1011,7 +1058,10 @@ type
     // 'debian' for 'http://ftp.debian.org/debian'
     property Local: RawUtf8
       read fLocal write fLocal;
-
+    /// which methods are relayed to the Remote server
+    // - equals by default [urmGet, urmHead]
+    property Methods: TUriRouterMethods
+      read fMethods write fMethods;
     /// the full remote origin URL start to ask
     // - the Local prefix will be removed from the client request, then appended
     // to this remote URI, which is e.g. 'http://ftp.debian.org/debian' or
@@ -1019,62 +1069,122 @@ type
     // 'debian-security' prefixes
     property Remote: RawUtf8
       read fRemote write fRemote;
-    /// overwrite the main DefaultCachePath setting
-    property CachePath: TFileName
-      read fCachePath write fCachePath;
+    /// overwrite the main MemCache setting to tune in-memory caching
+    property MemCache: THttpProxyMem
+      read fMemCache write fMemCache;
+    /// overwrite the main DiskCache setting to tune on-disk caching
+    property DiskCache: THttpProxyDisk
+      read fDiskCache write fDiskCache;
+    /// CSV list of GLOB file names to be rejected as not found
+    // - e.g. '*.secret'
+    property RejectCsv: RawUtf8
+      read fRejectCsv write fRejectCsv;
   end;
 
   /// define one or several remote content source(s) for THttpProxyCache
-  THttpProxyCacheSourceObjArray = array of THttpProxyCacheSource;
+  THttpProxySourceObjArray = array of THttpProxySource;
 
-  /// define the THttpProxyCache forward proxy process
-  THttpProxyCacheSettings = class(TSynAutoCreateFields)
+  /// the available options for THttpProxyServer/THttpProxyCache
+  THttpProxyServerOption = (
+    psoLogVerbose,
+    psoHttpsSelfSigned,
+    psoEnableLogging);
+  /// a set of available options for THttpProxyServer
+  THttpProxyServerOptions = set of THttpProxyServerOption;
+
+  /// define the THttpProxyCache forward proxy HTTP(S) server settings
+  THttpProxyServer = class(TSynAutoCreateFields)
   protected
     fPort: TNetPort;
+    fOptions: THttpProxyServerOptions;
     fThreadCount: integer;
-    fDefaultCachePath: TFileName;
-    fSource: THttpProxyCacheSourceObjArray;
-    fServer: THttpAsyncServer;
+    fCertificateFile: TFileName;
+    fCACertificatesFile: TFileName;
+    fPrivateKeyFile: TFileName;
+    fPrivateKeyPassword: SpiUtf8;
   public
-    /// append and own a given THttpProxyCacheSource definition at runtime
-    procedure AddSource(one: THttpProxyCacheSource);
-    /// the local HTTP(S) asynchronous server
-    property Server: THttpAsyncServer
-      read fServer;
+    /// initialize the default settings
+    constructor Create; override;
   published
     /// the local port used for HTTP/HTTPS content delivery
     // - is 8098 by default (THttpPeerCache uses 8099), unassigned by IANA
     property Port: TNetPort
       read fPort write fPort;
+    /// customize this proxy cache HTTP/HTTPS process
+    property Options: THttpProxyServerOptions
+      read fOptions write fOptions;
     /// the number of threads of the HTTP/HTTPS content delivery
     // - default value is 4 sub-threads
     property ThreadCount: integer
       read fThreadCount write fThreadCount;
-    /// where the cached files are to be stored
-    // - can be overriden by Source[].CachePath property
-    property DefaultCachePath: TFileName
-      read fDefaultCachePath;
+    /// optional HTTPS certificate file name
+    // - should also set PrivateKeyFile and PrivateKeyPassword
+    property CertificateFile: TFileName
+      read fCertificateFile write fCertificateFile;
+    /// optional HTTPS private key file name
+    property PrivateKeyFile: TFileName
+      read fPrivateKeyFile write fPrivateKeyFile;
+    /// optional HTTPS private key file password
+    property PrivateKeyPassword: SpiUtf8
+      read fPrivateKeyPassword write fPrivateKeyPassword;
+    /// optional HTTPS private key file password
+    property CACertificatesFile: TFileName
+      read fCACertificatesFile write fCACertificatesFile;
+  end;
+
+  /// define the THttpProxyCache forward proxy process
+  THttpProxySettings = class(TSynAutoCreateFields)
+  protected
+    fServer: THttpProxyServer;
+    fMemCache: THttpProxyMem;
+    fDiskCache: THttpProxyDisk;
+    fSource: THttpProxySourceObjArray;
+  public
+    /// initialize the default settings
+    constructor Create; override;
+    /// append and own a given THttpProxySource definition at runtime
+    procedure AddSource(one: THttpProxySource);
+  published
+    /// define the HTTP/HTTPS server configuration
+    property Server: THttpProxyServer
+      read fServer write fServer;
+    /// default in-memory cache settings
+    // - is set to MaxSize = 4KB and TimeoutSec = 5 minutes
+    // - can be overriden by Source[].MemCadche property
+    property MemCache: THttpProxyMem
+      read fMemCache write fMemCache;
+    /// overwrite the main DiskCache setting
+    property DiskCache: THttpProxyDisk
+      read fDiskCache write fDiskCache;
     /// define the remote content sources
-    property Source: THttpProxyCacheSourceObjArray
+    property Source: THttpProxySourceObjArray
       read fSource;
   end;
 
   /// implements a HTTP forward proxy, with caching
   THttpProxyCache = class(TSynAutoCreateFields)
   protected
-    fSettings: THttpProxyCacheSettings;
+    fSettings: THttpProxySettings;
     fLog: TSynLogClass;
     fSettingsOwned, fVerboseLog: boolean;
+    fServer: THttpAsyncServer;
+    fGC: TObjectDynArray;
+    function SetupTls(var tls: TNetTlsContext): boolean; virtual;
+    procedure AfterServerStarted; virtual;
+    function OnExecute(Ctxt: THttpServerRequestAbstract): cardinal;
   public
     /// initialize this forward proxy instance
     // - the supplied aSettings should be owned by the caller (e.g from a main
     // settings class instance)
     // - may raise some exceptions if the HTTP server cannot be started
-    constructor Create(aSettings: THttpProxyCacheSettings); reintroduce; virtual;
+    constructor Create(aSettings: THttpProxySettings); reintroduce; virtual;
     /// finalize this class instance
     destructor Destroy; override;
+    /// the local HTTP(S) asynchronous server
+    property Server: THttpAsyncServer
+      read fServer;
     /// access to the used settings
-    property Settings: THttpProxyCacheSettings
+    property Settings: THttpProxySettings
       read fSettings;
   end;
 
@@ -4456,9 +4566,45 @@ end;
 
 { ******************** THttpProxyCache HTTP Proxy with Cache }
 
-{ THttpProxyCacheSettings }
+{ THttpProxyMem }
 
-procedure THttpProxyCacheSettings.AddSource(one: THttpProxyCacheSource);
+constructor THttpProxyMem.Create;
+begin
+  inherited Create;
+  fMaxSize := -1; // use main THttpProxySettings value
+  fTimeoutSec := -1;
+end;
+
+
+{ THttpProxySource }
+
+constructor THttpProxySource.Create;
+begin
+  inherited Create;
+  fMethods := [urmGet, urmHead];
+end;
+
+
+{ THttpProxyServer }
+
+constructor THttpProxyServer.Create;
+begin
+  inherited Create;
+  fThreadCount := SystemInfo.dwNumberOfProcessors + 1;
+end;
+
+
+{ THttpProxySettings }
+
+constructor THttpProxySettings.Create;
+begin
+  inherited Create;
+  fDiskCache.Path := Executable.ProgramFilePath + 'proxycache';
+  fMemCache.MaxSize := 4096;
+  fMemCache.TimeoutSec := 15 * SecsPerMin;
+end;
+
+procedure THttpProxySettings.AddSource(one: THttpProxySource);
 begin
   if one <> nil then
     ObjArrayAdd(fSource, one);
@@ -4467,28 +4613,128 @@ end;
 
 { THttpProxyCache }
 
-constructor THttpProxyCache.Create(aSettings: THttpProxyCacheSettings);
+constructor THttpProxyCache.Create(aSettings: THttpProxySettings);
 var
   {%H-}log: ISynLog;
+  hso: THttpServerOptions;
+  tls: TNetTlsContext;
 begin
   fLog := TSynLog;
   log := fLog.Enter('Create %', [aSettings], self);
   if aSettings = nil then
   begin
-    fSettings := THttpProxyCacheSettings.Create;
+    fSettings := THttpProxySettings.Create;
     fSettingsOwned := true;
   end
   else
     fSettings := aSettings;
-
+  hso := [hsoNoXPoweredHeader,
+          hsoThreadSmooting];
+  if Assigned(log) and
+     (psoLogVerbose in fSettings.Server.Options) then
+    include(hso, hsoLogVerbose);
+  if psoEnableLogging in fSettings.Server.Options then
+    include(hso, hsoEnableLogging);
+  if (psoHttpsSelfSigned in fSettings.Server.Options) or
+     SetupTls(tls) then
+    include(hso, hsoEnableTls);
+  fServer := THttpAsyncServer.Create(UInt32ToUtf8(fSettings.Server.Port),
+    nil, nil, '', fSettings.Server.ThreadCount, 30000, hso);
+  AfterServerStarted;
+  if hsoEnableTls in hso then
+    if psoHttpsSelfSigned in fSettings.Server.Options then
+      fServer.WaitStartedHttps
+    else
+      fServer.WaitStarted(30, @tls)
+  else
+    fServer.WaitStarted;
 end;
 
 destructor THttpProxyCache.Destroy;
 begin
+  if fServer <> nil then
+    fServer.Shutdown;
+  inherited Destroy;
+  FreeAndNil(fServer);
   if fSettingsOwned then
     fSettings.Free;
   fSettings := nil; // notify background threads and event callbacks
-  inherited Destroy;
+  ObjArrayClear(fGC);
+end;
+
+function THttpProxyCache.SetupTls(var tls: TNetTlsContext): boolean;
+begin
+  result := (fSettings.Server.CertificateFile <> '') or
+            (fSettings.Server.CACertificatesFile <> '');
+  if result then
+    InitNetTlsContext(tls, {server=}true, fSettings.Server.CertificateFile,
+      fSettings.Server.PrivateKeyFile, fSettings.Server.PrivateKeyPassword,
+      fSettings.Server.CACertificatesFile);
+end;
+
+procedure THttpProxyCache.AfterServerStarted;
+var
+  new, old: TUriRouter;
+  one: THttpProxySource;
+  i: PtrInt;
+begin
+  new := TUriRouter.Create(TUriTreeNode);
+  try
+    for i := 0 to high(fSettings.Source) do
+    begin
+      one := fSettings.Source[i];
+      if one.Disabled then
+        continue;
+      if one.MemCache.MaxSize < 0 then
+        one.MemCache.MaxSize := fSettings.MemCache.MaxSize;
+      if one.DiskCache.MaxSize < 0 then
+        one.DiskCache.MaxSize := fSettings.DiskCache.MaxSize;
+      new.Run(one.Methods, one.Local, OnExecute, one);
+      new.Run(one.Methods, one.Local + '/<path>', OnExecute, one);
+    end;
+    old := fServer.ReplaceRoute(new);
+    new := nil; // is owned by fServer from now on
+    if old <> nil then
+      ObjArrayAdd(fGC, old); // late release at shutdown
+  finally
+    new.Free;
+  end;
+end;
+
+function THttpProxyCache.OnExecute(Ctxt: THttpServerRequestAbstract): cardinal;
+var
+  one: THttpProxySource;
+  uri: TUriMatchName;
+  forced, ignored: (cNone, cMem, cDisk);
+begin
+  result := HTTP_NOTFOUND;
+  // retrieve O(1) execution context
+  one := Ctxt.RouteOpaque;
+  if one = nil then
+    exit;
+  // retrieve path and resource/file name from URI
+  Ctxt.RouteAt(0, uri.Path);
+  uri.ParsePath; // compute uri.Name
+  // ensure was not marked as rejected
+  if (one.RejectCsv <> '') and
+     one.fReject.Check(one.RejectCsv, uri, {caseinsensitive=}false) then
+    exit;
+  // check if should (not) be cached
+  forced := cNone;
+  ignored := cNone;
+  if (one.MemCache.ForceCsv <> '') and
+     one.MemCache.fForce.Check(one.MemCache.ForceCsv, uri, false) then
+    forced := cMem
+  else if (one.DiskCache.ForceCsv <> '') and
+          one.DiskCache.fForce.Check(one.DiskCache.ForceCsv, uri, false) then
+    forced := cDisk
+  else if (one.MemCache.IgnoreCsv <> '') and
+     one.MemCache.fIgnore.Check(one.MemCache.IgnoreCsv, uri, false) then
+    ignored := cMem
+  else if (one.DiskCache.IgnoreCsv <> '') and
+          one.DiskCache.fIgnore.Check(one.DiskCache.IgnoreCsv, uri, false) then
+    ignored := cDisk;
+
 end;
 
 
@@ -4496,7 +4742,7 @@ end;
 initialization
   {$ifndef HASDYNARRAYTYPE}
   Rtti.RegisterObjArray(
-    TypeInfo(THttpProxyCacheSourceObjArray), THttpProxyCacheSource);
+    TypeInfo(THttpProxySourceObjArray), THttpProxySource);
   {$endif HASDYNARRAYTYPE}
 
 end.
