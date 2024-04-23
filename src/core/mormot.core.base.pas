@@ -3896,6 +3896,9 @@ function SortDynArrayUnicodeString(const A, B): integer;
 // - the expected string type is the RTL string
 function SortDynArrayString(const A, B): integer;
 
+/// compare two "array of shortstring" elements, with case sensitivity
+function SortDynArrayShortString(const A, B): integer;
+
 /// compare two "array of variant" elements, with case sensitivity
 // - just a wrapper around SortDynArrayVariantComp(A,B,false)
 function SortDynArrayVariant(const A, B): integer;
@@ -7428,9 +7431,16 @@ begin
     MoveFast(a[aIndex + 1], a[aIndex], (n - aIndex) * SizeOf(pointer));
   a[n] := nil; // better safe than sorry
   if aCount = nil then
-    SetLength(a, n)
+    if n and 255 <> 0 then
+      DynArrayFakeLength(a, n) // call ReallocMem() once every 256 deletes
+    else
+      SetLength(a, n) // finalize if n = 0
   else
+  begin
     aCount^ := n;
+    if n = 0 then
+      Finalize(a);
+  end;
 end;
 
 function PtrArrayDelete(var aPtrArray; aItem: pointer; aCount: PInteger): PtrInt;
@@ -7452,7 +7462,11 @@ begin
   if aCount = nil then
     SetLength(a, n)
   else
+  begin
     aCount^ := n;
+    if n = 0 then
+      Finalize(a);
+  end;
 end;
 
 function PtrArrayFind(var aPtrArray; aItem: pointer): integer;
@@ -7685,10 +7699,10 @@ begin
     exit;
   if aContinueOnException then
     for i := n - 1 downto 0 do
-    try
-      a[i].Free;
-    except
-    end
+      try
+        a[i].Free;
+      except
+      end
   else
     RawObjectsClear(pointer(a), n);
   a := nil; // finalize the dynamic array itself
@@ -10831,15 +10845,13 @@ var
   tab: PCrc32tab;
 begin
   result := not crc;
+  tab := @crc32ctab;
   if len > 0 then
-  begin
-    tab := @crc32ctab;
     repeat
-      result := tab[0, ToByte(result) xor ord(buf^)] xor (result shr 8);
+      result := tab[0, ToByte(result xor ord(buf^))] xor (result shr 8);
       inc(buf);
       dec(len);
     until len = 0;
-  end;
   result := not result;
 end;
 
@@ -11845,6 +11857,22 @@ begin
   result := StrComp(pointer(A), pointer(B));
 end;
 
+function SortDynArrayShortString(const A, B): integer;
+var
+  sa: shortstring absolute A;
+  sb: shortstring absolute B;
+  la, lb: PtrInt;
+begin
+  la := ord(sa[0]);
+  lb := ord(sb[0]);
+  if la < lb then
+    la := lb;
+  result := MemCmp(@sa[1], @sb[1], la);
+  if result = 0 then
+    result := ord(sa[0]) - ord(sb[0]);
+end;
+
+
 {$if not defined(CPUX64ASM) and not defined(CPUX86)} // fallback if no asm
 
 procedure DynArrayHashTableAdjust(P: PIntegerArray; deleted: integer; count: PtrInt);
@@ -11994,7 +12022,7 @@ begin
     fPosition := result;
   end
   else
-    // quick exit on Delphi when retrieving TStream.Position
+    // optimize on Delphi when retrieving TStream.Position as Seek(0,soCurrent)
     result := fPosition;
 end;
 
@@ -12050,16 +12078,21 @@ end;
 
 function TRawByteStringStream.Write(const Buffer; Count: Longint): Longint;
 begin
-  if Count <= 0 then
-    result := 0
-  else
-  begin
-    result := Count;
-    if fPosition + result > length(fDataString) then
-      SetLength(fDataString, fPosition + result);
-    MoveFast(Buffer, PByteArray(fDataString)[fPosition], result);
-    inc(fPosition, result);
-  end;
+  result := Count;
+  if result > 0 then
+    if fDataString = '' then // inlined FastSetString()
+    begin
+      pointer(fDataString) := FastNewString(result, CP_UTF8);
+      MoveFast(Buffer, pointer(fDataString)^, result);
+      fPosition := result;
+    end
+    else
+    begin
+      if fPosition + result > length(fDataString) then
+        SetLength(fDataString, fPosition + result); // resize
+      MoveFast(Buffer, PByteArray(fDataString)[fPosition], result);
+      inc(fPosition, result);
+    end;
 end;
 
 procedure TRawByteStringStream.GetAsText(StartPos, Len: PtrInt; var Text: RawUtf8);

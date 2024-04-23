@@ -113,7 +113,8 @@ type
     fLockMax: boolean;
     /// low-level flags used by the state machine about this connection
     fFlags: TPollAsyncConnectionFlags;
-    fInternalFlags: set of (ifWriteIsConnect);
+    /// used e.g. for IOCP
+    fInternalFlags: set of (ifWriteWait);
     /// the current (reusable) read data buffer of this connection
     fRd: TRawByteStringBuffer;
     /// the current (reusable) write data buffer of this connection
@@ -224,6 +225,7 @@ type
     Count: integer;
     Items: array of TPollAsyncConnection;
   end;
+  PPollAsyncConnections = ^TPollAsyncConnections;
 
   /// possible options for low-level TPollAsyncSockets process
   // - as translated from homonymous high-level acoWritePollOnly
@@ -755,6 +757,10 @@ type
     // - will WriteLock/block only on connection add/remove
     property ConnectionLock: TRWLock
       read fConnectionLock;
+    /// direct access to the class instantiated for each connection
+    // - as supplied to the constructor, but may be overriden just after startup
+    property ConnectionClass: TAsyncConnectionClass
+      read fConnectionClass write fConnectionClass;
     /// direct access to the internal AsyncConnectionsThread`s
     property Threads: TAsyncConnectionsThreads
       read fThreads;
@@ -909,7 +915,7 @@ type
     procedure OnAfterWriteSubscribe; override;
   end;
 
-  /// define when the TOnHttpClientAsync callback is executed
+  /// define the TOnHttpClientAsync callback state machine steps
   // - hcsBeforeTlsHandshake allows to change connection.Tls parameters
   // - hcsAfterTlsHandshake can validate the connection.Tls information
   // - hcsBeforeSendHeaders allows to change emitted connection.Http.Head
@@ -928,6 +934,8 @@ type
     hcsHeadersReceived,
     hcsFinished,
     hcsFailed);
+  /// define when the TOnHttpClientAsync callback is to be executed
+  TOnHttpClientStates = set of TOnHttpClientState;
 
   /// callback used e.g. by THttpAsyncClientConnection.OnStateChanged
   // - should return soContinue on success, or anything else to abort/close
@@ -941,6 +949,7 @@ type
   protected
     fOnStateChanged: TOnHttpClientAsync;
     fResponseStatus: integer;
+    fOnStateChange: TOnHttpClientStates;
     fTls: TNetTlsContext;
     procedure AfterCreate; override;
     procedure BeforeDestroy; override;
@@ -1038,9 +1047,11 @@ type
     /// start an async connection to a remote HTTP server using a callback
     // - the aOnStateChanged event will be called after each http.State change
     function StartRequest(const aUrl, aMethod, aHeaders: RawUtf8;
-      const aOnStateChanged: TOnHttpClientAsync; aTls: PNetTlsContext;
-      const aDestFileName: TFileName;
-      out aConnection: THttpAsyncClientConnection): TNetResult;
+      const aOnStateChanged: TOnHttpClientAsync;
+      aTls: PNetTlsContext; const aDestFileName: TFileName;
+      out aConnection: THttpAsyncClientConnection;
+      aOnStateChange: TOnHttpClientStates =
+        [low(TOnHttpClientState) .. high(TOnHttpClientState)]): TNetResult;
     /// called to notify that the main process is about to finish
     procedure Shutdown;
     /// allow to customize the User-Agent used by each client connection
@@ -1059,6 +1070,7 @@ type
     fHeadersMaximumSize: integer;
     fConnectionClass: TAsyncConnectionClass;
     fConnectionsClass: THttpAsyncConnectionsClass;
+    fRequestClass: THttpServerRequestClass;
     fInterning: PRawUtf8InterningSlot;
     fInterningTix: cardinal;
     fExecuteEvent: TSynEvent;
@@ -1086,6 +1098,9 @@ type
     /// access async connections to any remote HTTP server
     // - will reuse the threads pool and sockets polling of this instance
     function Clients: THttpAsyncClientConnections;
+    /// the class used for each THttpServerRequest instances
+    property RequestClass: THttpServerRequestClass
+      read fRequestClass write fRequestClass;
   published
     /// initial capacity of internal per-connection Headers buffer
     // - 2 KB by default is within the mormot.core.fpcx64mm SMALL blocks limit
@@ -2013,7 +2028,7 @@ begin
           begin
             // seen after accept() or from ab -> leverage this thread
             recved := SizeOf(temp);
-            if connection.fSocket.WaitFor(retryms, [neRead]) = [neRead] then
+            if neRead in connection.fSocket.WaitFor(retryms, [neRead, neError]) then
               res := connection.Recv(@temp, recved);
             wf := 'wf ';
           end
@@ -2112,8 +2127,8 @@ begin
     res := soContinue;
     {$ifdef USE_WINIOCP}
     if ((connection.fSecure = nil) or // ensure TLS won't actually block
-        (ifWriteIsConnect in connection.fInternalFlags) or
-        (neWrite in connection.Socket.WaitFor(0, [neWrite]))) and
+        (ifWriteWait in connection.fInternalFlags) or
+        (neWrite in connection.Socket.WaitFor(0, [neWrite, neError]))) and
        connection.WaitLock({writer=}true, {timeout=}20) then
        // allow to wait a little since we are in a single W thread
     {$else}
@@ -2650,7 +2665,8 @@ begin
     exit;
   (aConnection as TAsyncConnection).fLastOperation := fLastOperationMS; // in ms
   with fClients.fWaitingWrite do
-    PtrArrayDelete(Items, aConnection, Safe, @Count);
+    if Count <> 0 then
+      PtrArrayDelete(Items, aConnection, Safe, @Count);
   with fGC[1] do // add to 1st generation
     ObjArrayAdd(Items, aConnection, Safe, @Count);
 end;
@@ -2658,11 +2674,12 @@ end;
 function OneGC(var gen, dst: TPollAsyncConnections; lastms, oldms: cardinal): PtrInt;
 var
   c: TAsyncConnection;
-  i: PtrInt;
+  i, d: PtrInt;
 begin
   result := 0;
   if gen.Count = 0 then
     exit;
+  d := dst.Count;
   oldms := lastms - oldms;
   for i := 0 to gen.Count - 1 do
   begin
@@ -2670,10 +2687,10 @@ begin
     if c.fLastOperation <= oldms then // AddGC() set c.fLastOperation as ms
     begin
       // release after timeout
-      if dst.Count >= length(dst.Items) then
-        SetLength(dst.Items, dst.Count + gen.Count - i);
-      dst.Items[dst.Count] := c;
-      inc(dst.Count);
+      if d >= length(dst.Items) then
+        SetLength(dst.Items, d + gen.Count - i);
+      dst.Items[d] := c;
+      inc(d);
     end
     else
     begin
@@ -2685,6 +2702,7 @@ begin
     end;
   end;
   gen.Count := result; // don't resize gen.Items[] to avoid realloc
+  dst.Count := d;
 end;
 
 procedure TAsyncConnections.DoGC;
@@ -3545,7 +3563,7 @@ begin
       begin
         len := 1;
         touchandgo.Send(@len, len);    // release epoll_wait() in R0 thread
-        ev := touchandgo.WaitFor(100, [neRead]);
+        ev := touchandgo.WaitFor(100, [neRead, neError]);
         DoLog(sllTrace, 'Shutdown epoll WaitFor=%', [byte(ev)], self);
         SleepHiRes(1);
       end;
@@ -3954,7 +3972,6 @@ begin
           result := soClose;
           if not fHttp.ParseResponse(fResponseStatus) then
             break;
-          result := soContinue;
           fHttp.ParseHeaderFinalize;
           result := NotifyStateChange(hcsHeadersReceived);
           if result <> soContinue then
@@ -3991,6 +4008,7 @@ begin
     case fHttp.State of
       hrsConnect:
         begin
+          exclude(fInternalFlags, ifWriteWait);
           // setup any TLS communication once connected (if needed)
           if Assigned(fSecure) then
             try
@@ -4052,7 +4070,8 @@ function THttpAsyncClientConnection.NotifyStateChange(
   state: TOnHttpClientState): TPollAsyncSocketOnReadWrite;
 begin
   result := soContinue;
-  if Assigned(fOnStateChanged) then
+  if Assigned(fOnStateChanged) and
+     (state in fOnStateChange) then
     try
       result := fOnStateChanged(state, self);
     except
@@ -4074,7 +4093,8 @@ end;
 function THttpAsyncClientConnections.StartRequest(
   const aUrl, aMethod, aHeaders: RawUtf8; const aOnStateChanged: TOnHttpClientAsync;
   aTls: PNetTlsContext; const aDestFileName: TFileName;
-  out aConnection: THttpAsyncClientConnection): TNetResult;
+  out aConnection: THttpAsyncClientConnection;
+  aOnStateChange: TOnHttpClientStates): TNetResult;
 var
   uri: TUri;
   addr: TNetAddr;
@@ -4133,8 +4153,8 @@ begin
       aConnection.fHttp.Host := uri.Server
     else
       Append(aConnection.fHttp.Host, [uri.Server, ':', uri.Port]);
+    aConnection.fOnStateChange := aOnStateChange;
     aConnection.fOnStateChanged := aOnStateChanged;
-    aConnection.fInternalFlags := [ifWriteIsConnect];
     // optionally prepare for TLS
     result := nrNotImplemented;
     if (aTls <> nil) or
@@ -4148,6 +4168,7 @@ begin
     end;
     // start async events subscription and connection
     {$ifdef USE_WINIOCP}
+    include(aConnection.fInternalFlags, ifWriteWait);
     if aConnection.fIocp = nil then
       aConnection.fIocp := fOwner.fIocp.Subscribe(aConnection.fSocket, tag);
     if fOwner.fIocp.PrepareNext(aConnection.fIocp, wieConnect) then
@@ -4600,7 +4621,7 @@ begin
   if fRequest = nil then
   begin
     // created once, if not rejected by OnBeforeBody
-    fRequest := THttpServerRequest.Create(
+    fRequest := fServer.fRequestClass.Create(
       fServer, fConnectionID, fReadThread, fRequestFlags, GetConnectionOpaque);
     fRequest.OnAsyncResponse := AsyncResponse;
   end
@@ -4733,6 +4754,7 @@ begin
   end;
 end;
 
+
 { THttpAsyncConnections }
 
 procedure THttpAsyncConnections.Execute;
@@ -4811,6 +4833,8 @@ begin
     fConnectionClass := THttpAsyncServerConnection;
   if fConnectionsClass = nil then
     fConnectionsClass := THttpAsyncConnections;
+  if fRequestClass = nil then
+    fRequestClass := THttpServerRequest; // may be overriden later
   // bind and start the actual thread-pooled connections async server
   fAsync := fConnectionsClass.Create(aPort, OnStart, OnStop,
     fConnectionClass, fProcessName, TSynLog, aco, ServerThreadPoolCount);

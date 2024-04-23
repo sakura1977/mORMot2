@@ -1421,6 +1421,11 @@ begin
   end;
 end;
 
+function ValidHandle(Handle: THandle): boolean;
+begin
+  result := PtrInt(Handle) >= 0; // 0=StdIn is a valid POSIX file descriptor
+end;
+
 function WaitReadPending(fd, timeout: integer): boolean;
 var
   p: TPollFD; // select() limits process to 1024 sockets in POSIX -> use poll()
@@ -1499,9 +1504,7 @@ begin
     if (aCustomOffset and (SystemInfo.dwPageSize - 1)) <> 0 then
       raise EOSException.CreateFmt(
         'DoMap(aCustomOffset=%d) incompatible with dwPageSize=%d',
-        [aCustomOffset, SystemInfo.dwPageSize])
-    else
-      aCustomOffset := aCustomOffset div SystemInfo.dwPageSize;
+        [aCustomOffset, SystemInfo.dwPageSize]);
   fBuf := fpmmap(nil, fBufSize, PROT_READ, MAP_SHARED, fFile, aCustomOffset);
   if fBuf = MAP_FAILED then
   begin
@@ -1591,7 +1594,7 @@ begin
   {$ifdef HASEVENTFD}
   if fFD <> 0 then
   begin
-    LinuxEventFDWrite(fFD, 1); // release the lock
+    LinuxEventFDWrite(fFD, 1); // release the lock or do nothing
     fpClose(fFD);
   end
   else
@@ -2391,7 +2394,7 @@ begin
   fpsysctl(pointer(@mib), 2, @result, @len, nil, 0);
 end;
 
-function fpsysctlhwstr(hwid: cint; var temp: ShortString): pointer;
+function fpsysctlhwstr(hwid: cint; var temp: ShortString): PUtf8Char;
 var
   mib: array[0..1] of cint;
   len: cint;
@@ -2401,6 +2404,19 @@ begin
   FillCharFast(temp, SizeOf(temp), 0); // ShortString as 0-terminated buffer
   len := SizeOf(temp);
   fpsysctl(pointer(@mib), 2, @temp, @len, nil, 0);
+  if temp[0] <> #0 then
+    result := @temp
+  else
+    result := nil;
+end;
+
+function fpsysctlbynamehwstr(name: PAnsiChar; var temp: ShortString): PUtf8Char;
+var
+  len: cint;
+begin
+  FillCharFast(temp, SizeOf(temp), 0); // ShortString as 0-terminated buffer
+  len := SizeOf(temp);
+  FPsysctlbyname(name, @temp, @len, nil, 0);
   if temp[0] <> #0 then
     result := @temp
   else
@@ -3920,7 +3936,7 @@ var
   tp: timespec;
   {$endif OSDARWIN}
   {$ifdef OSBSDDARWIN}
-  temp: ShortString;
+  temp1, temp2: ShortString;
   {$else}
   hw, cache, cpuinfo: PUtf8Char;
   proccpuinfo, release, prod: RawUtf8;
@@ -3950,13 +3966,15 @@ begin
   {$ifdef OSBSDDARWIN}
   // pure FreeBSD NetBSD MacOS branch
   SystemInfo.dwNumberOfProcessors := fpsysctlhwint(HW_NCPU);
-  beg := fpsysctlhwstr(HW_MACHINE, temp);
-  FastSetString(BiosInfoText, beg, StrLen(beg));
+  beg := fpsysctlhwstr(HW_MACHINE, temp1);
   {$ifdef OSDARWIN}
-  if PosExChar(' ', BiosInfoText) = 0 then
-    BiosInfoText := 'Mac ' + BiosInfoText; // from a Parallels VM
+  if strscan(beg, ' ') = nil then // e.g. from a Parallels VM
+    beg := fpsysctlhwstr(HW_MODEL, temp1);
+  modname := fpsysctlbynamehwstr('machdep.cpu.brand_string', temp2);
   {$endif OSDARWIN}
-  modname := fpsysctlhwstr(HW_MODEL, temp);
+  FastSetString(BiosInfoText, beg, StrLen(beg));
+  if modname = nil then
+    modname := fpsysctlhwstr(HW_MODEL, temp2);
   with uts do
     OSVersionText := sysname + '-' + release + ' ' + version;
   {$ifdef OSDARWIN}
@@ -3965,12 +3983,16 @@ begin
   CpuCache[1].Size     := fpsysctlhwint(HW_L1DCACHESIZE);
   CpuCache[2].LineSize := fpsysctlhwint(HW_CACHELINE);
   CpuCache[2].Size     := fpsysctlhwint(HW_L2CACHESIZE);
-  CpuCacheSize := CpuCache[2].Size;
+  CpuCache[3].LineSize := fpsysctlhwint(HW_CACHELINE);
+  CpuCache[3].Size     := fpsysctlhwint(HW_L3CACHESIZE);
+  CpuCacheSize := CpuCache[3].Size;
+  if CpuCacheSize = 0 then
+    CpuCacheSize := CpuCache[2].Size;
   if CpuCacheSize = 0 then
     CpuCacheSize := CpuCache[1].Size;
   if CpuCacheSize <> 0 then
-    CpuCacheText := 'L1=' + _oskb(CpuCache[1].Size) +
-                   ' L2=' + _oskb(CpuCache[2].Size);
+    _fmt('L1=%s L2=%s L3=%s', [_oskb(CpuCache[1].Size),
+      _oskb(CpuCache[2].Size), _oskb(CpuCache[3].Size)], CpuCacheText);
   SystemMemorySize := fpsysctlhwint(HW_MEMSIZE);
   {$else}
   SystemMemorySize := fpsysctlhwint(HW_PHYSMEM);
@@ -3998,14 +4020,16 @@ begin
   else
     // return e.g. 'Raspberry Pi 3 Model B Rev 1.2'
     prod := GetSysFile('/proc/device-tree/model');
-  FindNameValue(StringFromFile('/etc/os-release'), 'PRETTY_NAME=', release);
+  FindNameValue(StringFromFile('/etc/os-release', true),
+    'PRETTY_NAME=', release);
   if (release <> '') and
      (release[1] = '"') then
     release := copy(release, 2, length(release) - 2);
   TrimSelf(release);
   if release = '' then
   begin
-    FindNameValue(StringFromFile('/etc/lsb-release'), 'DISTRIB_DESCRIPTION=', release);
+    FindNameValue(StringFromFile('/etc/lsb-release', true),
+      'DISTRIB_DESCRIPTION=', release);
     if (release <> '') and
        (release[1] = '"') then
       release := copy(release, 2, length(release) - 2);
@@ -4018,7 +4042,7 @@ begin
        (FindNext(SR) = 0) then
       release := SR.Name;
     release := split(release, '-');
-    dist := split(StringFromFile('/etc/' + SR.Name), #10);
+    dist := split(StringFromFile('/etc/' + SR.Name, true), #10);
     if (dist <> '') and
        (PosExChar('=', dist) = 0) and
        (PosExChar(' ', dist) > 0) then
@@ -4140,7 +4164,7 @@ begin
   {$endif OSBSDDARWIN}
   SystemInfo.dwPageSize := getpagesize; // call libc API
   if CpuCacheSize <> 0 then
-    CpuInfoText := _oskb(CpuCacheSize) + ' cache';
+    _fmt('[%s]', [_oskb(CpuCacheSize)], CpuInfoText);
   if CpuSockets = 0 then
     CpuSockets := 1;
   SystemInfo.uts.release := uts.Release;

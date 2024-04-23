@@ -91,9 +91,12 @@ type
   public
     /// reintroduced constructor with TNetResult information
     constructor Create(msg: string; const args: array of const;
-      error: TNetResult = nrOK); reintroduce;
+      error: TNetResult = nrOK; errnumber: system.PInteger = nil); reintroduce;
+    /// reintroduced constructor with NetLastError call
+    constructor CreateLastError(const msg: string; const args: array of const);
     /// raise ENetSock if res is not nrOK or nrRetry
-    class procedure Check(res: TNetResult; const Context: ShortString);
+    class procedure Check(res: TNetResult; const context: ShortString;
+      errnumber: system.PInteger = nil);
     /// call NetLastError and raise ENetSock if not nrOK nor nrRetry
     class procedure CheckLastError(const Context: ShortString;
       ForceRaise: boolean = false; AnotherNonFatal: integer = 0);
@@ -279,6 +282,8 @@ type
     /// retrieve the peer address associated on this connected socket
     function GetPeer(out addr: TNetAddr): TNetResult;
     /// change the socket state to non-blocking
+    // - note that on Windows, there is no easy way to check the non-blocking
+    // state of the socket (WSAIoctl has been deprecated for this)
     function MakeAsync: TNetResult;
     /// change the socket state to blocking
     function MakeBlocking: TNetResult;
@@ -306,6 +311,10 @@ type
     /// call send in loop until the whole data buffer is sent
     function SendAll(Buf: PByte; len: integer;
       terminated: PTerminated = nil): TNetResult;
+    /// check if the socket is not closed nor broken
+    // - i.e. check if it is likely to be accept Send() and Recv() calls
+    // - calls WaitFor(neRead) then Recv() to check e.g. WSACONNRESET on Windows
+    function Available(loerr: system.PInteger = nil): boolean;
     /// finalize a socket, calling Close after shutdown() if needed
     function ShutdownAndClose(rdwr: boolean): TNetResult;
     /// close the socket - consider ShutdownAndClose() for clean closing
@@ -425,6 +434,9 @@ var
 /// returns the plain English text of a network result
 // - e.g. ToText(nrNotFound)='Not Found'
 function ToText(res: TNetResult): PShortString; overload;
+
+/// convert a WaitFor() result set into a regular TNetResult enumerate
+function NetEventsToNetResult(ev: TNetEvents): TNetResult;
 
 
 { ******************** Mac and IP Addresses Support }
@@ -764,10 +776,10 @@ type
   // $   TLS.IgnoreCertificateErrors := true;
   // $   TLS.CipherList := 'ECDHE-RSA-AES256-GCM-SHA384';
   // $   ConnectUri('https://synopse.info');
-  // $   writeln(TLS.PeerInfo);
-  // $   writeln(TLS.CipherName);
-  // $   writeln(Get('/forum/', 1000), ' len=', ContentLength);
-  // $   writeln(Get('/fossil/wiki/Synopse+OpenSource', 1000));
+  // $   ConsoleWrite(TLS.PeerInfo);
+  // $   ConsoleWrite(TLS.CipherName);
+  // $   ConsoleWrite([Get('/forum/', 1000), ' len=', ContentLength]);
+  // $   ConsoleWrite(Get('/fossil/wiki/Synopse+OpenSource', 1000));
   // $ finally
   // $   Free;
   // $ end;
@@ -1515,8 +1527,10 @@ type
   /// identify the incoming data availability in TCrtSocket.SockReceivePending
   TCrtSocketPending = (
     cspSocketError,
+    cspSocketClosed,
     cspNoData,
-    cspDataAvailable);
+    cspDataAvailable,
+    cspDataAvailableOnClosedSocket);
 
   TCrtSocketTlsAfter = (
     cstaConnect,
@@ -1720,9 +1734,10 @@ type
     // - raise ENetSock exception on socket error
     function SockRecv(Length: integer): RawByteString; overload;
     /// check if there are some pending bytes in the input sockets API buffer
-    // - returns cspSocketError if the connection is broken or closed
+    // - returns cspSocketError/cspSocketClosed if the connection is broken/closed
     // - will first check for any INetTls.ReceivePending bytes in the TLS buffers
-    // - warning: on Windows, may wait a little less than TimeOutMS (select bug)
+    // - warning: on Windows, may wait for the next system timer interrupt, so
+    // actual wait may be a less than TimeOutMS if < 16 (select bug/feature)
     function SockReceivePending(TimeOutMS: integer;
       loerr: system.PInteger = nil): TCrtSocketPending;
     /// returns the socket input stream as a string
@@ -1963,6 +1978,7 @@ begin
     WSAETIMEDOUT,
     WSAEWOULDBLOCK,
     {$endif OSWINDOWS}
+    WSAEINPROGRESS,
     WSATRY_AGAIN:
       result := nrRetry;
     WSAEINVAL:
@@ -2009,35 +2025,64 @@ begin
   result := @_NR[res]; // no mormot.core.rtti.pas involved
 end;
 
+function NetEventsToNetResult(ev: TNetEvents): TNetResult;
+begin
+  if ev * [neRead, neWrite] <> [] then
+    result := nrOk
+  else if ev = [] then
+    result := nrRetry
+  else if neClosed in ev then
+    result := nrClosed
+  else
+    result := nrFatalError;
+end;
+
 
 { ENetSock }
 
 constructor ENetSock.Create(msg: string; const args: array of const;
-  error: TNetResult);
+  error: TNetResult; errnumber: system.PInteger);
 begin
-  fLastError := error;
   if error <> nrOK then
+  begin
+    fLastError := error;
     msg := format('%s [%s - #%d]', [msg, _NR[error], ord(error)]);
+    if errnumber <> nil then
+      msg := format('%s sys=%d (%s)', [msg, errnumber^, GetErrorText(errnumber^)]);
+  end;
   inherited CreateFmt(msg, args);
 end;
 
-class procedure ENetSock.Check(res: TNetResult; const Context: ShortString);
+constructor ENetSock.CreateLastError(const msg: string; const args: array of const);
+var
+  res: TNetResult;
+  err: integer;
+begin
+  res := NetLastError(NO_ERROR, @err);
+  if res in [nrOK, nrRetry] then
+     res := nrUnknownError;
+  Create(msg, args, res, @err);
+end;
+
+class procedure ENetSock.Check(res: TNetResult; const context: ShortString;
+  errnumber: system.PInteger);
 begin
   if (res <> nrOK) and
      (res <> nrRetry) then
-    raise Create('%s failed', [Context], res);
+    raise Create('%s failed', [context], res, errnumber);
 end;
 
 class procedure ENetSock.CheckLastError(const Context: ShortString;
   ForceRaise: boolean; AnotherNonFatal: integer);
 var
   res: TNetResult;
+  err: integer;
 begin
-  res := NetLastError(AnotherNonFatal);
+  res := NetLastError(AnotherNonFatal, @err);
   if ForceRaise and
      (res in [nrOK, nrRetry]) then
     res := nrUnknownError;
-  Check(res, Context);
+  Check(res, Context, @err);
 end;
 
 
@@ -2386,7 +2431,6 @@ end;
 function TNetAddr.SocketConnect(socket: TNetSocket; ms: integer): TNetResult;
 var
   tix: Int64;
-  status: TNetEvents;
 begin
   if ms < 20 then
     tix := 0
@@ -2400,15 +2444,8 @@ begin
     exit; // don't wait now
   socket.MakeBlocking;
   repeat
-    status := socket.WaitFor(20, [neWrite, neError, neClosed]);
-    result := nrOK;
-    if status = [neWrite] then
-      exit;
-    result := nrFatalError;
-    if neError in status then
-      exit;
-    result := nrClosed;
-    if neClosed in status then
+    result := NetEventsToNetResult(socket.WaitFor(20, [neWrite, neError]));
+    if result <> nrRetry then
       exit;
     // typically, status = [] for TRY_AGAIN result
     SleepHiRes(1);
@@ -2522,7 +2559,7 @@ begin
   repeat
     for i := 0 to length(result) - 1 do
       if (sock[i] <> nil) and
-         (sock[i].WaitFor(1, [neWrite]) = [neWrite]) then
+         (neWrite in sock[i].WaitFor(1, [neWrite, neError])) then
       begin
         if sockets = nil then
           sock[i].ShutdownAndClose(false)
@@ -2668,16 +2705,11 @@ end;
 
 procedure TNetSocketWrap.SetOpt(prot, name: integer;
   value: pointer; valuelen: integer);
-var
-  err: TNetResult;
-  low: integer;
 begin
   if @self = nil then
     raise ENetSock.Create('SetOptions(%d,%d) with no socket', [prot, name]);
-  if setsockopt(TSocket(@self), prot, name, value, valuelen) = NO_ERROR then
-    exit;
-  err := NetLastError(NO_ERROR, @low);
-  raise ENetSock.Create('SetOptions(%d,%d) sockerr=%d', [prot, name, low], err);
+  if setsockopt(TSocket(@self), prot, name, value, valuelen) <> NO_ERROR then
+    raise ENetSock.CreateLastError('SetOptions(%d,%d)', [prot, name]);
 end;
 
 function TNetSocketWrap.GetOptInt(prot, name: integer): integer;
@@ -2689,7 +2721,7 @@ begin
   result := 0;
   len := SizeOf(result);
   if getsockopt(TSocket(@self), prot, name, @result, @len) <> NO_ERROR then
-    raise ENetSock.Create('GetOptInt(%d,%d)', [prot, name], NetLastError);
+    raise ENetSock.CreateLastError('GetOptInt(%d,%d)', [prot, name]);
 end;
 
 procedure TNetSocketWrap.SetKeepAlive(keepalive: boolean);
@@ -2911,16 +2943,14 @@ end;
 function TNetSocketWrap.RecvWait(ms: integer;
   out data: RawByteString; terminated: PTerminated): TNetResult;
 var
-  events: TNetEvents;
   read: integer;
   tmp: array[word] of byte; // use a buffer to avoid RecvPending() syscall
 begin
-  events := WaitFor(ms, [neRead]);
-  if (neError in events) or
-     (Assigned(terminated) and
-      terminated^) then
+  result := NetEventsToNetResult(WaitFor(ms, [neRead, neError]));
+  if Assigned(terminated) and
+     terminated^ then
     result := nrClosed
-  else if neRead in events then
+  else if result = nrOk then
   begin
     read := SizeOf(tmp);
     result := Recv(@tmp, read);
@@ -2932,9 +2962,7 @@ begin
         result := nrUnknownError
       else
         FastSetRawByteString(data, @tmp, read);
-  end
-  else
-    result := nrRetry;
+  end;
 end;
 
 function TNetSocketWrap.SendAll(Buf: PByte; len: integer;
@@ -2969,10 +2997,12 @@ var
   received: integer;
 begin
   repeat
-    if (WaitFor(ms, [neRead]) <> [neRead]) or
-       (Assigned(terminated) and
-        terminated^) then
-      break;
+    result := NetEventsToNetResult(WaitFor(ms, [neRead, neError]));
+    if Assigned(terminated) and
+       terminated^ then
+      break
+    else if result <> nrOK then
+      exit;
     received := len;
     result := Recv(Buf, received);
     if Assigned(terminated) and
@@ -2990,6 +3020,27 @@ begin
   until Assigned(terminated) and
         terminated^;
   result := nrClosed;
+end;
+
+function TNetSocketWrap.Available(loerr: system.PInteger): boolean;
+var
+  events: TNetEvents;
+  dummy: integer;
+begin
+  result := true;
+  events := WaitFor(0, [neRead, neError], loerr); // select() or poll()
+  if events = [] then
+    exit; // the socket seems stable with no pending input
+  if neRead in events then
+    // - on Windows, may be because of WSACONNRESET (nrClosed)
+    // - on POSIX, may be ESysEINPROGRESS (nrRetry) just after connect
+    // - no need to MakeAsync: recv() should not block after neRead
+    // - may be [neRead, neClosed] on gracefully closed HTTP/1.0 response
+    // - expected recv() result: -1=error, 0=closed, 1=success
+    if (mormot.net.sock.recv(TSocket(@self), @dummy, 1, MSG_PEEK) = 1) or
+       (NetLastError(NO_ERROR, loerr) = nrRetry) then
+      exit;
+  result := false; // e.g. neError or neClosed with no neRead
 end;
 
 function TNetSocketWrap.ShutdownAndClose(rdwr: boolean): TNetResult;
@@ -5433,7 +5484,7 @@ begin
           break;
         res := InputSock(PTextRec(SockIn)^);
         if res < 0 then
-          ENetSock.CheckLastError('SockInRead', {forceraise=}true);
+          raise ENetSock.CreateLastError('%.SockInRead', [ClassNameShort(self)^]);
         // loop until Timeout
       until Timeout = 0;
   // direct receiving of the remaining bytes from socket
@@ -5476,7 +5527,8 @@ begin
     exit;
   // no data in SockIn^.Buffer, so try if some pending at socket/TLS level
   case SockReceivePending(aTimeOutMS) of // check both TLS and socket levels
-    cspDataAvailable:
+    cspDataAvailable,
+    cspDataAvailableOnClosedSocket:
       begin
         backup := fTimeOut;
         fTimeOut := 0; // not blocking call to fill SockIn buffer
@@ -5491,7 +5543,8 @@ begin
           fTimeOut := backup;
         end;
       end;
-    cspSocketError:
+    cspSocketError,
+    cspSocketClosed:
       result := -1; // indicates broken/closed socket
   end; // cspNoData will leave result=0
 end;
@@ -5608,8 +5661,8 @@ begin
     if TrySndLow(pointer(fSndBuf), fSndBufLen) then
       fSndBufLen := 0
     else
-      raise ENetSock.Create('%s.SockSendFlush(%s) len=%d',
-        [ClassNameShort(self)^, fServer, fSndBufLen], NetLastError);
+      raise ENetSock.CreateLastError('%s.SockSendFlush(%s) len=%d',
+        [ClassNameShort(self)^, fServer, fSndBufLen]);
   if body > 0 then
     SndLow(pointer(aBody), body); // direct sending of biggest packets
 end;
@@ -5627,9 +5680,9 @@ begin
     if rd = 0 then
       break;
     if not TrySndLow(pointer(chunk), rd) then
-      raise ENetSock.Create('%s.SockSendStream(%s,%d) rd=%d pos=%d to %s:%s',
-        [ClassNameShort(self)^, ClassNameShort(Stream)^, ChunkSize,
-         rd, pos, fServer, fPort], NetLastError);
+      raise ENetSock.CreateLastError(
+        '%s.SockSendStream(%s,%d) rd=%d pos=%d to %s:%s', [ClassNameShort(self)^,
+        ClassNameShort(Stream)^, ChunkSize, rd, pos, fServer, fPort]);
     inc(pos, rd);
   until false;
 end;
@@ -5641,8 +5694,8 @@ begin
   read := Length;
   if not TrySockRecv(Buffer, read, {StopBeforeLength=}false) or
      (Length <> read) then
-    raise ENetSock.Create('%s.SockRecv(%d) read=%d',
-      [ClassNameShort(self)^, Length, read], NetLastError);
+    raise ENetSock.CreateLastError('%s.SockRecv(%d) read=%d',
+      [ClassNameShort(self)^, Length, read]);
 end;
 
 function TCrtSocket.SockRecv(Length: integer): RawByteString;
@@ -5666,7 +5719,7 @@ begin
       result := cspDataAvailable; // some data is available in the TLS buffers
       exit;
     end;
-    // check if something is available at socket level (even for TLS)
+    // select() or poll() to check for incoming data on socket (even for TLS)
     events := fSock.WaitFor(TimeOutMS, [neRead, neError], loerr);
   end
   else
@@ -5674,7 +5727,12 @@ begin
   if neError in events then
     result := cspSocketError
   else if neRead in events then
-    result := cspDataAvailable
+    if neClosed in events then
+      result := cspDataAvailableOnClosedSocket // read+closed may coexist
+    else
+      result := cspDataAvailable
+  else if neClosed in events then
+    result := cspSocketClosed
   else
     result := cspNoData;
 end;
@@ -5737,7 +5795,7 @@ begin
       if (fSock.RecvPending(pending) = nrOk) and
          (pending > 0) then
         continue; // no need to call WaitFor()
-      events := fSock.WaitFor(TimeOut, [neRead]);
+      events := fSock.WaitFor(TimeOut, [neRead, neError]); // select() or poll()
       if neError in events then
       begin
         Close; // connection broken or socket closed gracefully
@@ -5805,7 +5863,7 @@ begin
     readln(SockIn^, Line); // use RTL over SockIn^ buffer
     err := ioresult;
     if err <> 0 then
-      raise ENetSock.Create('%s.SockRecvLn error %d after %d chars',
+      raise ENetSock.Create('%s.SockRecvLn ioresult=%d after %d chars',
         [ClassNameShort(self)^, err, Length(Line)]);
     {$I+}
   end
@@ -5816,16 +5874,16 @@ end;
 procedure TCrtSocket.SockRecvLn;
 var
   c: AnsiChar;
-  Error: integer;
+  err: integer;
 begin
   if SockIn <> nil then
   begin
     {$I-}
     readln(SockIn^);
-    Error := ioresult;
-    if Error <> 0 then
-      raise ENetSock.Create('%s.SockRecvLn error %d',
-        [ClassNameShort(self)^, Error]);
+    err := ioresult;
+    if err <> 0 then
+      raise ENetSock.Create('%s.SockRecvLn ioresult=%d',
+        [ClassNameShort(self)^, err]);
     {$I+}
   end
   else
@@ -5837,8 +5895,8 @@ end;
 procedure TCrtSocket.SndLow(P: pointer; Len: integer);
 begin
   if not TrySndLow(P, Len) then
-    raise ENetSock.Create('%s.SndLow(%s) len=%d',
-      [ClassNameShort(self)^, fServer, Len], NetLastError);
+    raise ENetSock.CreateLastError('%s.SndLow(%s) len=%d',
+      [ClassNameShort(self)^, fServer, Len]);
 end;
 
 procedure TCrtSocket.SndLow(const Data: RawByteString);
@@ -5874,7 +5932,7 @@ begin
     else if (res <> nrOK) and
             (res <> nrRetry) then
       exit; // fatal socket error
-    events := fSock.WaitFor(TimeOut, [neWrite]);
+    events := fSock.WaitFor(TimeOut, [neWrite, neError]); // select() or poll()
     if (neError in events) or
        not (neWrite in events) then // identify timeout as error
       exit;
