@@ -2955,7 +2955,7 @@ type
     /// force a random seed of the generator from current system state
     // - as executed by the Next method at thread startup, and after 2^32 values
     // - calls XorEntropy(), so RdRand32/Rdtsc opcodes on Intel/AMD CPUs
-    procedure Seed(entropy: PByteArray; entropylen: PtrInt);
+    procedure Seed(entropy: PByteArray = nil; entropylen: PtrInt = 0);
     /// force a well-defined seed of the generator from a fixed initial point
     // - to be called before Next/Fill to generate the very same output
     // - will generate up to 16GB of predictable output, then switch to random
@@ -6457,13 +6457,12 @@ var
   last: integer;
 begin
   last := high(Values);
-  if FastFindInt64Sorted(pointer(Values), last, Value) < 0 then
-  begin
-    inc(last);
-    SetLength(Values, last + 1);
-    Values[last] := Value;
-    QuickSortInt64(pointer(Values), 0, last);
-  end;
+  if FastFindInt64Sorted(pointer(Values), last, Value) >= 0 then
+    exit; // found
+  inc(last);
+  SetLength(Values, last + 1);
+  Values[last] := Value;
+  QuickSortInt64(pointer(Values), 0, last);
 end;
 
 function AddInt64Once(var Values: TInt64DynArray; Value: Int64): PtrInt;
@@ -6471,6 +6470,19 @@ begin
   result := Int64ScanIndex(pointer(Values), Length(Values), Value);
   if result < 0 then
     result := AddInt64(Values, Value);
+end;
+
+procedure MakeUniqueArray(old: PDynArrayRec; ItemSizeShl: TDALen);
+var
+  new: PDynArrayRec;
+  n: PtrInt;
+begin
+  dec(old);
+  dec(old^.refCnt);
+  n := (old^.length shl ItemSizeShl) + SizeOf(new^);
+  new := AllocMem(n);
+  MoveFast(old^, new^, n); // copy header + all ordinal values
+  new^.refCnt := 1;
 end;
 
 procedure DeleteWord(var Values: TWordDynArray; Index: PtrInt);
@@ -6484,7 +6496,7 @@ begin
   if n > Index then
   begin
     if PDACnt(PAnsiChar(Values) - _DACNT)^ > 1 then
-      Values := copy(Values); // make unique
+      MakeUniqueArray(pointer(Values), {shl=}1);
     MoveFast(Values[Index + 1], Values[Index], (n - Index) * SizeOf(Word));
   end;
   SetLength(Values, n);
@@ -6501,7 +6513,7 @@ begin
   if n > Index then
   begin
     if PDACnt(PAnsiChar(Values) - _DACNT)^ > 1 then
-      Values := copy(Values); // make unique
+      MakeUniqueArray(pointer(Values), {shl=}2);
     MoveFast(Values[Index + 1], Values[Index], (n - Index) * SizeOf(integer));
   end;
   SetLength(Values, n);
@@ -6518,7 +6530,7 @@ begin
   if n > 0 then
   begin
     if PDACnt(PAnsiChar(Values) - _DACNT)^ > 1 then
-      Values := copy(Values); // make unique
+      MakeUniqueArray(pointer(Values), {shl=}2);
     MoveFast(Values[Index + 1], Values[Index], n * SizeOf(integer));
   end;
   dec(ValuesCount);
@@ -6535,7 +6547,7 @@ begin
   if n > Index then
   begin
     if PDACnt(PAnsiChar(Values) - _DACNT)^ > 1 then
-      Values := copy(Values); // make unique
+      MakeUniqueArray(pointer(Values), {shl=}3);
     MoveFast(Values[Index + 1], Values[Index], (n - Index) * SizeOf(Int64));
   end;
   SetLength(Values, n);
@@ -6552,7 +6564,7 @@ begin
   if n > 0 then
   begin
     if PDACnt(PAnsiChar(Values) - _DACNT)^ > 1 then
-      Values := copy(Values); // make unique
+      MakeUniqueArray(pointer(Values), {shl=}3);
     MoveFast(Values[Index + 1], Values[Index], n * SizeOf(Int64));
   end;
   dec(ValuesCount);
@@ -8992,7 +9004,7 @@ end;
 function TLecuyer.Next: cardinal;
 begin
   if seedcount = 0 then
-    Seed(nil, 0) // seed at startup, and after 2^32 of output data = 16 GB
+    Seed // seed at startup, and after 2^32 of output data = 16 GB
   else
     inc(seedcount);
   result := RawNext;
@@ -9026,7 +9038,7 @@ begin
   inc(seedcount, cardinal(bytes) shr 2);
   if (c = 0) or           // first use = seed at startup
      (c > seedcount) then // check for 32-bit overflow, i.e. after 16 GB
-    Seed(nil, 0);
+    Seed;
   repeat
     if bytes < 4 then
       break;
@@ -12027,7 +12039,7 @@ begin
       soEnd:
         result := size - Offset;
     else
-      result := fPosition + Offset;
+      result := fPosition + Offset; // soCurrent
     end;
     if result > size then
       result := size
