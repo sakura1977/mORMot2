@@ -4349,7 +4349,7 @@ begin
     if (rtticustom = nil) or
        (vmt <> rtticustom) then
       // TSynLog.Family / TSynLog.Add expect TRttiCustom in the first slot
-      raise ESynLogException.CreateUtf8(
+      ESynLogException.RaiseUtf8(
         '%.FamilyCreate: vmtAutoTable=% not %', [self, vmt, rtticustom]);
     {$endif NOPATCHVMT}
     Rtti.RegisterSafe.Lock;
@@ -4360,7 +4360,7 @@ begin
           // registered by a background thread
           exit
         else
-          raise ESynLogException.CreateUtf8( // paranoid
+          ESynLogException.RaiseUtf8( // paranoid
             '%.FamilyCreate: PrivateSlot=%', [self, result]);
       // create the TSynLogFamily instance associated with this TSynLog class
       result := TSynLogFamily.Create(self); // stored in SynLogFamily[]
@@ -5036,9 +5036,9 @@ begin
       LogHeader(sllInfo);
       fWriter.AddShort('SetThreadName ');
       fWriter.AddPointer(PtrUInt(fThreadID)); // as hexadecimal
-      fWriter.Add(' ');
-      fWriter.AddQ(PtrUInt(fThreadID));       // as decimal
-      fWriter.Add('=');
+      fWriter.AddDirect(' ');
+      fWriter.AddU(PtrUInt(fThreadID));       // as decimal
+      fWriter.AddDirect('=');
       fWriter.AddString(n);
       LogTrailer(sllInfo);
     finally
@@ -5101,14 +5101,14 @@ begin
     if logRemoteDisable in fInternalFlags then
     begin
       mormot.core.os.LeaveCriticalSection(GlobalThreadLock);
-      raise ESynLogException.CreateUtf8('Nested %.DisableRotemoteLog', [self]);
+      ESynLogException.RaiseUtf8('Nested %.DisableRotemoteLog', [self]);
     end;
     include(fInternalFlags, logRemoteDisable);
   end
   else
   begin
     if not (logRemoteDisable in fInternalFlags) then
-      raise ESynLogException.CreateUtf8('Missing %.DisableRotemoteLog(true)', [self]);
+      ESynLogException.RaiseUtf8('Missing %.DisableRotemoteLog(true)', [self]);
     // DisableRemoteLog(false) -> add to events, and quit the global mutex
     exclude(fInternalFlags, logRemoteDisable);
     fWriterEcho.EchoAdd(fFamily.fEchoRemoteEvent);
@@ -5250,7 +5250,7 @@ var
       fWriter.AddShorter(LOG_LEVEL_TEXT[sllNewRun]);
     end
     else
-      fWriter.Add(#10);
+      fWriter.AddDirect(#10);
   end;
 
 begin
@@ -5391,7 +5391,7 @@ var
   msg: PUtf8Char;
 {$endif OSWINDOWS}
 begin
-  fWriter.Add(' ', '"');
+  fWriter.AddDirect(' ', '"');
   {$ifdef OSWINDOWS}
   msg := WinErrorConstant(Error);
   if msg <> nil then
@@ -5403,8 +5403,8 @@ begin
   {$endif OSWINDOWS}
     fWriter.AddOnSameLine(pointer(GetErrorText(Error)));
   fWriter.AddShorter('" (');
-  fWriter.Add(Error);
-  fWriter.Add(')', ' ');
+  fWriter.AddU(Error);
+  fWriter.AddDirect(')', ' ');
 end;
 
 procedure TSynLog.LogCurrentTime;
@@ -5422,7 +5422,7 @@ begin
     time.FromNow(fFamily.LocalTimestamp);
     time.AddLogTime(fWriter);
     if fFamily.ZonedTimestamp then
-      fWriter.Add('Z');
+      fWriter.AddDirect('Z');
   end;
 end;
 
@@ -5530,9 +5530,9 @@ begin
         fWriter.AddShorter(LOG_LEVEL_TEXT[sllInfo]);
         fWriter.AddShort('SetThreadName ');
         fWriter.AddPointer(PtrUInt(c^.ID));
-        fWriter.Add(' ');
-        fWriter.AddQ(PtrUInt(c^.ID));
-        fWriter.Add('=');
+        fWriter.AddDirect(' ');
+        fWriter.AddU(PtrUInt(c^.ID));
+        fWriter.AddDirect('=');
         fWriter.AddString(c^.ThreadName);
         fWriterEcho.AddEndOfLine(sllInfo);
       end;
@@ -5635,7 +5635,7 @@ begin
       fWriter.AddInstancePointer(Instance, ' ', fFamily.WithUnitName,
         fFamily.WithInstancePointer);
     fWriter.AddOnSameLine(pointer(aName));
-    fWriter.Add('=');
+    fWriter.AddDirect('=');
     fWriter.AddTypedJson(@aValue, aTypeInfo, [woDontStoreVoid]);
     LogTrailer(Level);
   finally
@@ -5850,7 +5850,7 @@ begin
   depth := fFamily.StackTraceLevel;
   if depth <> 0 then
     try
-      fWriter.Add(' ');
+      fWriter.AddDirect(' ');
       for i := 0 to CaptureBacktrace(2, length(frames), @frames[0]) - 1 do
         if (i = 0) or
            (frames[i] <> frames[i - 1]) then
@@ -5968,7 +5968,7 @@ begin
       n := RtlCaptureStackBackTrace(2, fFamily.StackTraceLevel, @BackTrace, nil);
       if n <> 0 then
       begin
-        fWriter.Add(' ');
+        fWriter.AddDirect(' ');
         for i := 0 to n - 1 do
           if TDebugFile.Log(fWriter, BackTrace[i], false) then
             inc(logged);
@@ -6129,7 +6129,7 @@ begin
       if DefaultSynLogExceptionToStr(log.fWriter, Ctxt) then
         goto fin;
 adr:  // regular exception context log with its stack trace
-      log.fWriter.Add(' ', '['); // fThreadContext^.ThreadName may be ''
+      log.fWriter.AddDirect(' ', '['); // fThreadContext^.ThreadName may be ''
       log.fWriter.AddShort(CurrentThreadNameShort^);
       log.fWriter.AddShorter('] at ');
       try

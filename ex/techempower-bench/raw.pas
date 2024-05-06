@@ -93,7 +93,7 @@ type
     fModel: TOrmModel;
     fStore: TRestServerDB;
     fTemplate: TSynMustache;
-    fCachedWorldsTable: POrmCacheTable;
+    fOrmCache: POrmCacheTable;
     fRawCache: TOrmWorlds;
     {$ifdef USE_SQLITE3}
     fDbPool: TSqlDBSQLite3ConnectionProperties;
@@ -104,8 +104,7 @@ type
     procedure OnAsyncFortunes(Statement: TSqlDBPostgresAsyncStatement; Context: TObject);
     {$endif USE_SQLITE3}
     // pipelined reading as used by /rawqueries and /rawupdates
-    function GetRawRandomWorlds(cnt: PtrInt;
-      out res: TWorlds; out gen: PLecuyer): boolean;
+    function GetRawRandomWorlds(cnt: PtrInt; out res: TWorlds): boolean;
     function ComputeRawFortunes(stmt: TSqlDBStatement; ctxt: THttpServerRequest): integer;
   public
     constructor Create(threadCount: integer; flags: THttpServerOptions;
@@ -214,10 +213,10 @@ begin
   {$else}
   fStore.Server.CreateMissingTables; // create SQlite3 virtual tables
   {$endif USE_SQLITE3}
-  // pre-fill the ORM
+  // ORM and raw caches warmup
   if fStore.Server.Cache.SetCache(TOrmCachedWorld) then
     fStore.Server.Cache.FillFromQuery(TOrmCachedWorld, '', []);
-  fCachedWorldsTable := fStore.Orm.Cache.Table(TOrmCachedWorld);
+  fOrmCache := fStore.Orm.Cache.Table(TOrmCachedWorld);
   fStore.Orm.RetrieveListObjArray(fRawCache, TOrmCachedWorld, 'order by id', []);
   // initialize the mustache template for /fortunes
   fTemplate := TSynMustache.Parse(FORTUNES_TPL);
@@ -313,7 +312,7 @@ end;
 // query DB world table for /rawqueries and /rawupdates endpoints
 
 function TRawAsyncServer.GetRawRandomWorlds(cnt: PtrInt;
-  out res: TWorlds; out gen: PLecuyer): boolean;
+  out res: TWorlds): boolean;
 var
   conn: TSqlDBConnection;
   stmt: ISqlDBStatement;
@@ -321,6 +320,7 @@ var
   pConn: TSqlDBPostgresConnection absolute conn;
   pStmt: TSqlDBPostgresStatement;
   {$endif USE_SQLITE3}
+  gen: PLecuyer;
   i: PtrInt;
 begin
   result := false;
@@ -458,7 +458,7 @@ begin
   SetLength(res, GetQueriesParamValue(ctxt, 'COUNT='));
   gen := Lecuyer;
   for i := 0 to length(res) - 1 do
-    res[i] := fCachedWorldsTable.Get(ComputeRandomWorld(gen));
+    res[i] := fOrmCache.Get(ComputeRandomWorld(gen));
   ctxt.SetOutJson(@res, TypeInfo(TOrmWorlds));
   result := HTTP_SUCCESS;
 end;
@@ -545,9 +545,8 @@ end;
 function TRawAsyncServer.rawqueries(ctxt: THttpServerRequest): cardinal;
 var
   res: TWorlds;
-  gen: PLecuyer;
 begin
-  if not GetRawRandomWorlds(GetQueriesParamValue(ctxt), res, gen) then
+  if not GetRawRandomWorlds(GetQueriesParamValue(ctxt), res) then
     exit(HTTP_SERVERERROR);
   ctxt.SetOutJson(@res, TypeInfo(TWorlds));
   result := HTTP_SUCCESS;
@@ -623,9 +622,10 @@ begin
   result := HTTP_SERVERERROR;
   conn := fDbPool.ThreadSafeConnection;
   cnt := getQueriesParamValue(ctxt);
-  if not getRawRandomWorlds(cnt, res, gen) then
+  if not getRawRandomWorlds(cnt, res) then
     exit;
   // generate new randoms
+  gen := Lecuyer;
   for i := 0 to cnt - 1 do
     res[i].randomNumber := ComputeRandomWorld(gen);
   if cnt > 20 then
@@ -749,8 +749,8 @@ begin
   n := count;
   gen := Lecuyer;
   repeat
-    dec(n);
     select.Bind(1, ComputeRandomWorld(gen));
+    dec(n);
     if n = 0 then // last item should include asoForceConnectionFlush (if set)
       opt := ASYNC_OPT;
     select.ExecuteAsync(ctxt, OnQueries, @opt);

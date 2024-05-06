@@ -1633,7 +1633,7 @@ begin
   else if IsZero(Fields) then
     exit;
   if MaxLength > MAX_SQLFIELDS then
-    raise ESynDBException.CreateUtf8('FieldBitsToIndex(MaxLength=%)', [MaxLength]);
+    ESynDBException.RaiseUtf8('FieldBitsToIndex(MaxLength=%)', [MaxLength]);
   n := FieldBitCount(Fields, MaxLength);
   if n = MaxLength then
   begin
@@ -2473,7 +2473,7 @@ begin
         if ValuesInlinedMax > 1 then
           AddShorter('=:(')
         else
-          Add('=');
+          AddDirect('=');
         AddQuotedStr(pointer(Values[0]), length(Values[0]), '''');
         if ValuesInlinedMax > 1 then
           AddShorter('):');
@@ -2484,15 +2484,14 @@ begin
         for i := 0 to n - 1 do
         begin
           if ValuesInlinedMax > n then
-            Add(':', '(');
+            AddDirect(':', '(');
           AddQuotedStr(pointer(Values[i]), length(Values[i]), '''');
           if ValuesInlinedMax > n then
             AddShorter('):,')
           else
             AddComma;
         end;
-        CancelLastComma;
-        Add(')');
+        CancelLastComma(')');
       end;
       AddString(Suffix);
       SetText(result);
@@ -2519,7 +2518,7 @@ begin
         if ValuesInlinedMax > 1 then
           AddShorter('=:(')
         else
-          Add('=');
+          AddDirect('=');
         Add(Values[0]);
         if ValuesInlinedMax > 1 then
           AddShorter('):');
@@ -2530,15 +2529,14 @@ begin
         for i := 0 to n - 1 do
         begin
           if ValuesInlinedMax > n then
-            Add(':', '(');
+            AddDirect(':', '(');
           Add(Values[i]);
           if ValuesInlinedMax > n then
             AddShorter('):,')
           else
             AddComma;
         end;
-        CancelLastComma;
-        Add(')');
+        CancelLastComma(')');
       end;
       AddString(Suffix);
       SetText(result);
@@ -2637,7 +2635,7 @@ begin
   inc(P, ppBeg + 1);    // P^ just after :(
   repeat
     if Count = high(Types) then
-      raise ESynDBException.CreateUtf8('Too many parameters in %', [SQL]);
+      ESynDBException.RaiseUtf8('Too many parameters in %', [SQL]);
     Gen^ := '?'; // replace :(...): by ?
     inc(Gen);
     if length(Values) <= Count then
@@ -2832,7 +2830,7 @@ begin
         new := FastNewString(len + 3, CP_UTF8);
         new[0] := '"';
         MoveFast(c^^, new[1], len);
-        PWord(new + len + 1)^ := ord('"') + ord(':') shl 8;
+        PCardinal(new + len + 1)^ := ord('"') + ord(':') shl 8;
         FastAssignNew(c^, new);
       end;
       inc(c);
@@ -2882,7 +2880,7 @@ begin
       new := FastNewString(len + 3, CP_UTF8);
       new[0] := '"';
       MoveFast(aColName^, new[1], len);
-      PWord(new + len + 1)^ := ord('"') + ord(':') shl 8;
+      PCardinal(new + len + 1)^ := ord('"') + ord(':') shl 8;
     end;
     FastAssignNew(ColNames[aColIndex], new);
   end
@@ -2899,7 +2897,7 @@ begin
     if aColIndex = aColCount - 1 then
     begin
       // last AddColumn() call would finalize the non-expanded header
-      Add('"' , ',');
+      AddDirect('"' , ',');
       fStartDataPosition := PtrInt(fStream.Position) + PtrInt(B - fTempBuf);
     end
     else
@@ -2911,7 +2909,7 @@ procedure TResultsWriter.ChangeExpandedFields(aWithID: boolean;
   const aFields: TFieldIndexDynArray);
 begin
   if not Expand then
-    raise ESynDBException.CreateUtf8(
+    ESynDBException.RaiseUtf8(
       '%.ChangeExpandedFields() called with Expanded=false', [self]);
   fWithID := aWithID;
   fFields := aFields;
@@ -2920,8 +2918,7 @@ end;
 procedure TResultsWriter.EndJsonObject(aKnownRowsCount, aRowsCount: integer;
   aFlushFinal: boolean);
 begin
-  CancelLastComma; // cancel last ','
-  Add(']');
+  CancelLastComma(']');
   if not fExpand then
   begin
     if aKnownRowsCount = 0 then
@@ -2929,9 +2926,9 @@ begin
       AddShort(',"rowCount":');
       Add(aRowsCount);
     end;
-    Add('}');
+    AddDirect('}');
   end;
-  Add(#10);
+  AddDirect(#10);
   if aFlushFinal then
     FlushFinal;
 end;
@@ -3870,7 +3867,7 @@ begin
         if not IsRowID(DecodedFieldNames^[f]) then
         begin
           W.AddNoJsonEscape(DecodedFieldNames^[f]);
-          W.Add('=');
+          W.AddDirect('=');
           AddValue;
         end;
       W.CancelLastComma;
@@ -3878,7 +3875,7 @@ begin
     else
     begin
       // returns ' (COL1,COL2) values ('VAL1',VAL2)'
-      W.Add(' ', '(');
+      W.AddDirect(' ', '(');
       for f := 0 to FieldCount - 1 do
       begin
         // append 'COL1,COL2'
@@ -3889,8 +3886,7 @@ begin
       W.AddShort(') values (');
       for f := 0 to FieldCount - 1 do
         AddValue;
-      W.CancelLastComma;
-      W.Add(')');
+      W.CancelLastComma(')');
     end;
     W.SetText(result);
   finally
@@ -3908,7 +3904,7 @@ begin
     exit;
   W := TJsonWriter.CreateOwnedStream(temp);
   try
-    W.Add('{');
+    W.AddDirect('{');
     for f := 0 to FieldCount - 1 do
     begin
       W.AddProp(DecodedFieldNames^[f]);
@@ -3921,8 +3917,7 @@ begin
         W.AddString(FieldValues[f]);
       W.AddComma;
     end;
-    W.CancelLastComma;
-    W.Add('}');
+    W.CancelLastComma('}');
     W.SetText(result);
   finally
     W.Free;

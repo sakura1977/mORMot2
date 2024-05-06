@@ -1335,14 +1335,14 @@ function ToDouble(const text: RawUtf8; out value: double): boolean;
 //  !  P := StrInt32(@tmp[23],Value);
 //  !  SetString(result,P,@tmp[23]-P);
 //  !end;
-// - convert the input value as PtrInt, so as Int64 on 64-bit CPUs
+// - convert the input value as PtrInt, so work with Int64 on 64-bit CPUs
 // - not to be called directly: use IntToStr() or Int32ToUtf8() instead
 function StrInt32(P: PAnsiChar; val: PtrInt): PAnsiChar;
 
 /// internal fast unsigned integer val to text conversion
 // - expect the last available temporary char position in P
 // - return the last written char position (write in reverse order in P^)
-// - convert the input value as PtrUInt, so as QWord on 64-bit CPUs
+// - convert the input value as PtrUInt, so work with QWord on 64-bit CPUs
 function StrUInt32(P: PAnsiChar; val: PtrUInt): PAnsiChar;
 
 /// internal fast Int64 val to text conversion
@@ -3647,6 +3647,8 @@ const
   VTYPE_SIMPLE = [varEmpty..varDate, varBoolean, varShortInt..varWord64,
     {$ifdef OSWINDOWS} varOleInt, varOleUInt, varOlePAnsiChar, varOlePWideChar,
       varOleFileTime, {$endif OSWINDOWS} varUnknown];
+  /// those TVarData.VType values are meant to be number values and need no escape
+  VTYPE_NUMERIC = [varSmallInt .. varDouble, varCurrency, varBoolean .. varOleUInt];
   /// bitmask used by our inlined VarClear() to avoid unneeded VarClearProc()
   VTYPE_STATIC = $BFE8;
 
@@ -4937,6 +4939,40 @@ zero:
   result := false;
 end;
 
+{$ifdef HASINLINE} // defined here for proper inlining
+function CompareMemFixed(P1, P2: Pointer; Length: PtrInt): boolean;
+label
+  zero;
+begin
+  // cut-down version of our pure pascal CompareMem() function
+  {$ifndef CPUX86}
+  result := false;
+  {$endif CPUX86}
+  Length := PtrInt(@PAnsiChar(P1)[Length - SizeOf(PtrInt)]);
+  if Length >= PtrInt(PtrUInt(P1)) then
+    repeat // compare one PtrInt per loop
+      if PPtrInt(P1)^ <> PPtrInt(P2)^ then
+        goto zero;
+      inc(PPtrInt(P1));
+      inc(PPtrInt(P2));
+    until Length < PtrInt(PtrUInt(P1));
+  inc(Length, SizeOf(PtrInt));
+  dec(PtrUInt(P2), PtrUInt(P1));
+  if PtrInt(PtrUInt(P1)) < Length then
+    repeat
+      if PByte(P1)^ <> PByteArray(P2)[PtrUInt(P1)] then
+        goto zero;
+      inc(PByte(P1));
+    until PtrInt(PtrUInt(P1)) >= Length;
+  result := true;
+  exit;
+zero:
+  {$ifdef CPUX86}
+  result := false;
+  {$endif CPUX86}
+end;
+{$endif HASINLINE}
+
 function FindNonVoidRawUtf8(n: PPointerArray; name: pointer; len: TStrLen;
   count: PtrInt): PtrInt;
 var
@@ -4947,7 +4983,9 @@ begin
   repeat
     p := n[result]; // all VName[]<>'' so p=n^<>nil
     if (PStrLen(p - _STRLEN)^ = len) and
-       CompareMemFixed(p, name, len) then
+       (p^ = PAnsiChar(name)^) and
+       ((len = 1) or
+        CompareMemFixed(p + 1, PAnsiChar(name) + 1, len - 1)) then
       exit;
     inc(result);
     dec(count);
@@ -4964,22 +5002,24 @@ label
 begin
   result := 0;
   p2 := name;
-  repeat
-    // inlined IdemPropNameUSameLenNotNull(p, name, len)
+  repeat // inlined IdemPropNameUSameLenNotNull(p, name, len)
     p1 := n[result]; // all VName[]<>'' so p1<>nil
-    if PStrLen(p1 - _STRLEN)^ = len then
+    if (PStrLen(p1 - _STRLEN)^ = len) and
+       ((ord(p1^) xor ord(p2^)) and $df = 0) then
     begin
-      l := @p1[len - SizeOf(cardinal)];
+      if len = 1 then
+        exit;
+      inc(p1);
+      inc(p2);
+      l := @p1[len - (SizeOf(cardinal) + 1)];
       dec(p2, PtrUInt(p1));
-      while PtrUInt(l) >= PtrUInt(p1) do
-        // compare 4 Bytes per loop
+      while PtrUInt(l) >= PtrUInt(p1) do  // compare 4 Bytes per loop
         if (PCardinal(p1)^ xor PCardinal(@p2[PtrUInt(p1)])^) and $dfdfdfdf <> 0 then
           goto no
         else
           inc(PCardinal(p1));
       inc(PCardinal(l));
-      while PtrUInt(p1) < PtrUInt(l) do
-        // remaining bytes
+      while PtrUInt(p1) < PtrUInt(l) do   // remaining bytes
         if (ord(p1^) xor ord(p2[PtrUInt(p1)])) and $df <> 0 then
           goto no
         else
@@ -10881,38 +10921,6 @@ begin
   result := not result;
 end;
 
-function CompareMemFixed(P1, P2: Pointer; Length: PtrInt): boolean;
-label
-  zero;
-begin
-  // cut-down version of our pure pascal CompareMem() function
-  {$ifndef CPUX86}
-  result := false;
-  {$endif CPUX86}
-  Length := PtrInt(@PAnsiChar(P1)[Length - SizeOf(PtrInt)]);
-  if Length >= PtrInt(PtrUInt(P1)) then
-    repeat // compare one PtrInt per loop
-      if PPtrInt(P1)^ <> PPtrInt(P2)^ then
-        goto zero;
-      inc(PPtrInt(P1));
-      inc(PPtrInt(P2));
-    until Length < PtrInt(PtrUInt(P1));
-  inc(Length, SizeOf(PtrInt));
-  dec(PtrUInt(P2), PtrUInt(P1));
-  if PtrInt(PtrUInt(P1)) < Length then
-    repeat
-      if PByte(P1)^ <> PByteArray(P2)[PtrUInt(P1)] then
-        goto zero;
-      inc(PByte(P1));
-    until PtrInt(PtrUInt(P1)) >= Length;
-  result := true;
-  exit;
-zero:
-  {$ifdef CPUX86}
-  result := false;
-  {$endif CPUX86}
-end;
-
 {$else}
 
 function crc32cinlined(crc: cardinal; buf: PAnsiChar; len: cardinal): cardinal;
@@ -12178,35 +12186,42 @@ end;
 
 procedure crc32tabInit(polynom: cardinal; var tab: TCrc32tab);
 var
-  i, n: integer;
+  i, n: PtrUInt;
   crc: cardinal;
-begin
-  for i := 0 to 255 do
-  begin
-    crc := i;
-    for n := 1 to 8 do
-    begin
-      crc := cardinal(-(crc and 1) and polynom) xor (crc shr 1);
-      tab[0, i] := crc; // for crc32cfast() and SymmetricEncrypt
-    end;
-  end;
-  for i := 0 to 255 do
-  begin
+begin // 256 bytes of code to generate 2 x 8KB lookup tables
+  i := 0;
+  repeat // unrolled branchless root lookup table generation
+    crc := cardinal(-(i and 1) and polynom) xor (i shr 1);
+    crc := cardinal(-(crc and 1) and polynom) xor (crc shr 1);
+    crc := cardinal(-(crc and 1) and polynom) xor (crc shr 1);
+    crc := cardinal(-(crc and 1) and polynom) xor (crc shr 1);
+    crc := cardinal(-(crc and 1) and polynom) xor (crc shr 1);
+    crc := cardinal(-(crc and 1) and polynom) xor (crc shr 1);
+    crc := cardinal(-(crc and 1) and polynom) xor (crc shr 1);
+    crc := cardinal(-(crc and 1) and polynom) xor (crc shr 1);
+    tab[0, i] := crc;
+    if i = 255 then
+      break;
+    inc(i);
+  until false;
+  i := 0;
+  repeat // expand the root lookup table for by-8 fast computation
     crc := tab[0, i];
     for n := 1 to high(tab) do
     begin
       crc := (crc shr 8) xor tab[0, ToByte(crc)];
       tab[n, i] := crc;
     end;
-  end;
+    inc(i);
+  until i > 256;
 end;
 
 procedure InitializeUnit;
 begin
   assert(ord(high(TSynLogLevel)) = 31);
   // initialize internal constants
-  crc32tabInit($82f63b78, crc32ctab); // crc32c() reversed polynom
-  crc32tabInit($edb88320, crc32tab);  // crc32() = zlib's reversed polynom
+  crc32tabInit(2197175160, crc32ctab); // crc32c() reversed polynom
+  crc32tabInit(3988292384, crc32tab);  // crc32() = zlib's reversed polynom
   // setup minimalistic global functions - overriden by other core units
   VariantClearSeveral     := @_VariantClearSeveral;
   SortDynArrayVariantComp := @_SortDynArrayVariantComp;
