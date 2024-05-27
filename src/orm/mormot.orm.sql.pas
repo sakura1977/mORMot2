@@ -805,7 +805,7 @@ begin
     end;
     if stmt.Offset <> 0 then
     begin
-      InternalLog('AdaptSqlForEngineList: unsupported OFFSET for [%]',
+      fRest.InternalLog('AdaptSqlForEngineList: unsupported OFFSET for [%]',
         [SQL], sllWarning);
       exit;
     end;
@@ -816,7 +816,7 @@ begin
       limit := fProperties.SqlLimitClause(stmt);
       if limit.Position = posNone then
       begin
-        InternalLog('AdaptSqlForEngineList: unknown % LIMIT syntax for [%]',
+        fRest.InternalLog('AdaptSqlForEngineList: unknown % LIMIT syntax for [%]',
           [ToText(fProperties.Dbms)^, SQL], sllWarning);
         exit;
       end;
@@ -908,7 +908,8 @@ begin
             if (FunctionName <> '') or
                (Operation > high(DB_SQLOPERATOR)) then
             begin
-              InternalLog('AdaptSqlForEngineList: unsupported function %() for [%]',
+              fRest.InternalLog(
+                'AdaptSqlForEngineList: unsupported function %() for [%]',
                 [FunctionName, SQL], sllWarning);
               exit;
             end;
@@ -2064,7 +2065,7 @@ begin
     conn := fProperties.ThreadSafeConnection;
     if conn.LastErrorWasAboutConnection then
     begin
-      InternalLog(
+      fRest.InternalLog(
         'HandleClearPoolOnConnectionIssue: ClearConnectionPool after %',
         [conn.LastErrorException], sllDB);
       fProperties.ClearConnectionPool;
@@ -2186,7 +2187,7 @@ begin
       k := VIRTUAL_TABLE_ROWID_COLUMN
     else
     begin
-      k := fStoredClassRecordProps.Fields.IndexByName(Decoder.FieldNames[f]);
+      k := fStoredClassRecordProps.Fields.IndexByNameU(Decoder.FieldNames[f]);
       if k < 0 then
         k := -2;
     end;
@@ -2242,7 +2243,7 @@ const
 function TRestStorageExternal.ComputeSql(
   var Prepared: TOrmVirtualTablePrepared): RawUtf8;
 var
-  WR: TJsonWriter;
+  WR: TTextWriter;
   i: PtrInt;
   where: POrmVirtualTablePreparedConstraint;
   order: ^TOrmVirtualTablePreparedOrderBy;
@@ -2258,7 +2259,7 @@ begin
     exit;
   end;
   result := '';
-  WR := TJsonWriter.CreateOwnedStream(temp);
+  WR := TTextWriter.CreateOwnedStream(temp);
   try
     WR.AddString(fSelectAllDirectSQL);
     where := @Prepared.Where;
@@ -2436,7 +2437,7 @@ begin
         fStatement.ExecutePrepared;
         result := Next; // on execution success, go to the first row
       end;
-      storage.LogFamily.SynLog.Log(sllSQL, 'Search %', [fSql], self);
+      storage.LogFamily.Add.Log(sllSQL, 'Search %', [fSql], self);
     except
       self.HandleClearPoolOnConnectionIssue;
     end;

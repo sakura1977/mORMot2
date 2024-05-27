@@ -253,11 +253,11 @@ type
       aKind: TRestServerKind);
     /// fast get the associated static server or virtual table from its index, if any
     // - returns nil if aTableIndex is invalid or is not assigned to a TRestOrm
-    function GetStaticTableIndex(aTableIndex: integer): TRestOrm; overload;
+    function GetStaticTableIndex(aTableIndex: PtrInt): TRestOrm; overload;
       {$ifdef HASINLINE}inline;{$endif}
     /// fast get the associated static server or virtual table from its index, if any
     // - returns nil if aTableIndex is invalid or is not assigned to a TRestOrm
-    function GetStaticTableIndex(aTableIndex: integer;
+    function GetStaticTableIndex(aTableIndex: PtrInt;
       out Kind: TRestServerKind): TRestOrm; overload;
        {$ifdef HASINLINE}inline;{$endif}
     /// create an external static redirection for a specific class
@@ -654,13 +654,13 @@ end;
 
 function TRestOrmServer.GetStaticStorage(aClass: TOrmClass): TRestOrmParent;
 var
-  i: cardinal;
+  i: PtrInt;
 begin
   if (self <> nil) and
      (fStaticData <> nil) then
   begin
     i := fModel.GetTableIndexExisting(aClass);
-    if i < cardinal(length(fStaticData)) then
+    if i < length(fStaticData) then
       result := fStaticData[i] // no IRestOrm refcnt involved here
     else
       result := nil;
@@ -693,50 +693,48 @@ begin
     result := GetStaticTableIndex(fModel.GetTableIndexExisting(aClass));
 end;
 
-function TRestOrmServer.GetStaticTableIndex(aTableIndex: integer): TRestOrm;
+function TRestOrmServer.GetStaticTableIndex(aTableIndex: PtrInt): TRestOrm;
 begin
   result := nil;
-  if aTableIndex >= 0 then
-  begin
-    if cardinal(aTableIndex) < cardinal(length(fStaticData)) then
-      result := fStaticData[aTableIndex]; // no IRestOrm refcnt here
-    if result = nil then
-      if fVirtualTableDirect and
-         (fStaticVirtualTable <> nil) then
-        result := fStaticVirtualTable[aTableIndex];
-  end;
+  if aTableIndex < 0 then
+    exit;
+  if aTableIndex < length(fStaticData) then
+    result := fStaticData[aTableIndex]; // no IRestOrm refcnt here
+  if result = nil then
+    if fVirtualTableDirect and
+       (fStaticVirtualTable <> nil) then
+      result := fStaticVirtualTable[aTableIndex];
 end;
 
-function TRestOrmServer.GetStaticTableIndex(aTableIndex: integer;
+function TRestOrmServer.GetStaticTableIndex(aTableIndex: PtrInt;
   out Kind: TRestServerKind): TRestOrm;
 begin
   result := nil;
   Kind := sMainEngine;
-  if aTableIndex >= 0 then
+  if aTableIndex < 0 then
+    exit;
+  if aTableIndex < length(fStaticData) then
   begin
-    if cardinal(aTableIndex) < cardinal(length(fStaticData)) then
+    result := fStaticData[aTableIndex]; // no IRestOrm refcnt here
+    if result <> nil then
     begin
-      result := fStaticData[aTableIndex]; // no IRestOrm refcnt here
-      if result <> nil then
-      begin
-        Kind := sStaticDataTable;
-        exit;
-      end;
+      Kind := sStaticDataTable;
+      exit;
     end;
-    if fVirtualTableDirect and
-       (fStaticVirtualTable <> nil) then
-    begin
-      result := fStaticVirtualTable[aTableIndex]; // no IRestOrm refcnt here
-      if result <> nil then
-        Kind := sVirtualTable;
-    end;
+  end;
+  if fVirtualTableDirect and
+     (fStaticVirtualTable <> nil) then
+  begin
+    result := fStaticVirtualTable[aTableIndex]; // no IRestOrm refcnt here
+    if result <> nil then
+      Kind := sVirtualTable;
   end;
 end;
 
 function TRestOrmServer.RemoteDataCreate(aClass: TOrmClass;
   aRemoteRest: TRestOrmParent): TRestOrmParent;
 var
-  t: integer;
+  t: PtrInt;
   existing: TRestOrm;
 begin
   t := Model.GetTableIndexExisting(aClass);
@@ -750,11 +748,11 @@ end;
 
 function TRestOrmServer.MaxUncompressedBlobSize(Table: TOrmClass): integer;
 var
-  i: integer;
+  i: PtrInt;
 begin
   i := fModel.GetTableIndexExisting(Table);
   if (i >= 0) and
-     (cardinal(i) < cardinal(length(fTrackChangesHistory))) then
+     (i < length(fTrackChangesHistory)) then
     result := fTrackChangesHistory[i].MaxUncompressedBlobSize
   else
     result := 0;
@@ -892,7 +890,7 @@ function TRestOrmServer.RecordVersionSynchronizeSlave(
   Table: TOrmClass; const Master: IRestOrm; ChunkRowLimit: integer;
   const OnWrite: TOnBatchWrite): TRecordVersion;
 var
-  t: PtrInt;
+  t: PtrUInt;
   batch: TRestBatch;
   ids: TIDDynArray;
   status: integer;
@@ -901,7 +899,7 @@ begin
   log := fRest.LogClass.Enter('RecordVersionSynchronizeSlave %', [Table], self);
   t := fModel.GetTableIndexExisting(Table);
   result := -1; // error
-  if (PtrUInt(length(fRecordVersionMax)) <= PtrUInt(t)) or
+  if (t > PtrUInt(length(fRecordVersionMax))) or
      (fRecordVersionMax[t] = 0) then
     InternalRecordVersionMaxFromExisting(t, {next=}false);
   repeat
@@ -923,10 +921,11 @@ begin
       status := BatchSend(batch, ids);
       if status = HTTP_SUCCESS then
       begin
-        InternalLog(
-          'RecordVersionSynchronize(%) Added=% Updated=% Deleted=% on %',
-          [Table, batch.AddCount, batch.UpdateCount, batch.DeleteCount,
-           Master], sllDebug);
+        if sllDebug in fRest.LogLevel then
+          fRest.InternalLog(
+            'RecordVersionSynchronize(%) Added=% Updated=% Deleted=% on %',
+            [Table, batch.AddCount, batch.UpdateCount, batch.DeleteCount,
+             Master], sllDebug);
         if ChunkRowLimit = 0 then
         begin
           result := fRecordVersionMax[t];
@@ -935,7 +934,7 @@ begin
       end
       else
       begin
-        InternalLog('RecordVersionSynchronize(%) BatchSend=%',
+        fRest.InternalLog('RecordVersionSynchronize(%) BatchSend=%',
           [Table, status], sllError);
         fRecordVersionMax[t] := 0; // force recompute the maximum from DB
         break;
@@ -1386,7 +1385,7 @@ begin
             RetrieveBlobFields(histblob);
           if not histblob.HistoryOpen(fModel) then
           begin
-            InternalLog('Invalid %.History BLOB content for ID=%: % ' +
+            fRest.InternalLog('Invalid %.History BLOB content for ID=%: % ' +
               'layout may have changed -> flush any previous content',
               [histblob.RecordClass, histblob.IDValue,
                histjson.ModifiedTable(fModel)], sllError);
@@ -1652,7 +1651,7 @@ function TRestOrmServer.AfterDeleteForceCoherency(aTableIndex: integer;
           Ref^.FieldType.Name, '0', Ref^.FieldType.Name, W);
     end;
     if not cascadeOK then
-      InternalLog('AfterDeleteForceCoherency() failed update %.%=%',
+      fRest.InternalLog('AfterDeleteForceCoherency() failed update %.%=%',
         [fModel.Tables[Ref^.TableIndex], Ref^.FieldType.Name, W], sllWarning);
   end;
 
@@ -1767,10 +1766,9 @@ begin
   end;
   props := fModel.TableProps[tableindex].props;
   for i := 0 to high(FieldNames) do
-    if not IsRowID(pointer(FieldNames[i])) then
-      if props.Fields.IndexByName(FieldNames[i]) < 0 then
-        // wrong field name
-        exit;
+    if not props.IsFieldName(pointer(FieldNames[i])) then
+      // wrong field name
+      exit;
   if Unique then
     sql := 'UNIQUE '
   else

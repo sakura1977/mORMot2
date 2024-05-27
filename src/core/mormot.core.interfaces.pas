@@ -2304,7 +2304,8 @@ type
     optErrorOnMissingParam,
     optForceStandardJson,
     optDontStoreVoidJson,
-    optIgnoreException);
+    optIgnoreException,
+    optFreeTimeout);
 
   /// set of per-method execution options for an interface-based service provider
   // - by default, method executions are concurrent, for better server
@@ -2349,6 +2350,8 @@ type
   // - any exceptions will be propagated during execution, unless
   // optIgnoreException is set and the exception is trapped (not to be used
   // unless you know what you are doing)
+  // - optFreeTimeout will enable the time check of the _Release call using
+  // TRestServer.ServiceReleaseTimeoutMicrosec delay
   TInterfaceMethodOptions = set of TInterfaceMethodOption;
 
   /// available execution options for an interface-based service provider
@@ -5832,18 +5835,15 @@ procedure TOnInterfaceStubExecuteParamsVariant.AddLog(aLog: TSynLogClass;
 var
   val: variant;
 begin
-  if aLog = nil then
+  if (aLog = nil) or
+     not (aLevel in aLog.Family.Level) then
     exit;
-  with aLog.Family do
-    if aLevel in Level then
-    begin
-      if aOutput then
-        val := OutputAsDocVariant(pdvObjectFixed)
-      else
-        val := InputAsDocVariant(pdvObjectFixed);
-      SynLog.Log(aLevel, '%(%)', [fMethod^.InterfaceDotMethodName,
-         _Safe(val)^.ToTextPairs('=', ',', twJsonEscape)], self);
-    end;
+  if aOutput then
+    val := OutputAsDocVariant(pdvObjectFixed)
+  else
+    val := InputAsDocVariant(pdvObjectFixed);
+  aLog.Add.Log(aLevel, '%(%)', [fMethod^.InterfaceDotMethodName,
+     _Safe(val)^.ToTextPairs('=', ',', twJsonEscape)], self);
 end;
 
 
@@ -6611,7 +6611,6 @@ type
     doInstanceRelease,
     doThreadMethod);
 
-  PBackgroundLauncher = ^TBackgroundLauncher;
   TBackgroundLauncher = record
     Context: PPerThreadRunningContext;
     case Action: TBackgroundLauncherAction of
@@ -6622,6 +6621,7 @@ type
       doThreadMethod: (
         ThreadMethod: TThreadMethod)
   end;
+  PBackgroundLauncher = ^TBackgroundLauncher;
 
 procedure BackgroundExecuteProc(Call: pointer); forward;
 
@@ -7292,7 +7292,7 @@ begin
         // multiple Instances[] notifies with fExecutedInstancesFailed[]
         if fExecutedInstancesFailed = nil then
           SetLength(fExecutedInstancesFailed, InstancesLast + 1);
-        fExecutedInstancesFailed[i] := ObjectToJsonDebug(Exc);
+        ObjectToJson(Exc, fExecutedInstancesFailed[i], TEXTWRITEROPTIONS_DEBUG);
       end;
     end;
   end;

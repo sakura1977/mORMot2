@@ -294,8 +294,7 @@ type
     // - this method could have been declared as protected, since it should
     // never be called outside the TRestServer.Uri() method workflow
     // - should set Call, and Method members
-    constructor Create(aServer: TRestServer;
-      const aCall: TRestUriParams); reintroduce; virtual;
+    procedure Prepare(aServer: TRestServer; const aCall: TRestUriParams);
     /// finalize the execution context
     destructor Destroy; override;
 
@@ -1083,10 +1082,10 @@ type
   // !            Hexa8(Timestamp)+url))
   TRestServerAuthenticationSignedUri = class(TRestServerAuthenticationUri)
   protected
-    fNoTimestampCoherencyCheck: boolean;
     fTimestampCoherencySeconds: cardinal;
     fTimestampCoherencyTicks: cardinal;
     fComputeSignature: TOnRestAuthenticationSignedUriComputeSignature;
+    fNoTimestampCoherencyCheck: boolean;
     procedure SetNoTimestampCoherencyCheck(value: boolean);
     procedure SetTimestampCoherencySeconds(value: cardinal);
     procedure SetAlgorithm(value: TRestAuthenticationSignedUriAlgo);
@@ -1801,6 +1800,7 @@ type
     fRouter: TRestRouter;
     fRouterSafe: TRWLightLock;
     fOnNotifyCallback: TOnRestServerClientCallback;
+    fServiceReleaseTimeoutMicrosec: integer;
     procedure SetNoAjaxJson(const Value: boolean);
     function GetNoAjaxJson: boolean;
       {$ifdef HASINLINE}inline;{$endif}
@@ -2228,6 +2228,11 @@ type
     // - NEVER set the abstract TRestServerUriContext class on this property
     property ServicesRouting: TRestServerUriContextClass
       read fServicesRouting write SetRoutingClass;
+    /// maximum time allowed to release an interface service instance
+    // - equals 500 microseconds by default - 0 would disable any measurement
+    // - should be enabled for each given interface by setting optFreeTimeout
+    property ServiceReleaseTimeoutMicrosec: integer
+      read fServiceReleaseTimeoutMicrosec write fServiceReleaseTimeoutMicrosec;
     /// retrieve detailed statistics about a method-based service use
     // - will return a reference to the actual alive item: caller should
     // not free the returned instance
@@ -2789,21 +2794,43 @@ end;
 
 { TRestServerUriContext }
 
-constructor TRestServerUriContext.Create(aServer: TRestServer;
+procedure TRestServerUriContext.Prepare(aServer: TRestServer;
   const aCall: TRestUriParams);
+var
+  fam: TSynLogFamily;
+  tmp: pointer;
 begin
-  inherited Create(aCall);
+  // setup the state machine
+  fCall := @aCall;
+  fMethod := ToMethod(aCall.Method);
+  if aCall.InBody <> '' then
+    aCall.InBodyType(fInputContentType, {guessjsonifnone=}false);
   fServer := aServer;
   fThreadServer := PerThreadRunningContextAddress;
   fThreadServer^.Request := self;
   fMethodIndex := -1;
+  // initialize optional logging
+  fam := fServer.LogFamily;
+  if (fam = nil) or
+     not (sllEnter in fam.Level) then
+    exit;
+  fLog := fam.Add; // TSynLog instance for the current thread
+  tmp := nil; // same logic than Enter() but with no ISynLog involved
+  FormatUtf8('URI % % in=%', [aCall.Method, aCall.Url, KB(aCall.InBody)],
+    RawUtf8(tmp));
+  fLog.ManualEnter(tmp, fServer, mnEnterOwnMethodName);
+  if fServer.StatLevels <> [] then // get start timestamp from log
+    fMicroSecondsStart := fLog.LastQueryPerformanceMicroSeconds;
 end;
 
 destructor TRestServerUriContext.Destroy;
 begin
   if fThreadServer <> nil then
     fThreadServer^.Request := nil;
-  inherited Destroy;
+  //inherited Destroy; not needed
+  fLog.ManualLeave;
+  if fJwtContent <> nil then
+    Dispose(fJwtContent);
 end;
 
 procedure TRestServerUriContext.SetOutSetCookie(const aOutSetCookie: RawUtf8);
@@ -2911,6 +2938,7 @@ begin
      (Server.fSessions <> nil) and
      not IsRemoteAdministrationExecute then
   begin
+    // some kind of requests may have been marked to by-pass authentication
     fSession := CONST_AUTHENTICATION_SESSION_NOT_STARTED;
     if // /auth + /timestamp are e.g. allowed methods without signature
        ((MethodIndex >= 0) and
@@ -2923,15 +2951,15 @@ begin
         (Method in Server.BypassOrmAuthentication)) then
       // no need to check the sessions
       exit;
+    // TAuthSession instance may have been stored at connection level
     if (rsoSessionInConnectionOpaque in Server.Options) and
        (Call^.LowLevelConnectionOpaque <> nil) then
     begin
-      // TAuthSession instance may have been stored at connection level
-      // to avoid signature parsing and session lookup
       s := pointer(Call^.LowLevelConnectionOpaque^.ValueInternal);
       if s <> nil then
         if s.InheritsFrom(Server.fSessionClass) then
         begin
+          // safely avoid signature parsing and session lookup
           SessionAssign(s);
           exit;
         end
@@ -2949,10 +2977,11 @@ begin
           s := a^.RetrieveSession(self); // retrieve from URI or cookie
           if s <> nil then
           begin
-            if (Log <> nil) and
+            if Assigned(fLog) and
+               (sllUserAuth in Server.fLogLevel) and
                (s.RemoteIP <> '') and
                (s.RemoteIP <> '127.0.0.1') then
-              Log.Log(sllUserAuth, '%/% %',
+              fLog.Log(sllUserAuth, '%/% %',
                 [s.User.LogonName, s.ID, s.RemoteIP], self);
             exit;
           end;
@@ -2977,8 +3006,8 @@ var
   txt: PShortString;
 begin
   txt := ToText(Reason);
-  if Log <> nil then
-    Log.Log(sllUserAuth, 'AuthenticationFailed(%) for % (session=%)',
+  if Assigned(fLog) then
+    fLog.Log(sllUserAuth, 'AuthenticationFailed(%) for % (session=%)',
       [txt^, Call^.Url, Session], self);
   // 401 HTTP_UNAUTHORIZED must include a WWW-Authenticate header, so return 403
   fCall^.OutStatus := HTTP_FORBIDDEN;
@@ -2993,9 +3022,9 @@ procedure TRestServerUriContext.ExecuteCommand;
 
   procedure TimeOut;
   begin
-    Server.InternalLog('TimeOut %.Execute(%) after % ms',
+    fServer.InternalLog('TimeOut %.Execute(%) after % ms',
       [self, ToText(Command)^,
-       Server.fAcquireExecution[Command].LockedTimeOut], sllServer);
+       fServer.fAcquireExecution[Command].LockedTimeOut], sllServer);
     if Call <> nil then
       Call^.OutStatus := HTTP_TIMEOUT; // 408 Request Time-out
   end;
@@ -3006,7 +3035,7 @@ var
   ms, current: cardinal;
   exec: PRestAcquireExecution;
 begin
-  exec := @Server.fAcquireExecution[Command];
+  exec := @fServer.fAcquireExecution[Command];
   ms := exec^.LockedTimeOut;
   if ms = 0 then
     ms := 10000; // never wait forever = 10 seconds max
@@ -3020,12 +3049,11 @@ begin
     execOrmWrite:
       begin
         // special behavior to handle transactions at writing
-        method := ExecuteOrmWrite;
         endtix := TickCount64 + ms;
         while true do
-          if exec^.Safe.TryLockMS(ms, @Server.fShutdownRequested) then
+          if exec^.Safe.TryLockMS(ms, @fServer.fShutdownRequested) then
             try
-              current := TRestOrm(Server.fOrmInstance).TransactionActiveSession;
+              current := TRestOrm(fServer.fOrmInstance).TransactionActiveSession;
               if (current = 0) or
                  (current = Session) then
               begin
@@ -3038,7 +3066,7 @@ begin
                 break;   // will handle Mode<>amLocked below
               end;
               // if we reached here, there is a transaction on another session
-              tix := GetTickCount64; // not self.TickCount64 which is fixed
+              tix := GetTickCount64; // not self.TickCount64 which is cached
               if tix > endtix then
               begin
                 TimeOut; // we were not able to acquire the transaction
@@ -3053,6 +3081,7 @@ begin
               TimeOut;
               exit;
             end;
+        method := ExecuteOrmWrite;
       end;
   else
     raise EOrmException.CreateUtf8('Unexpected Command=% in %.Execute',
@@ -3060,13 +3089,13 @@ begin
   end;
   if exec^.Mode = amBackgroundOrmSharedThread then
     if (Command = execOrmWrite) and
-       (Server.fAcquireExecution[execOrmGet].Mode = amBackgroundOrmSharedThread) then
+       (fServer.fAcquireExecution[execOrmGet].Mode = amBackgroundOrmSharedThread) then
       fCommand := execOrmGet; // both ORM read+write will share the read thread
   case exec^.Mode of
     amUnlocked:
       method;
     amLocked:
-      if exec^.Safe.TryLockMS(ms, @Server.fShutdownRequested) then
+      if exec^.Safe.TryLockMS(ms, @fServer.fShutdownRequested) then
         try
           method;
         finally
@@ -3080,8 +3109,8 @@ begin
     amBackgroundOrmSharedThread:
       begin
         if exec^.Thread = nil then
-          exec^.Thread := Server.Run.NewBackgroundThreadMethod('% % %',
-            [self, Server.fModel.Root, ToText(Command)^]);
+          exec^.Thread := fServer.Run.NewBackgroundThreadMethod('% % %',
+            [self, fServer.fModel.Root, ToText(Command)^]);
         BackgroundExecuteThreadMethod(method, exec^.Thread);
       end;
   end;
@@ -3136,14 +3165,14 @@ const
   COMMANDTEXT: array[TRestServerUriContextCommand] of string[15] = (
     '?', 'Method', 'Interface', 'Read', 'Write');
 begin
-  if sllServer in fLog.GenericFamily.Level then
+  if sllServer in fServer.LogLevel then
     fLog.Log(sllServer, '% % % % %=% out=% in %', [SessionUserName,
       RemoteIPNotLocal, COMMANDTEXT[fCommand], fCall.Method,
       UriWithoutInlinedParams, fCall.OutStatus, KB(fCall.OutBody),
       MicroSecToString(fMicroSecondsElapsed)]);
   if (fCall.OutBody <> '') and
      not (optNoLogOutput in fServiceExecutionOptions) and
-     (sllServiceReturn in fLog.GenericFamily.Level) and
+     (sllServiceReturn in fServer.LogLevel) and
      (fCall.OutHead = '') or
       IsHtmlContentTypeTextual(pointer(fCall.OutHead)) then
     fLog.Log(sllServiceReturn, fCall.OutBody, self, MAX_SIZE_RESPONSE_LOG);
@@ -3394,15 +3423,15 @@ begin
         include(fServiceExecutionOptions, optNoLogOutput);
     end;
     // log method call and parameter values (if worth it)
-    if (Log <> nil) and
-       (sllServiceCall in Log.GenericFamily.Level) and
+    if Assigned(fLog) and
+       (sllServiceCall in fServer.LogLevel) and
        (ServiceParameters <> nil) and
        (PWord(ServiceParameters)^ <> ord('[') + ord(']') shl 8) then
      if optNoLogInput in ServiceExecutionOptions then
-       Log.Log(sllServiceCall, '%{}',
+       fLog.Log(sllServiceCall, '%{}',
          [ServiceMethod^.InterfaceDotMethodName], Server)
      else
-       Log.Log(sllServiceCall, '%%',
+       fLog.Log(sllServiceCall, '%%',
          [ServiceMethod^.InterfaceDotMethodName, ServiceParameters], Server);
     // OnMethodExecute() callback event
     if Assigned(TServiceFactoryServer(Service).OnMethodExecute) then
@@ -4118,9 +4147,9 @@ begin
   end
   else
     DynArrayFakeLength(fInput, n); // SetLength() would make a realloc()
-  if (Log <> nil) and
+  if Assigned(fLog) and
      (LogInputIdent <> '') then
-    Log.Add.Log(sllDebug, LogInputIdent, TypeInfo(TRawUtf8DynArray), fInput, self);
+    fLog.Add.Log(sllDebug, LogInputIdent, TypeInfo(TRawUtf8DynArray), fInput, self);
 end;
 
 function TRestServerUriContext.GetInputInt(const ParamName: RawUtf8): Int64;
@@ -4464,7 +4493,8 @@ procedure TRestServerUriContext.Error(const ErrorMessage: RawUtf8;
   Status: integer; CacheControlMaxAge: integer);
 begin
   inherited Error(ErrorMessage, Status, CacheControlMaxAge);
-  Server.InternalLog('%.Error: %', [ClassType, fCall^.OutBody], sllDebug);
+  if sllDebug in fServer.LogLevel then
+    fServer.InternalLog('%.Error: %', [ClassType, fCall^.OutBody], sllDebug);
 end;
 
 
@@ -4757,8 +4787,9 @@ begin
       fConnectionID := aCtxt.Call^.LowLevelConnectionID;
       aCtxt.SetRemoteIP(fRemoteIP);
       fRemoteOsVersion := aCtxt.SessionOS;
-      if aCtxt.Log <> nil then
-        aCtxt.Log.Log(sllUserAuth,
+      if Assigned(aCtxt.fLog) and
+         (sllUserAuth in aCtxt.Server.fLogLevel) then
+        aCtxt.fLog.Log(sllUserAuth,
           'New [%] session %/% created at %/% running % {%}',
           [User.GroupRights.Ident, User.LogonName, fID, fRemoteIP,
            aCtxt.Call^.LowLevelConnectionID, aCtxt.GetUserAgent,
@@ -4966,14 +4997,16 @@ begin
   if (result = nil) or
      (result.IDValue = 0) then
   begin
-    fServer.InternalLog('%.LogonName=% not found',
-      [fServer.fAuthUserClass, aUserName], sllUserAuth);
+    if sllUserAuth in fServer.LogLevel then
+      fServer.InternalLog('%.LogonName=% not found',
+        [fServer.fAuthUserClass, aUserName], sllUserAuth);
     FreeAndNil(result);
   end
   else if not result.CanUserLog(Ctxt) then
   begin
-    fServer.InternalLog('%.CanUserLog(%) returned FALSE -> rejected',
-      [result, aUserName], sllUserAuth);
+    if sllUserAuth in fServer.LogLevel then
+      fServer.InternalLog('%.CanUserLog(%) returned FALSE -> rejected',
+        [result, aUserName], sllUserAuth);
     FreeAndNil(result);
   end;
 end;
@@ -5028,16 +5061,18 @@ end;
 
 function TRestServerAuthenticationUri.RetrieveSession(
   Ctxt: TRestServerUriContext): TAuthSession;
+var
+  sigpos: PtrInt;
 begin
   result := nil;
-  if (Ctxt = nil) or
-     (Ctxt.UriSessionSignaturePos = 0) then
+  if Ctxt = nil then
     exit;
+  sigpos := Ctxt.UriSessionSignaturePos;
   // expected format is 'session_signature='Hexa8(SessionID)'...
-  if (Ctxt.UriSessionSignaturePos > 0) and
-     (Ctxt.UriSessionSignaturePos + (18 + 8) <= length(Ctxt.Call^.Url)) and
-     HexDisplayToCardinal(PAnsiChar(pointer(Ctxt.Call^.Url)) +
-       Ctxt.UriSessionSignaturePos + 18, Ctxt.fSession) then
+  if (sigpos > 0) and
+     (sigpos + (18 + 8) <= length(Ctxt.Call^.Url)) and
+     HexDisplayToBin(PAnsiChar(pointer(Ctxt.Call^.Url)) + sigpos + 18,
+       @Ctxt.fSession, SizeOf(Ctxt.fSession)) then
     result := fServer.LockedSessionAccess(Ctxt);
 end;
 
@@ -5089,18 +5124,18 @@ function TRestServerAuthenticationSignedUri.RetrieveSession(
 var
   ts, sign, minticks, expectedsign: cardinal;
   P: PAnsiChar;
-  len: integer;
+  len: PtrInt;
 begin
   result := inherited RetrieveSession(Ctxt);
   if result = nil then
     // no valid session ID in session_signature
     exit;
-  if Ctxt.UriSessionSignaturePos + (18 + 8 + 8 + 8) > length(Ctxt.Call^.Url) then
+  len := Ctxt.UriSessionSignaturePos - 1;
+  if len >= length(Ctxt.Call^.Url) - (18 + 8 + 8 + 8) then
   begin
     result := nil;
     exit;
   end;
-  len := Ctxt.UriSessionSignaturePos - 1;
   P := @Ctxt.Call^.Url[len + (20 + 8)]; // points to Hexa8(Timestamp)
   minticks := result.fLastTimestamp - fTimestampCoherencyTicks;
   if HexDisplayToBin(P, @ts, SizeOf(ts)) and
@@ -5113,18 +5148,21 @@ begin
     if HexDisplayToBin(P + 8, @sign, SizeOf(sign)) and
        ({%H-}sign = expectedsign) then
     begin
-      if ts > result.fLastTimestamp then
-        result.fLastTimestamp := ts;
+      if not fNoTimestampCoherencyCheck then
+        if ts > result.fLastTimestamp then
+          result.fLastTimestamp := ts;
       exit;
     end
-    else
-      Ctxt.Log.Log(sllUserAuth, 'Invalid Signature: expected %, got %',
+    else if Assigned(Ctxt.fLog) and
+            (sllUserAuth in fServer.fLogLevel) then
+      Ctxt.fLog.Log(sllUserAuth, 'Invalid Signature: expected %, got %',
         [CardinalToHexShort(expectedsign),
          CardinalToHexShort(sign)], self);
   end
-  else
-    Ctxt.Log.Log(sllUserAuth, 'Invalid Timestamp: expected >=%, got %',
-      [minticks, Int64(ts)], self);
+  else if Assigned(Ctxt.fLog) and
+          (sllUserAuth in fServer.fLogLevel) then
+    Ctxt.fLog.Log(sllUserAuth, 'Invalid Timestamp: expected >=%, got %',
+      [Int64(minticks), Int64(ts)], self);
   result := nil; // indicates invalid signature
 end;
 
@@ -5374,7 +5412,7 @@ begin
     exit;
   if GetUserPassFromInHead(Ctxt, usrpwd, usr, pwd) then
     if usr = result.User.LogonName then
-      with Ctxt.Server.AuthUserClass.Create do
+      with fServer.AuthUserClass.Create do
       try
         PasswordPlain := pwd; // compute SHA-256 hash of the supplied password
         if PasswordHashHexa = result.User.PasswordHashHexa then
@@ -5571,7 +5609,7 @@ begin
     end;
     // 2nd call: user was authenticated -> release used context
     ServerSspiAuthUser(fSspiAuthContext[ndx], username);
-    if sllUserAuth in fServer.fLogFamily.Level then
+    if sllUserAuth in fServer.fLogLevel then
       fServer.InternalLog('% Authentication success for %',
         [SecPackageName(fSspiAuthContext[ndx]), username], sllUserAuth);
     // now client is authenticated -> create a session for aUserName
@@ -5813,7 +5851,7 @@ begin
     if rec.Gran = mugHour then
       fComment := rec.Comment;
     if rec.Process <> fProcessID then
-      fLog.SynLog.Log(sllWarning, 'LoadDB(%,%) received Process=%, expected %',
+      fLog.Add.Log(sllWarning, 'LoadDB(%,%) received Process=%, expected %',
         [ID, ToText(Gran)^, rec.Process, fProcessID], self);
     result := true;
   end
@@ -6141,6 +6179,7 @@ begin
     fOptions := [rsoNoTableURI, rsoNoInternalState]; // no table/state to send
   fAssociatedServices := TServicesPublishedInterfacesList.Create(0);
   fServicesRouting := TRestServerRoutingRest;
+  fServiceReleaseTimeoutMicrosec := 500;
   UriPagingParameters := PAGINGPARAMETERS_YAHOO;
   fStats := TRestServerMonitor.Create(self);
   // initialize TRest
@@ -6948,8 +6987,10 @@ begin
       a := fSessions.List[i];
       if a.User.IDValue = User.IDValue then
       begin
-        InternalLog('User.LogonName=% already connected from %/%',
-          [a.User.LogonName, a.RemoteIP, Ctxt.Call^.LowLevelConnectionID], sllUserAuth);
+        if sllUserAuth in fLogLevel then
+          InternalLog('User.LogonName=% already connected from %/%',
+            [a.User.LogonName, a.RemoteIP, Ctxt.Call^.LowLevelConnectionID],
+            sllUserAuth);
         Ctxt.AuthenticationFailed(afSessionAlreadyStartedForThisUser);
         exit; // user already connected
       end;
@@ -6960,10 +7001,11 @@ begin
     if OnSessionCreate(self, Session, Ctxt) then
     begin
       // callback returning TRUE aborts session creation
-      InternalLog('Session aborted by OnSessionCreate() callback ' +
-        'for User.LogonName=% (connected from %/%) - clients=%, sessions=%',
-        [User.LogonName, Session.RemoteIP, Ctxt.Call^.LowLevelConnectionID,
-         fStats.GetClientsCurrent, fSessions.Count], sllUserAuth);
+      if sllUserAuth in fLogLevel then
+        InternalLog('Session aborted by OnSessionCreate() callback ' +
+          'for User.LogonName=% (connected from %/%) - clients=%, sessions=%',
+          [User.LogonName, Session.RemoteIP, Ctxt.Call^.LowLevelConnectionID,
+           fStats.GetClientsCurrent, fSessions.Count], sllUserAuth);
       Ctxt.AuthenticationFailed(afSessionCreationAborted);
       User := nil;
       FreeAndNil(Session);
@@ -7043,13 +7085,14 @@ begin
         ClearConnectionOpaque(a.fConnectionOpaque)
       else
         ClearConnectionOpaque(Ctxt.Call^.LowLevelConnectionOpaque);
-    if Ctxt = nil then
-      InternalLog('Deleted deprecated session %:%/% soaGC=%',
-        [a.User.LogonName, a.ID, fSessions.Count, soa], sllUserAuth)
-    else
-      InternalLog('Deleted session %:%/% from %/% soaGC=%',
-        [a.User.LogonName, a.ID, fSessions.Count, a.RemoteIP,
-         Ctxt.Call^.LowLevelConnectionID, soa], sllUserAuth);
+    if sllUserAuth in fLogLevel then
+      if Ctxt = nil then
+        InternalLog('Deleted deprecated session %:%/% soaGC=%',
+          [a.User.LogonName, a.ID, fSessions.Count, soa], sllUserAuth)
+      else
+        InternalLog('Deleted session %:%/% from %/% soaGC=%',
+          [a.User.LogonName, a.ID, fSessions.Count, a.RemoteIP,
+           Ctxt.Call^.LowLevelConnectionID, soa], sllUserAuth);
     if Assigned(OnSessionClosed) then
       OnSessionClosed(self, a, Ctxt);
     fSessions.Delete(aSessionIndex);
@@ -7060,6 +7103,7 @@ end;
 function TRestServer.SessionDeleteDeprecated(tix: cardinal): integer;
 var
   i: PtrInt;
+  log: ISynLog;
 begin
   // TRestServer.Uri() runs this method every second
   fSessionsDeprecatedTix := tix;
@@ -7074,13 +7118,20 @@ begin
       if tix > TAuthSession(fSessions.List[i]).TimeOutTix then
       begin
         if result = 0 then
+        begin
+          log := fLogClass.Enter(self, 'SessionDeleteDeprecated');
           fSessions.Safe.WriteLock; // upgrade the lock (seldom)
+        end;
         LockedSessionDelete(i, nil);
         inc(result);
       end;
   finally
     if result <> 0 then
+    begin
       fSessions.Safe.WriteUnlock;
+      if Assigned(log) then
+        log.Log(sllTrace, 'SessionDeleteDeprecated=%', [result], self);
+    end;
     fSessions.Safe.ReadWriteUnLock;
   end;
 end;
@@ -7103,9 +7154,10 @@ begin
           result.fConnectionID := Ctxt.Call^.LowLevelConnectionID
         else if result.ConnectionID <> Ctxt.Call^.LowLevelConnectionID then
         begin
-          InternalLog('Session % from % rejected, since created from %/%',
-           [Ctxt.Session, Ctxt.Call^.LowLevelConnectionID,
-            result.RemoteIP, result.ConnectionID], sllUserAuth);
+          if sllUserAuth in fLogLevel then
+            InternalLog('Session % from % rejected, since created from %/%',
+             [Ctxt.Session, Ctxt.Call^.LowLevelConnectionID,
+              result.RemoteIP, result.ConnectionID], sllUserAuth);
           exit;
         end;
       // found the session: assign it to the request Ctxt
@@ -7525,7 +7577,6 @@ var
   tix: Int64;
   tix32: cardinal;
   outcomingfile: boolean;
-  log: ISynLog;
 begin
   if fShutdownRequested then
   begin
@@ -7533,10 +7584,6 @@ begin
     exit;
   end;
   // 1. pre-request preparation
-  if (fLogFamily <> nil) and
-     (sllEnter in fLogFamily.Level) then
-    log := fLogClass.Enter('URI % % in=%',
-      [Call.Method, Call.Url, KB(Call.InBody)], self);
   if fRouter = nil then
     ComputeRoutes; // thread-safe (re)initialize once if needed
   if Assigned(OnStartUri) then
@@ -7544,16 +7591,16 @@ begin
     Call.OutStatus := OnStartUri(Call);
     if Call.OutStatus <> HTTP_SUCCESS then
     begin
-      if log <> nil then
-        log.Log(sllServer, 'Uri: rejected by OnStartUri(% %)=%',
+      fLogClass.Add.Log(sllServer, 'Uri: rejected by OnStartUri(% %)=%',
           [Call.Method, Call.Url, Call.OutStatus], self);
       exit;
     end;
   end;
   // 2. request initialization
   Call.OutStatus := HTTP_BADREQUEST; // default error code is 400 BAD REQUEST
-  ctxt := fServicesRouting.Create(self, Call);
+  ctxt := fServicesRouting.Create;
   try
+    ctxt.Prepare(self, Call);
     if (fIPBan <> nil) and
        ctxt.IsRemoteIPBanned then
     begin
@@ -7561,12 +7608,6 @@ begin
       exit;
     end;
     // 3. setup the statistics
-    if log <> nil then
-    begin
-      ctxt.fLog := log.Instance;
-      if StatLevels <> [] then // get start timestamp from log
-        ctxt.fMicroSecondsStart := ctxt.fLog.LastQueryPerformanceMicroSeconds;
-    end;
     if StatLevels <> [] then
     begin
       if ctxt.fMicroSecondsStart = 0 then
@@ -7667,7 +7708,8 @@ begin
     if ctxt.OutSetCookie <> '' then
       ctxt.OutHeadFromCookie;
     // paranoid check of the supplied output headers
-    if not (rsoHttpHeaderCheckDisable in fOptions) and
+    if (Call.OutHead <> '') and
+       not (rsoHttpHeaderCheckDisable in fOptions) and
        IsInvalidHttpHeader(pointer(Call.OutHead), length(Call.OutHead)) then
       ctxt.Error('Unsafe HTTP header rejected [%]',
         [EscapeToShort(Call.OutHead)], HTTP_SERVERERROR);
@@ -7675,7 +7717,7 @@ begin
     // 9. gather statistics and log execution
     if ctxt.fMicroSecondsStart <> 0 then
       ctxt.ComputeStatsAfterCommand;
-    if log <> nil then
+    if ctxt.fLog <> nil then
       ctxt.LogFromContext;
     // 10. finalize execution context
     if Assigned(OnAfterUri) then
@@ -7804,8 +7846,9 @@ begin
           for i := 0 to Services.Count - 1 do
             inc(count, TServiceFactoryServer(Services.InterfaceList[i].Service).
               RenewSession(Ctxt));
-        InternalLog('Renew % authenticated session % from %: count=%',
-          [Model.Root, Ctxt.Session, Ctxt.RemoteIPNotLocal, count], sllUserAuth);
+        if sllUserAuth in fLogLevel then
+          InternalLog('Renew % authenticated session % from %: count=%',
+            [Model.Root, Ctxt.Session, Ctxt.RemoteIPNotLocal, count], sllUserAuth);
         Ctxt.Returns(['count', count]);
       end
       else if (fServices <> nil) and
@@ -7820,9 +7863,10 @@ begin
           old := GetInt64(pointer(Ctxt.Call^.InBody));
           count := (fServices as TServiceContainerServer).
             FakeCallbackReplaceConnectionID(old, Ctxt.Call^.LowLevelConnectionID);
-          InternalLog('%: Connection % replaced by % from % on %',
-            [Model.Root, old, Ctxt.Call^.LowLevelConnectionID,
-             Ctxt.RemoteIPNotLocal, Plural('interface', count)], sllHTTP);
+          if sllHTTP in fLogLevel then
+            InternalLog('%: Connection % replaced by % from % on %',
+              [Model.Root, old, Ctxt.Call^.LowLevelConnectionID,
+               Ctxt.RemoteIPNotLocal, Plural('interface', count)], sllHTTP);
           Ctxt.Returns(['count', count]);
         end;
     mPUT:

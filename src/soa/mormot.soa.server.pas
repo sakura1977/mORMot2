@@ -813,12 +813,29 @@ begin
 end;
 
 procedure TServiceFactoryServer.InstanceFree(Obj: TInterfacedObject);
-var
-  start, stop: Int64;
+
+  procedure DoRelease;
+  var
+    start, stop: Int64;
+    timeout: boolean;
+  begin
+    timeout := (optFreeTimeout in fAnyOptions) and
+               (fRestServer.ServiceReleaseTimeoutMicrosec > 0);
+    if timeout then // release should be fast enough
+      QueryPerformanceMicroSeconds(start);
+    IInterface(Obj)._Release;
+    if not timeout then
+      exit;
+    QueryPerformanceMicroSeconds(stop);
+    dec(stop, start{%H-});
+    if stop > fRestServer.ServiceReleaseTimeoutMicrosec then
+      fRestServer.Internallog('%.InstanceFree: I%._Release took %',
+        [ClassType, InterfaceUri, MicroSecToString(stop)], sllWarning);
+  end;
+
 begin
   if Obj <> nil then
   try
-    QueryPerformanceMicroSeconds(start);
     if (optFreeInMainThread in fAnyOptions) and
        (GetCurrentThreadID <> MainThreadID) then
       BackgroundExecuteInstanceRelease(Obj, nil)
@@ -829,7 +846,7 @@ begin
     begin
       GlobalInterfaceExecuteMethod.Lock;
       try
-        IInterface(Obj)._Release;
+        DoRelease;
       finally
         GlobalInterfaceExecuteMethod.UnLock;
       end;
@@ -838,18 +855,13 @@ begin
     begin
       fExecuteLock.Lock;
       try
-        IInterface(Obj)._Release;
+        DoRelease;
       finally
         fExecuteLock.UnLock;
       end;
     end
     else
-      IInterface(Obj)._Release;
-    QueryPerformanceMicroSeconds(stop);
-    dec(stop, start);
-    if stop > 500 then
-      fRestServer.Internallog('%.InstanceFree: I%._Release took %',
-        [ClassType, InterfaceUri, MicroSecToString(stop)], sllWarning);
+      DoRelease;
   except
     on E: Exception do
       fRestServer.Internallog('%.InstanceFree: ignored % exception ' +
@@ -1048,10 +1060,11 @@ function TServiceFactoryServer.RetrieveInstance(Ctxt: TRestServerUriContext;
     finally
       fInstances.Safe.WriteUnLock;
     end;
-    fRestServer.InternalLog(
-      '%.RetrieveInstance: new I%(%) % instance (id=%) count=%',
-      [ClassType, fInterfaceUri, pointer(Inst.Instance),
-       ToText(fInstanceCreation)^, Inst.InstanceID, fInstances.Count], sllDebug);
+    if sllDebug in fRestServer.LogLevel then
+      fRestServer.InternalLog(
+        '%.RetrieveInstance: new I%(%) % instance (id=%) count=%',
+        [ClassType, fInterfaceUri, pointer(Inst.Instance),
+         ToText(fInstanceCreation)^, Inst.InstanceID, fInstances.Count], sllDebug);
   end;
 
 var
@@ -1078,10 +1091,11 @@ begin
             P := @fInstance[i]; // fInstance[i] due to Delete(i) below
             if tix > P^.LastAccess then
             begin
-              fRestServer.InternalLog('%.RetrieveInstance: deleted I% % ' +
-                'instance (id=%) after % minutes timeout',
-                [ClassType, fInterfaceUri, P^.Instance, P^.InstanceID,
-                 fInstanceTimeOut div 60], sllInfo);
+              if sllInfo in fRestServer.LogLevel then
+                fRestServer.InternalLog('%.RetrieveInstance: deleted I% % ' +
+                  'instance (id=%) after % minutes timeout',
+                  [ClassType, fInterfaceUri, P^.Instance, P^.InstanceID,
+                   fInstanceTimeOut div 60], sllInfo);
               InstanceFreeGC(P^.Instance);
               fInstances.DynArray.Delete(i);
             end;
@@ -1710,8 +1724,9 @@ begin
      (fFakeCallbacks.Count <> 0) then
   begin
     call.Init;
-    ctxt := TRestServerUriContext.Create(fRestServer, call);
+    ctxt := TRestServerUriContext.Create;
     try
+      ctxt.Prepare(fRestServer, call);
       fake := pointer(fFakeCallbacks.List);
       for i := 1 to fFakeCallbacks.Count do
       begin
@@ -1953,7 +1968,8 @@ begin
     FormatUtf8('[%,"%"]',
       [PtrInt(PtrUInt(fake.fFakeInterface)), fake.Factory.InterfaceName], params);
     Ctxt.ServiceParameters := pointer(params);
-    withlog := fake.canlog; // before ExcuteMethod which may free fake instance
+    withlog := (sllDebug in fRestServer.LogLevel) and
+               fake.CanLog; // before ExcuteMethod which may free fake instance
     fake._AddRef; // ExecuteMethod() calls fake._Release on its parameter
     fake.fService.ExecuteMethod(Ctxt);
     if withlog then
@@ -1978,8 +1994,9 @@ begin
      (fFakeCallbacks.Count = 0) then
     exit;
   call.Init;
-  ctxt := TRestServerUriContext.Create(fRestServer, call){%H-};
+  ctxt := TRestServerUriContext.Create;
   try
+    ctxt.Prepare(fRestServer, call);
     fFakeCallbacks.Safe.WriteLock; // may include a nested WriteLock (reentrant)
     try
       fake := pointer(fFakeCallbacks.List);
@@ -2024,8 +2041,9 @@ begin
        length(fCallbackNamesSorted) - 1, params[0].Name.Text) < 0) then
     exit;
   if not params[0].Name.Idem('ISynLogCallback') then // avoid stack overflow
-    fRestServer.InternalLog('%.ReleaseFakeCallback(%,"%") remote call',
-      [ClassType, fakeID, params[0].Name.Text], sllDebug);
+    if sllDebug in fRestServer.LogLevel then
+      fRestServer.InternalLog('%.ReleaseFakeCallback(%,"%") remote call',
+        [ClassType, fakeID, params[0].Name.Text], sllDebug);
   fFakeCallbacks.Safe.WriteLock; // may include a nested WriteLock (reentrant)
   try
     fake := FakeCallbackFind(pointer(fFakeCallbacks.List), fFakeCallbacks.Count,
@@ -2416,7 +2434,7 @@ end;
 
 procedure TServiceRecordVersionCallback.CurrentFrame(isLast: boolean);
 
-  procedure Error(const msg: RawUtf8);
+  procedure Error(const msg: shortstring);
   begin
     fRest.InternalLog('%.CurrentFrame(%) on %: %',
       [self, isLast, fTable, msg], sllError);

@@ -646,6 +646,7 @@ type
     fRotateFileCount: cardinal;
     fRotateFileSizeKB: cardinal;
     fRotateFileDailyAtHour: integer;
+    function GetLog: TSynLog; // from inlined Add (calls CreateSynLog if needed)
     function CreateSynLog: TSynLog;
     procedure EnsureAutoFlushRunning;
     procedure SetDestinationPath(const value: TFileName);
@@ -669,9 +670,9 @@ type
     destructor Destroy; override;
 
     /// retrieve the corresponding log file of this thread and family
-    // - creates the TSynLog if not already existing for this current thread
-    // - not worth inlining: TSynLog.Add will directly check fGlobalLog
-    function SynLog: TSynLog;
+    // - calls GetLog if needed (e.g. at startup or if fGlobalLog is not set)
+    function Add: TSynLog;
+      {$ifdef HASINLINE} inline; {$endif}
     /// register one object and one echo callback for remote logging
     // - aClient is typically a mORMot's TRestHttpClient or a TSynLogCallbacks
     // instance as defined in this unit
@@ -950,6 +951,14 @@ type
       read fEndOfLineCRLF write fEndOfLineCRLF;
   end;
 
+  /// available options for TSynLogThreadRecursion.MethodNameLocal
+  // - define if the method name is local, i.e. shall not be displayed at Leave()
+  TSynLogThreadMethodName = (
+    mnAlways,
+    mnEnter,
+    mnLeave,
+    mnEnterOwnMethodName);
+
   /// TSynLogThreadContext will define a dynamic array of such information
   // - used by TSynLog.Enter methods to handle recursivity calls tracing
   TSynLogThreadRecursion = record
@@ -961,7 +970,7 @@ type
     /// internal reference count used at this recursion level by TSynLog._AddRef
     RefCount: integer;
     /// if the method name is local, i.e. shall not be displayed at Leave()
-    MethodNameLocal: (mnAlways, mnEnter, mnLeave, mnEnterOwnMethodName);
+    MethodNameLocal: TSynLogThreadMethodName;
     {$ifdef ISDELPHI}
     /// the caller address, ready to display stack trace dump if needed
     Caller: PtrUInt;
@@ -1266,10 +1275,12 @@ type
     // - may be used to log Enter/Leave stack from non-pascal code
     // - each call to ManualEnter should be followed by a matching ManualLeave
     // - aMethodName should be a not nil constant text
-    procedure ManualEnter(aMethodName: PUtf8Char; aInstance: TObject = nil);
+    procedure ManualEnter(aMethodName: PUtf8Char; aInstance: TObject = nil;
+      aMethodNameLocal: TSynLogThreadMethodName =  mnEnter);
     /// manual low-level ISynLog release after TSynLog.Enter execution
     // - each call to ManualEnter should be followed by a matching ManualLeave
     procedure ManualLeave;
+      {$ifdef HASINLINE}inline;{$endif}
     /// low-level latest value returned by QueryPerformanceMicroSeconds()
     // - is only accurate after Enter() or if HighResolutionTimestamp is set
     function LastQueryPerformanceMicroSeconds: Int64;
@@ -1554,16 +1565,17 @@ type
     fHeaderLinesCount: integer;
     fHeaders: RawUtf8;
     /// method profiling data
-    fLogProcCurrent: PSynLogFileProcArray;
     fLogProcCurrentCount: integer;
-    fLogProcNatural: TSynLogFileProcDynArray;
     fLogProcNaturalCount: integer;
+    fLogProcCurrent: PSynLogFileProcArray;
+    fLogProcNatural: TSynLogFileProcDynArray;
     fLogProcMerged: TSynLogFileProcDynArray;
     fLogProcMergedCount: integer;
     fLogProcIsMerged: boolean;
     fLogProcStack: array of array of cardinal;
     fLogProcStackCount: array of integer;
     fLogProcSortInternalOrder: TLogProcSortOrder;
+    fLogProcSortInternalComp: function(A, B: PtrInt): PtrInt of object;
     /// used by ProcessOneLine//GetLogLevelTextMap
     fLogLevelsTextMap: array[TSynLogLevel] of cardinal;
     fIntelCPU: TIntelCpuFeatures;
@@ -1579,7 +1591,11 @@ type
     /// compute fLevels[] + fLogProcNatural[] for each .log line during initial reading
     procedure ProcessOneLine(LineBeg, LineEnd: PUtf8Char); override;
     /// called by LogProcSort method
-    function LogProcSortComp(A, B: PtrInt): PtrInt;
+    function LogProcSortCompByName(A, B: PtrInt): PtrInt;
+    function LogProcSortCompByOccurrence(A, B: PtrInt): PtrInt;
+    function LogProcSortCompByTime(A, B: PtrInt): PtrInt;
+    function LogProcSortCompByProperTime(A, B: PtrInt): PtrInt;
+    function LogProcSortCompDefault(A, B: PtrInt): PtrInt;
     procedure LogProcSortInternal(L, R: PtrInt);
   public
     /// initialize internal structure
@@ -3445,11 +3461,10 @@ var
 
   procedure AddHex;
   begin
-    if AllowNotCodeAddr then
-    begin
-      W.AddPointer(aAddressAbsolute);
-      W.Add(' ');
-    end;
+    if not AllowNotCodeAddr then
+      exit;
+    W.AddPointer(aAddressAbsolute);
+    W.AddDirect(' ');
   end;
 
 begin
@@ -3488,16 +3503,16 @@ begin
         W.AddString(debug.Units[u].Symbol.Name)
       else
         W.AddString(debug.Units[u].FileName);
-      W.Add(' ');
+      W.AddDirect(' ');
     end;
     if s >= 0 then
       W.AddString(debug.Symbols[s].Name);
-    W.Add(' ');
+    W.AddDirect(' ');
     if Line > 0 then
     begin
-      W.Add('(');
-      W.Add(Line);
-      W.Add(')', ' ');
+      W.AddDirect('(');
+      W.AddU(Line);
+      W.AddDirect(')', ' ');
     end;
     result := true;
   end
@@ -3883,7 +3898,7 @@ begin
   if fHandleExceptions and
      (GlobalCurrentHandleExceptionSynLog = nil) then
   begin
-    SynLog; // force GlobalCurrentHandleExceptionSynLog assignment
+    GetLog; // force GlobalCurrentHandleExceptionSynLog assignment
     RawExceptionIntercept(SynLogException);
   end;
   {$endif NOEXCEPTIONINTERCEPT}
@@ -4098,7 +4113,17 @@ begin
   end;
 end;
 
-function TSynLogFamily.SynLog: TSynLog;
+function TSynLogFamily.Add: TSynLog;
+begin
+  result := nil;
+  if self = nil then
+    exit;
+  result := fGlobalLog;  // <>nil for ptMergedInOneFile/ptIdentifiedInOneFile
+  if result = nil then
+    result := GetLog; // call sub-proc for ptOneFilePerThread or once at startup
+end;
+
+function TSynLogFamily.GetLog: TSynLog;
 begin
   if self <> nil then
   begin
@@ -4264,7 +4289,7 @@ end;
 
 procedure TSynLogFamily.OnThreadEnded(Sender: TThread);
 begin
-  SynLog.NotifyThreadEnded;
+  Add.NotifyThreadEnded;
 end;
 
 
@@ -4329,7 +4354,7 @@ begin
   result := lf.fGlobalLog;
   // <>nil for ptMergedInOneFile and ptIdentifiedInOneFile (most common case)
   if result = nil then
-    result := lf.SynLog; // ptOneFilePerThread or at startup
+    result := lf.GetLog; // ptOneFilePerThread or at startup
 end;
 
 class function TSynLog.FamilyCreate: TSynLogFamily;
@@ -4837,7 +4862,8 @@ begin
   result := log;
 end;
 
-procedure TSynLog.ManualEnter(aMethodName: PUtf8Char; aInstance: TObject);
+procedure TSynLog.ManualEnter(aMethodName: PUtf8Char; aInstance: TObject;
+  aMethodNameLocal: TSynLogThreadMethodName);
 var
   r: PSynLogThreadRecursion;
 begin
@@ -4852,7 +4878,7 @@ begin
     // inlined TSynLog.Enter
     r^.Instance := aInstance;
     r^.MethodName := aMethodName;
-    r^.MethodNameLocal := mnEnter;
+    r^.MethodNameLocal := aMethodNameLocal;
     // inlined TSynLog._AddRef
     if sllEnter in fFamily.Level then
     begin
@@ -5491,15 +5517,15 @@ begin
       for i := fFamily.fRotateFileCount - 2 downto 1 do
         // e.g. xxx.8.synlz -> xxx.9.synlz
         RenameFile(FN[i - 1], FN[i]);
-      // compress the current .log file into FN[0] = xxx.1.synlz
+      // compress the current FN[0] .log file into xxx.1.log/.synlz
       if LogCompressAlgo = nil then
-        // no compression
+        // no compression: quickly rename FN[0] into xxx.1.log
         RenameFile(fFileName, FN[0])
       else if (AutoFlushThread <> nil) and
               (AutoFlushThread.fToCompress = '') and
               RenameFile(fFileName, FN[0]) then
       begin
-        // background compression
+        // background compression of FN[0] into xxx.1.synlz
         AutoFlushThread.fToCompress := FN[0];
         AutoFlushThread.fEvent.SetEvent;
       end
@@ -6018,7 +6044,7 @@ begin
     for i := 0 to high(SynLogFamily) do
       if SynLogFamily[i].fHandleExceptions then
       begin
-        result := SynLogFamily[i].SynLog;
+        result := SynLogFamily[i].Add;
         exit;
       end;
   end
@@ -6625,7 +6651,7 @@ begin
     if fLevels[i] <> sllNone then
     begin
       fLevels[aCount] := fLevels[i];
-      fLines[aCount] := fLines[i];
+      fLines[aCount]  := fLines[i];
       if fThreads <> nil then
         fThreads[aCount] := fThreads[i];
       if fLevels[i] = sllEnter then
@@ -6730,6 +6756,7 @@ var
   i: PtrInt;
   j, Level: integer;
   TSEnter, TSLeave: Int64;
+  fp, fpe: PSynLogFileProc;
   OK: boolean;
 begin
   // 1. calculate fLines[] + fCount and fLevels[] + fLogProcNatural[] from .log content
@@ -6862,12 +6889,15 @@ begin
     end;
     // 4. compute customer-side profiling
     SetLength(fLogProcNatural, fLogProcNaturalCount);
-    for i := 0 to fLogProcNaturalCount - 1 do
-      if fLogProcNatural[i].Time >= 99000000 then
+    fp := pointer(fLogProcNatural);
+    fpe := @fLogProcNatural[fLogProcNaturalCount];
+    while PAnsiChar(fp) < PAnsiChar(fpe) do
+    begin
+      if fp^.Time >= 99000000 then
       begin
-        // 99.xxx.xxx means over range -> compute
+        // 99.xxx.xxx means over range -> compute from nested calls
         Level := 0;
-        j := fLogProcNatural[i].index;
+        j := fp^.Index;
         repeat
           inc(j);
           if j = fCount then
@@ -6880,18 +6910,15 @@ begin
               begin
                 if fFreq = 0 then
                   // adjust huge seconds timing from date/time column
-                  fLogProcNatural[i].Time := Round(
-                    (EventDateTime(j) - EventDateTime(fLogProcNatural[i].index))
-                     * 86400000000.0) +
-                    fLogProcNatural[i].Time mod 1000000
+                  fp^.Time := Round(
+                    (EventDateTime(j) -
+                     EventDateTime(fp^.Index)) * 86400000000.0) +
+                    fp^.Time mod 1000000
                 else
                 begin
-                  HexDisplayToBin(fLines[fLogProcNatural[i].index],
-                    @TSEnter, SizeOf(TSEnter));
-                  HexDisplayToBin(fLines[j],
-                    @TSLeave, SizeOf(TSLeave));
-                  fLogProcNatural[i].Time :=
-                    ((TSLeave - TSEnter) * (1000 * 1000)) div fFreq;
+                  HexDisplayToBin(fLines[fp^.Index], @TSEnter, SizeOf(TSEnter));
+                  HexDisplayToBin(fLines[j],         @TSLeave, SizeOf(TSLeave));
+                  fp^.Time := ((TSLeave - TSEnter) * (1000 * 1000)) div fFreq;
                 end;
                 break;
               end
@@ -6900,6 +6927,8 @@ begin
           end;
         until false;
       end;
+      inc(fp);
+    end;
     i := 0;
     while i < fLogProcNaturalCount do
     begin
@@ -6943,9 +6972,22 @@ procedure TSynLogFile.LogProcSort(Order: TLogProcSortOrder);
 begin
   if (fLogProcNaturalCount <= 1) or
      (Order = fLogProcSortInternalOrder) then
-    Exit;
+    exit;
   fLogProcSortInternalOrder := Order;
-  LogProcSortInternal(0, LogProcCount - 1);
+  case Order of
+    soByName:
+      fLogProcSortInternalComp := LogProcSortCompByName;
+    soByOccurrence:
+      fLogProcSortInternalComp := LogProcSortCompByOccurrence;
+    soByTime:
+      fLogProcSortInternalComp := LogProcSortCompByTime;
+    soByProperTime:
+      fLogProcSortInternalComp := LogProcSortCompByProperTime;
+  else
+    fLogProcSortInternalComp := LogProcSortCompDefault;
+  end;
+  LogProcSortInternal(0, fLogProcCurrentCount - 1);
+  fLogProcSortInternalComp := nil;
 end;
 
 function StrICompLeftTrim(Str1, Str2: PUtf8Char): PtrInt;
@@ -6964,28 +7006,37 @@ begin
     if (C1 <> C2) or
        (C1 < 32) then
       break;
-    Inc(Str1);
-    Inc(Str2);
+    inc(Str1);
+    inc(Str2);
   until false;
   result := C1 - C2;
 end;
 
-function TSynLogFile.LogProcSortComp(A, B: PtrInt): PtrInt;
+function TSynLogFile.LogProcSortCompByName(A, B: PtrInt): PtrInt;
 begin
-  case fLogProcSortInternalOrder of
-    soByName:
-      result := StrICompLeftTrim(
-        PUtf8Char(fLines[LogProc[A].index]) + fLineTextOffset,
-        PUtf8Char(fLines[LogProc[B].index]) + fLineTextOffset);
-    soByOccurrence:
-      result := LogProc[A].index - LogProc[B].index;
-    soByTime:
-      result := LogProc[B].Time - LogProc[A].Time;
-    soByProperTime:
-      result := LogProc[B].ProperTime - LogProc[A].ProperTime;
-  else
-    result := A - B;
-  end;
+  result := StrICompLeftTrim(
+    PUtf8Char(fLines[LogProc[A].Index]) + fLineTextOffset,
+    PUtf8Char(fLines[LogProc[B].Index]) + fLineTextOffset);
+end;
+
+function TSynLogFile.LogProcSortCompByOccurrence(A, B: PtrInt): PtrInt;
+begin
+  result := LogProc[A].Index - LogProc[B].Index;
+end;
+
+function TSynLogFile.LogProcSortCompByTime(A, B: PtrInt): PtrInt;
+begin
+  result := LogProc[B].Time - LogProc[A].Time;
+end;
+
+function TSynLogFile.LogProcSortCompByProperTime(A, B: PtrInt): PtrInt;
+begin
+  result := LogProc[B].ProperTime - LogProc[A].ProperTime;
+end;
+
+function TSynLogFile.LogProcSortCompDefault(A, B: PtrInt): PtrInt;
+begin
+  result := A - B;
 end;
 
 procedure LogProcSortExchg(var P1, P2: TSynLogFileProc);
@@ -7008,9 +7059,9 @@ begin
       J := R;
       P := (L + R) shr 1;
       repeat
-        while LogProcSortComp(I, P) < 0 do
+        while fLogProcSortInternalComp(I, P) < 0 do
           inc(I);
-        while LogProcSortComp(J, P) > 0 do
+        while fLogProcSortInternalComp(J, P) > 0 do
           dec(J);
         if I <= J then
         begin
@@ -7341,8 +7392,8 @@ end;
 
 procedure TSynLogFile.SetLogProcMerged(const Value: boolean);
 var
-  i: integer;
-  P: ^TSynLogFileProc;
+  i: PtrInt;
+  P: PSynLogFileProc;
   O: TLogProcSortOrder;
 begin
   fLogProcIsMerged := Value;
@@ -7362,14 +7413,14 @@ begin
         with fLogProcMerged[fLogProcMergedCount] do
         begin
           repeat
-            index := P^.index;
+            index := P^.Index;
             inc(Time, P^.Time);
             inc(ProperTime, P^.ProperTime);
             inc(i);
             inc(P);
           until (i >= fLogProcNaturalCount) or
-            (StrICompLeftTrim(PUtf8Char(fLines[LogProc[i - 1].index]) + 22,
-             PUtf8Char(fLines[P^.index]) + 22) <> 0);
+            (StrICompLeftTrim(PUtf8Char(fLines[LogProc[i - 1].Index]) + 22,
+                              PUtf8Char(fLines[P^.Index]) + 22) <> 0);
         end;
         inc(fLogProcMergedCount);
       until i >= fLogProcNaturalCount;

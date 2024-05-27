@@ -114,6 +114,7 @@ type
     /// set of known/registered claims, as stored in the JWT payload
     claims: TJwtClaims;
     /// match TJwtAbstract.Audience[] indexes for reg[jrcAudience]
+    // - is not decoded if joNoAudienceCheck option was defined
     audience: set of 0..15;
     /// known/registered claims UTF-8 values, as stored in the JWT payload
     // - e.g. reg[jrcSubject]='1234567890' and reg[jrcIssuer]='' for
@@ -126,7 +127,8 @@ type
     // $ {"sub": "1234567890","name": "John Doe","admin": true}
     // but data.U['sub'] if not defined, and reg[jrcSubject]='1234567890'
     data: TDocVariantData;
-    /// match the jrcJwtID "jti" claim desobfuscated value
+    /// match the jrcJwtID "jti" claim 64-bit desobfuscated value
+    // - is not decoded if joNoJwtIDCheck option was defined
     id: TSynUniqueIdentifierBits;
   end;
 
@@ -138,12 +140,22 @@ type
   TJwtContentDynArray = array of TJwtContent;
 
   /// available options for TJwtAbstract process
+  // - joHeaderParse won't expect a fixed '{"alg":"%","typ":"JWT"}' header, but
+  // parse for any valid variant (slower)
+  // - joAllowUnexpectedClaims won't reject JWT with unknown TJwtAbstract.Claims
+  // - joAllowUnexpectedAudience won't reject JWT with unknown "aud" item(s)
+  // - joNoJwtIDGenerate won't compute a new "jti" item, but expect it to be
+  // supplied as a DataNameValue pair to TJwtAbstract.Compute()
+  // - joNoJwtIDCheck won't decode/deobfuscate the "jti" item
+  // - joNoAudienceCheck won't decode and check the "aud" - so is faster
+  // - joDoubleInData will allow double floting point values in TJwtContent.data
   TJwtOption = (
     joHeaderParse,
     joAllowUnexpectedClaims,
     joAllowUnexpectedAudience,
     joNoJwtIDGenerate,
     joNoJwtIDCheck,
+    joNoAudienceCheck,
     joDoubleInData);
 
   /// store options for TJwtAbstract process
@@ -702,6 +714,8 @@ type
     // - just a wrapper to check that CryptPublicKey[aAlgo] factory do exist
     class function Supports(aAlgo: TCryptAsymAlgo): boolean;
     /// initialize this JWT instance from a supplied public key and algorithm
+    // - aPublicKey is expected to be a public key in PEM or DER format, but
+    // a private key with no password encryption is also accepted here
     // - if no aPublicKey is supplied, it will generate a new key pair and the
     // PublicKey/PrivateKey properties could be used for proper persistence
     // (warning: generating a key pair could be very slow with RSA/RSAPSS)
@@ -1075,7 +1089,7 @@ begin
        not CompareMem(pointer(fHeaderB64), tok, headerlen) then
       exit;
   end;
-  // 2. extract the payload
+  // 2. extract the payload and signature
   Jwt.result := jwtWrongFormat;
   if toklen > JWT_MAXSIZE then
     exit;
@@ -1143,14 +1157,29 @@ begin
                         exit;
                       end;
                   jrcAudience:
-                    if Jwt.reg[jrcAudience][1] = '[' then
-                    begin
-                      aud.InitJsonInPlace(info.Value, JSON_FAST);
-                      if aud.Count = 0 then
-                        exit;
-                      for j := 0 to aud.Count - 1 do
+                    if not (joNoAudienceCheck in fOptions) then
+                      if Jwt.reg[jrcAudience][1] = '[' then
                       begin
-                        a := FindRawUtf8(fAudience, VariantToUtf8(aud.Values[j]));
+                        aud.InitJsonInPlace(info.Value, JSON_FAST);
+                        if aud.Count = 0 then
+                          exit;
+                        for j := 0 to aud.Count - 1 do
+                        begin
+                          a := FindRawUtf8(fAudience, VariantToUtf8(aud.Values[j]));
+                          if a < 0 then
+                          begin
+                            Jwt.result := jwtUnknownAudience;
+                            if not (joAllowUnexpectedAudience in fOptions) then
+                              exit;
+                          end
+                          else
+                            include(Jwt.audience, a);
+                        end;
+                        aud.Clear;
+                      end
+                      else
+                      begin
+                        a := FindRawUtf8(fAudience, Jwt.reg[jrcAudience]);
                         if a < 0 then
                         begin
                           Jwt.result := jwtUnknownAudience;
@@ -1160,20 +1189,6 @@ begin
                         else
                           include(Jwt.audience, a);
                       end;
-                      aud.Clear;
-                    end
-                    else
-                    begin
-                      a := FindRawUtf8(fAudience, Jwt.reg[jrcAudience]);
-                      if a < 0 then
-                      begin
-                        Jwt.result := jwtUnknownAudience;
-                        if not (joAllowUnexpectedAudience in fOptions) then
-                          exit;
-                      end
-                      else
-                        include(Jwt.audience, a);
-                    end;
                 end;
               Nlen := 0; // don't add to Jwt.data
               dec(cap);
@@ -1214,14 +1229,6 @@ begin
   result := Jwt.result = jwtValid;
 end;
 
-const
-  JWT_PLD: array[0..4] of PUtf8Char = (
-    'iss',  // 0
-    'aud',  // 1
-    'exp',  // 2
-    'nbf',  // 3
-    'sub'); // 4
-
 class function TJwtAbstract.ExtractAlgo(const Token: RawUtf8): RawUtf8;
 var
   P: PUtf8Char;
@@ -1243,6 +1250,14 @@ class function TJwtAbstract.MatchAlgo(const Token, Algo: RawUtf8): boolean;
 begin
   result := PropNameEquals(ExtractAlgo(Token), Algo);
 end;
+
+const
+  JWT_PLD: array[0..4] of PUtf8Char = (
+    'iss',  // 0
+    'aud',  // 1
+    'exp',  // 2
+    'nbf',  // 3
+    'sub'); // 4
 
 class function TJwtAbstract.VerifyPayload(const Token,
   ExpectedAlgo, ExpectedSubject, ExpectedIssuer, ExpectedAudience: RawUtf8;
@@ -1702,8 +1717,15 @@ begin
               [self, ToText(fKeyAlgo)^]);
   end
   else if not fPublicKey.Load(fKeyAlgo, aPublicKey) then
-    EJwtException.RaiseUtf8('%.Create: impossible to load this % key',
-            [self, ToText(fKeyAlgo)^]);
+  begin
+    // is not a public key: try to load a private key here
+    fPrivateKey := CryptPrivateKey[fKeyAlgo].Create;
+    if not fPrivateKey.Load(fKeyAlgo, nil, aPublicKey, '') or
+       // and generate the associated public key from this private key
+       not fPublicKey.Load(fKeyAlgo, fPrivateKey.ToSubjectPublicKey) then
+      EJwtException.RaiseUtf8('%.Create: impossible to load this % key',
+        [self, ToText(fKeyAlgo)^]);
+  end;
   inherited Create(fAlgorithm, aClaims, aAudience, aExpirationMinutes,
     aIDIdentifier, aIDObfuscationKey, aIDObfuscationKeyNewKdf);
 end;
@@ -1736,15 +1758,18 @@ begin
   sig := fPrivateKey.Sign(fAsymAlgo, headpayload); // = encrypt with private key
   if sig = '' then
     EJwtException.RaiseUtf8('%.ComputeSignature: % Sign failed', [self, fAlgorithm]);
-  result := BinToBase64Uri(pointer(sig), length(sig));
+  result := GetSignatureSecurityRaw(fAsymAlgo, sig); // into base-64 encoded raw
 end;
 
 procedure TJwtCrypt.CheckSignature(const headpayload: RawUtf8;
   const signature: RawByteString; var jwt: TJwtContent);
+var
+  der: RawByteString;
 begin
   if not Assigned(fPublicKey) then
     EJwtException.RaiseUtf8('%.CheckSignature requires a public key', [self]);
-  if fPublicKey.Verify(fAsymAlgo, headpayload, signature) then // = decrypt
+  der := SetSignatureSecurityRaw(fAsymAlgo, signature);
+  if fPublicKey.Verify(fAsymAlgo, headpayload, der) then // = decrypt
     jwt.result := jwtValid
   else
     jwt.result := jwtInvalidSignature;

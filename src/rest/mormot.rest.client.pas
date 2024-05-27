@@ -1992,7 +1992,7 @@ begin
   else
   begin
     fLastErrorException := PPointer(E)^;
-    fLastErrorMessage := ObjectToJsonDebug(E);
+    ObjectToJson(E, fLastErrorMessage, TEXTWRITEROPTIONS_DEBUG);
   end;
   if Assigned(fOnFailed) then
     fOnFailed(self, E, Call);
@@ -2460,7 +2460,7 @@ begin
     on E: Exception do
     begin
       Ctxt.OutHead := '';
-      Ctxt.OutBody := ObjectToJsonDebug(E);
+      ObjectToJson(E, Ctxt.OutBody, TEXTWRITEROPTIONS_DEBUG);
       Ctxt.OutStatus := HTTP_SERVERERROR;
     end;
   end;
@@ -2515,7 +2515,7 @@ begin
   end;
   fLastErrorMessage := '';
   fLastErrorException := nil;
-  if fServerTimestamp.Offset = 0 then
+  if fServerTimestampOffset = 0 then
   begin
     if not ServerTimestampSynchronize then
     begin
@@ -2607,7 +2607,7 @@ begin
       aResponseHead^ := header;
     if (log <> nil) and
        (aResponse <> '') and
-       (sllServiceReturn in fLogFamily.Level) then
+       (sllServiceReturn in fLogLevel) then
       if IsHtmlContentTypeTextual(pointer(header)) then
         log.Log(sllServiceReturn, aResponse, self, MAX_SIZE_RESPONSE_LOG)
       else
@@ -2672,7 +2672,7 @@ function TRestClientUri.ServiceRegister(const aInterfaces: array of PRttiInfo;
   aInstanceCreation: TServiceInstanceImplementation;
   const aContractExpected: RawUtf8): boolean;
 begin
-  result := False;
+  result := false;
   if (self = nil) or
      (high(aInterfaces) < 0) then
     exit;
@@ -2793,7 +2793,7 @@ begin
   result := false;
   if self = nil then
     exit;
-  fServerTimestamp.Offset := 0.0001; // avoid endless recursive call
+  fServerTimestampOffset := 0.0001; // avoid endless recursive call
   try
     status := CallBackGet('timestamp', [], resp);
     result := (status = HTTP_SUCCESS) and
@@ -2807,7 +2807,7 @@ begin
     end;
   finally
     if not result then
-      fServerTimestamp.Offset := 0; // allow retrial
+      fServerTimestampOffset := 0; // allow retrial
   end;
 end;
 

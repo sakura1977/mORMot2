@@ -3698,7 +3698,7 @@ begin
      (Dest = nil) then
   begin
     result := nil;
-    Exit;
+    exit;
   end
   else if (Source <> nil) and
           (SourceChars > 0) then
@@ -5571,7 +5571,7 @@ end;
 
 function IdemPCharWithoutWhiteSpace(p: PUtf8Char; up: PAnsiChar): boolean;
 begin
-  result := False;
+  result := false;
   if p = nil then
     exit;
   if up <> nil then

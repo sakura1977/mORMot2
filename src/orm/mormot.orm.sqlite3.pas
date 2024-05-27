@@ -256,10 +256,9 @@ type
     fStatementMonitor: TSynMonitor;
     fStaticStatementTimer: TPrecisionTimer;
     fStatementSql: RawUtf8;
-    fStatementGenericSql: RawUtf8;
-    fStatementMaxParam: integer;
     fStatementLastException: RawUtf8;
     fStatementTruncateSqlLogLen: integer;
+    fStatementDecoder: TExtractInlineParameters;
     /// check if a VACUUM statement is possible
     // - VACUUM in fact DISCONNECT all virtual modules (sounds like a SQLite3
     // design problem), so calling it during process could break the engine
@@ -1100,7 +1099,7 @@ begin
   inc(fShardLast);
   FormatUtf8('shard%', [fShardLast], root);
   fn := DBFileName(fShardLast);
-  InternalLog('InitNewShard % on %', [root, fn]);
+  fRest.InternalLog('InitNewShard % on %', [root, fn], sllDB);
   model := TOrmModel.Create([fStoredClass], root);
   if fInitShardsIsLast then
     // last/new .dbs = 2MB cache, previous 1MB only
@@ -1135,7 +1134,7 @@ begin
   else
     mask := fShardRootFileName + '*.dbs';
   db := FindFiles(ExtractFilePath(mask), ExtractFileName(mask), '', [ffoSortByName]);
-  InternalLog('InitShards mask=% db=%', [mask, length(db)]);
+  fRest.InternalLog('InitShards mask=% db=%', [mask, length(db)], sllDB);
   if db = nil then
     exit; // no existing data
   fShardOffset := -1;
@@ -1148,7 +1147,7 @@ begin
     if (i <= 4) or
        not TryStrToInt(Copy(db[f].Name, i - 4, 4), num) then
     begin
-      InternalLog('InitShards(%)?', [db[f].Name], sllWarning);
+      fRest.InternalLog('InitShards(%)?', [db[f].Name], sllWarning);
       continue;
     end;
     if fShardOffset < 0 then
@@ -1212,8 +1211,8 @@ begin
   fStaticStatementTimer.Start;
   if not Cached then
   begin
-    fStaticStatement.Prepare(DB.DB, fStatementGenericSql);
-    fStatementGenericSql := '';
+    fStaticStatement.Prepare(DB.DB, fStatementDecoder.GenericSql);
+    fStatementDecoder.GenericSql := '';
     fStatement := @fStaticStatement;
     fStatementTimer := @fStaticStatementTimer;
     fStatementMonitor := nil;
@@ -1224,14 +1223,13 @@ begin
     timer := @fStatementTimer
   else
     timer := nil;
-  fStatement := fStatementCache.Prepare(fStatementGenericSql, @wasprepared,
+  fStatement := fStatementCache.Prepare(fStatementDecoder.GenericSql, @wasprepared,
     timer, @fStatementMonitor, @plan);
   if wasprepared and
      (fRest <> nil) and
-     (fRest.LogFamily <> nil) and
-     (sllDB in fRest.LogFamily.Level) then
-    InternalLog('prepared % % %  %', [fStaticStatementTimer.Stop,
-      DB.FileNameWithoutPath, fStatementGenericSql, plan], sllDB);
+     (sllDB in fRest.LogLevel) then
+    fRest.InternalLog('prepared % % %  %', [fStaticStatementTimer.Stop,
+      DB.FileNameWithoutPath, fStatementDecoder.GenericSql, plan], sllDB);
   if timer = nil then
   begin
     fStaticStatementTimer.Start;
@@ -1244,8 +1242,8 @@ procedure TRestOrmServerDB.PrepareCachedStatement(const SQL: RawUtf8;
   ExpectedParams: integer);
 begin
   fStatementSql := SQL;
-  fStatementGenericSql := SQL;
-  fStatementMaxParam := 1;
+  fStatementDecoder.GenericSql := SQL;
+  fStatementDecoder.Count := ExpectedParams;
   PrepareStatement({cached=}true);
   if fStatement^.ParamCount <> ExpectedParams then
     EOrmException.RaiseUtf8(
@@ -1257,34 +1255,32 @@ procedure TRestOrmServerDB.GetAndPrepareStatement(const SQL: RawUtf8;
   ForceCacheStatement: boolean);
 var
   i: PtrInt;
-  decoder: TExtractInlineParameters;
 begin
   // prepare statement
   fStatementSql := SQL;
-  decoder.Parse(SQL);
-  fStatementGenericSql := decoder.GenericSql;
-  fStatementMaxParam := decoder.Count;
-  PrepareStatement(ForceCacheStatement or (fStatementMaxParam <> 0));
+  fStatementDecoder.Parse(SQL);
+  PrepareStatement(ForceCacheStatement or (fStatementDecoder.Count <> 0));
   // bind parameters
-  if fStatementMaxParam = 0 then
+  if fStatementDecoder.Count = 0 then
     exit; // no valid :(...): inlined parameter found -> manual bind
-  if fStatement^.ParamCount <> fStatementMaxParam then
+  if fStatement^.ParamCount <> fStatementDecoder.Count then
     EOrmException.RaiseUtf8(
       '%.GetAndPrepareStatement(%) recognized % params, and % for SQLite3',
-      [self, fStatementGenericSql, fStatementMaxParam, fStatement^.ParamCount]);
-  for i := 0 to fStatementMaxParam - 1 do
-    case decoder.Types[i] of
+      [self, fStatementDecoder.GenericSql, fStatementDecoder.Count,
+       fStatement^.ParamCount]);
+  for i := 0 to fStatementDecoder.Count - 1 do
+    case fStatementDecoder.Types[i] of
       sptNull:
         fStatement^.BindNull(i + 1);
       sptDateTime, // date/time are stored as ISO-8601 TEXT in SQLite3
       sptText:
-        fStatement^.Bind(i + 1, decoder.Values[i]);
+        fStatement^.Bind(i + 1, fStatementDecoder.Values[i]);
       sptBlob:
-        fStatement^.BindBlob(i + 1, decoder.Values[i]);
+        fStatement^.BindBlob(i + 1, fStatementDecoder.Values[i]);
       sptInteger:
-        fStatement^.Bind(i + 1, GetInt64(pointer(decoder.Values[i])));
+        fStatement^.Bind(i + 1, GetInt64(pointer(fStatementDecoder.Values[i])));
       sptFloat:
-        fStatement^.Bind(i + 1, GetExtended(pointer(decoder.Values[i])));
+        fStatement^.Bind(i + 1, GetExtended(pointer(fStatementDecoder.Values[i])));
     end;
 end;
 
@@ -1300,20 +1296,22 @@ begin
         fStatementMonitor.ProcessEnd
       else
         fStatementTimer^.Pause;
-      if E = nil then
+      if E <> nil then
+        fRest.InternalLog('% for % // %',
+          [E, fStatementSql, fStatementDecoder.GenericSql], sllError)
+      else if sllSQL in fRest.LogLevel then
         if (fStatementTruncateSqlLogLen > 0) and
            (length(fStatementSql) > fStatementTruncateSqlLogLen) then
         begin
           c := fStatementSql[fStatementTruncateSqlLogLen];
           fStatementSql[fStatementTruncateSqlLogLen] := #0; // truncate
-          InternalLog('% % %... len=%', [fStatementTimer^.LastTime, Msg,
+          fRest.InternalLog('% % %... len=%', [fStatementTimer^.LastTime, Msg,
             PAnsiChar(pointer(fStatementSql)), length(fStatementSql)], sllSQL);
           fStatementSql[fStatementTruncateSqlLogLen] := c; // restore
         end
         else
-          InternalLog('% % %', [fStatementTimer^.LastTime, Msg, fStatementSql], sllSQL)
-      else
-        InternalLog('% for % // %', [E, fStatementSql, fStatementGenericSql], sllError);
+          fRest.InternalLog('% % %', [fStatementTimer^.LastTime, Msg,
+            fStatementSql], sllSQL);
       fStatementTimer := nil;
     end;
     fStatementMonitor := nil;
@@ -1327,17 +1325,16 @@ begin
       begin
         // clean the reused statement
         fStatement^.Reset; // ensure e.g. any virtual cursor is closed ASAP
-        if (fStatementMaxParam <> 0) or
+        if (fStatementDecoder.Count <> 0) or
            ForceBindReset then
           fStatement^.BindReset; // early release bound blobs
       end;
       fStatement := nil;
     end;
     fStatementSql := '';
-    fStatementGenericSql := '';
-    fStatementMaxParam := 0;
+    fStatementDecoder.Reset;
     if E <> nil then
-      FormatUtf8('% %', [E, ObjectToJsonDebug(E)], fStatementLastException);
+      ObjectToJson(E, fStatementLastException, TEXTWRITEROPTIONS_DEBUG);
   end;
 end;
 
@@ -1346,7 +1343,9 @@ procedure TRestOrmServerDB.GetAndPrepareStatementRelease(E: Exception;
 var
   msg: ShortString;
 begin
-  FormatShort(Format, Args, msg);
+  msg[0] := #0;
+  if sllSQL in fRest.LogLevel then
+    FormatShort(Format, Args, msg);
   GetAndPrepareStatementRelease(E, msg, ForceBindReset);
 end;
 
@@ -1442,7 +1441,7 @@ begin
   if fBatch^.Encoding = encPost then
   begin
     if SentData = '' then
-      InternalLog('MainEngineAdd(%,SentData="") -> ' +
+      fRest.InternalLog('MainEngineAdd(%,SentData="") -> ' +
         'DEFAULT VALUES not implemented on BATCH', [sql], sllError)
     else
     begin
@@ -1746,7 +1745,7 @@ var
   n, res: integer;
   msg: ShortString;
 begin
-  msg := '';
+  msg[0] := #0;
   if (self <> nil) and
      (DB <> nil) then
   try
@@ -1767,7 +1766,8 @@ begin
               AddInt64(ValueInts^, n, fStatement^.FieldInt(0));
           until res = SQLITE_DONE;
           SetLength(ValueInts^, n);
-          FormatShort('returned Int64 len=%', [n], msg);
+          if sllSQL in fRest.LogLevel then
+            FormatShort('returned Int64 len=%', [n], msg);
         end
         else if (ValueInt = nil) and
                 (ValueUtf8 = nil) then
@@ -1778,12 +1778,14 @@ begin
           if LastInsertedID <> nil then
           begin
             LastInsertedID^ := sqlite3.last_insert_rowid(DB.DB);
-            FormatShort(' lastInsertedID=%', [LastInsertedID^], msg);
+            if sllSQL in fRest.LogLevel then
+              FormatShort(' lastInsertedID=%', [LastInsertedID^], msg);
           end;
           if LastChangeCount <> nil then
           begin
             LastChangeCount^ := sqlite3.changes(DB.DB);
-            FormatShort('% lastChangeCount=%', [msg, LastChangeCount^], msg);
+            if sllSQL in fRest.LogLevel then
+              FormatShort('% lastChangeCount=%', [msg, LastChangeCount^], msg);
           end;
         end
         else
@@ -1793,12 +1795,14 @@ begin
         else if ValueInt <> nil then
         begin
           ValueInt^ := fStatement^.FieldInt(0);
-          FormatShort('returned=%', [ValueInt^], msg);
+          if sllSQL in fRest.LogLevel then
+            FormatShort('returned=%', [ValueInt^], msg);
         end
         else
         begin
-          ValueUtf8^ := fStatement^.FieldUtf8(0);
-          FormatShort('returned="%"', [ValueUtf8^], msg);
+          fStatement^.FieldUtf8(0, ValueUtf8^);
+          if sllSQL in fRest.LogLevel then
+            FormatShort('returned="%"', [ValueUtf8^], msg);
         end;
         GetAndPrepareStatementRelease(nil, msg);
       except
@@ -1814,7 +1818,7 @@ begin
   except
     on E: ESqlite3Exception do
     begin
-      InternalLog('% for % // %', [E, aSql, fStatementGenericSql], sllError);
+      InternalLog('% for % // %', [E, aSql, fStatementDecoder.GenericSql], sllError);
       result := false;
     end;
   end
@@ -1897,6 +1901,7 @@ function TRestOrmServerDB.MainEngineList(const SQL: RawUtf8; ForceAjax: boolean;
 var
   res: TRawByteStringStream;
   rows: integer;
+  msg: ShortString;
 begin
   result := '';
   rows := 0;
@@ -1908,6 +1913,7 @@ begin
     result := DB.LockJson(SQL, ReturnedRowCount); // lock and try from cache
     if result <> '' then
       exit;
+    msg[0] := #0;
     try
       // Execute request if was not got from cache
       try
@@ -1920,8 +1926,9 @@ begin
         finally
           res.Free;
         end;
-        GetAndPrepareStatementRelease(nil, 'returned % as %',
-          [Plural('row', rows), KB(result)]);
+        if sllSQL in fRest.LogLevel then
+          FormatShort('returned % as %', [Plural('row', rows), KB(result)], msg);
+        GetAndPrepareStatementRelease(nil, msg);
       except
         on E: ESqlite3Exception do
           GetAndPrepareStatementRelease(E);
@@ -1939,6 +1946,7 @@ function TRestOrmServerDB.MainEngineRetrieve(TableModelIndex: integer;
 var
   WR: TJsonWriter;
   tmp: TTextWriterStackBuffer;
+  msg: ShortString absolute tmp;
 begin
   // faster direct access with no ID inlining
   result := '';
@@ -1959,7 +1967,10 @@ begin
       WR.SetText(result);
   finally
     ReleaseJsonWriter(WR);
-    GetAndPrepareStatementRelease(nil, 'id=%', [ID]);
+    msg[0] := #0;
+    if sllSQL in fRest.LogLevel then
+      FormatShort('id=%', [ID], msg);
+    GetAndPrepareStatementRelease(nil, msg);
     DB.UnLock;
   end;
 end;
@@ -2152,8 +2163,8 @@ begin
      (FieldName = '') then
     exit;
   props := Model.TableProps[TableModelIndex].Props;
-  if props.Fields.IndexByName(FieldName) < 0 then
-    Exit;
+  if not props.Fields.Exists(FieldName) then
+    exit;
   if InternalUpdateEventNeeded(oeUpdate, TableModelIndex) or
      (props.RecordVersionField <> nil) then
     result := OneFieldValue(props.Table, FieldName, 'ID=?', [], [ID], value) and
@@ -2178,7 +2189,7 @@ begin
      (SetFieldName = '') then
     exit;
   props := Model.TableProps[TableModelIndex].Props;
-  if props.Fields.IndexByName(SetFieldName) < 0 then
+  if not props.Fields.Exists(SetFieldName) then
     exit;
   if WhereFieldName = '' then
     whereid := -1 // update all
@@ -2188,7 +2199,7 @@ begin
     if whereid <= 0 then
       exit;
   end
-  else if props.Fields.IndexByName(WhereFieldName) < 0 then
+  else if not props.Fields.Exists(WhereFieldName) then
     exit
   else
     whereid := 0;
@@ -2648,7 +2659,7 @@ begin
       try
         try
           fStatementSql := logsql;
-          fStatementGenericSql  := sql;
+          fStatementDecoder.GenericSql := sql;
           PrepareStatement({cached=}(rowcount < 5) or not decodedsaved);
           arg := 0;
           case encoding of
