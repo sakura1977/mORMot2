@@ -774,15 +774,15 @@ type
     function Next(DataLen: PtrInt): pointer;
       {$ifdef HASINLINE}inline;{$endif}
     /// returns the current position, and move ahead the specified bytes
-    function NextSafe(out Data: Pointer; DataLen: PtrInt): boolean;
+    function NextSafe(out Data: pointer; DataLen: PtrInt): boolean;
       {$ifdef HASINLINE}inline;{$endif}
     /// copy data from the current position, and move ahead the specified bytes
-    procedure Copy(Dest: Pointer; DataLen: PtrInt);
+    procedure Copy(Dest: pointer; DataLen: PtrInt);
       {$ifdef HASINLINE}inline;{$endif}
     /// copy data from the current position, and move ahead the specified bytes
     // - this version won't call ErrorOverflow, but return false on error
     // - returns true on read success
-    function CopySafe(Dest: Pointer; DataLen: PtrInt): boolean;
+    function CopySafe(Dest: pointer; DataLen: PtrInt): boolean;
     /// retrieved cardinal values encoded with TBufferWriter.WriteVarUInt32Array
     // - Values[] will be resized only if it is not long enough, to spare heap
     // - returns decoded count in Values[], which may not be length(Values)
@@ -1774,13 +1774,13 @@ function GetMimeContentTypeFromExt(const FileName: TFileName;
 function GetMimeTypeFromExt(const Ext: RawUtf8): TMimeType;
 
 /// retrieve the MIME content type from a supplied binary buffer
-function GetMimeContentTypeFromMemory(Content: Pointer; Len: PtrInt): TMimeType;
+function GetMimeContentTypeFromMemory(Content: pointer; Len: PtrInt): TMimeType;
 
 /// retrieve the MIME content type from a supplied binary buffer
 // - inspect the first bytes, to guess from standard known headers
 // - return the MIME type, ready to be appended to a 'Content-Type: ' HTTP header
 // - returns DefaultContentType if the binary buffer has an unknown layout
-function GetMimeContentTypeFromBuffer(Content: Pointer; Len: PtrInt;
+function GetMimeContentTypeFromBuffer(Content: pointer; Len: PtrInt;
   const DefaultContentType: RawUtf8; Mime: PMimeType = nil): RawUtf8;
 
 /// retrieve the MIME content type from its file name or a supplied binary buffer
@@ -1789,7 +1789,7 @@ function GetMimeContentTypeFromBuffer(Content: Pointer; Len: PtrInt;
 // - default is DefaultContentType or 'application/octet-stream' (BINARY_CONTENT_TYPE)
 // or 'application/fileextension' if FileName was specified
 // - see @http://en.wikipedia.org/wiki/Internet_media_type for most common values
-function GetMimeContentType(Content: Pointer; Len: PtrInt; const FileName: TFileName = '';
+function GetMimeContentType(Content: pointer; Len: PtrInt; const FileName: TFileName = '';
   const DefaultContentType: RawUtf8 = BINARY_CONTENT_TYPE; Mime: PMimeType = nil): RawUtf8;
 
 /// retrieve the HTTP header for MIME content type from a supplied binary buffer
@@ -1808,7 +1808,7 @@ const
 // - returns TRUE, if the header in binary buffer "may" be compressed (this
 // method can trigger false positives), e.g. begin with most common already
 // compressed zip/gz/gif/png/jpeg/avi/mp3/mp4 markers (aka "magic numbers")
-function IsContentCompressed(Content: Pointer; Len: PtrInt): boolean;
+function IsContentCompressed(Content: pointer; Len: PtrInt): boolean;
 
 /// fast guess of the size, in pixels, of a JPEG memory buffer
 // - will only scan for basic JPEG structure, up to the StartOfFrame (SOF) chunk
@@ -2701,7 +2701,7 @@ type
   TRawByteStringBuffer = object
   {$endif USERECORDWITHMETHODS}
   private
-    fBuffer: RawUtf8; /// actual storage, with length(fBuffer) as Capacity
+    fBuffer: RawUtf8; // actual storage, with length(fBuffer) as Capacity
     fLen: PtrInt;
     procedure RawAppend(P: pointer; PLen: PtrInt);
       {$ifdef HASINLINE}inline;{$endif}
@@ -2749,6 +2749,7 @@ type
     procedure Reserve(const WorkingBuffer: RawByteString); overload;
     /// similar to delete(fBuffer, 1, FirstBytes)
     procedure Remove(FirstBytes: PtrInt);
+      {$ifdef HASINLINE}inline;{$endif}
     /// move up to Count bytes from the internal Buffer into another place
     // - returns how many bytes were available to be copied into Dest^
     // - then remove the copied bytes from the internal Buffer/Len storage
@@ -2758,10 +2759,6 @@ type
     // - don't move any byte, but just update the given Pos index
     function ExtractAt(var Dest: PAnsiChar; var Count: PtrInt;
       var Pos: PtrInt): PtrInt;
-    /// similar to insert(P/PLen, fBuffer, Position + 1)
-    // - could optionally include a #13#10 pattern between the two
-    procedure Insert(P: pointer; PLen: PtrInt; Position: PtrInt = 0;
-      CRLF: boolean = false);
     /// retrieve the current Buffer/Len content as RawUtf8 text
     // - with some optional overhead for faster reallocmem at concatenation
     // - won't force Len to 0: caller should call Reset if done with it
@@ -3365,7 +3362,7 @@ end;
 
 function GotoNextVarString(Source: PByte): pointer;
 begin
-  result := Pointer(PtrUInt(Source) + FromVarUInt32(Source));
+  result := pointer(PtrUInt(Source) + FromVarUInt32(Source));
 end;
 
 function FromVarString(var Source: PByte): RawUtf8;
@@ -3588,7 +3585,7 @@ begin
   inc(P, DataLen);
 end;
 
-function TFastReader.NextSafe(out Data: Pointer; DataLen: PtrInt): boolean;
+function TFastReader.NextSafe(out Data: pointer; DataLen: PtrInt): boolean;
 begin
   if P + DataLen > Last then
     result := false
@@ -3600,7 +3597,7 @@ begin
   end;
 end;
 
-procedure TFastReader.Copy(Dest: Pointer; DataLen: PtrInt);
+procedure TFastReader.Copy(Dest: pointer; DataLen: PtrInt);
 begin
   if P + DataLen > Last then
     ErrorOverflow;
@@ -3608,7 +3605,7 @@ begin
   inc(P, DataLen);
 end;
 
-function TFastReader.CopySafe(Dest: Pointer; DataLen: PtrInt): boolean;
+function TFastReader.CopySafe(Dest: pointer; DataLen: PtrInt): boolean;
 begin
   if P + DataLen > Last then
     result := false
@@ -5165,12 +5162,12 @@ end;
 
 class function TAlgoCompress.Algo(const Comp: RawByteString): TAlgoCompress;
 begin
-  result := Algo(Pointer(Comp), Length(Comp));
+  result := Algo(pointer(Comp), Length(Comp));
 end;
 
 class function TAlgoCompress.Algo(const Comp: TByteDynArray): TAlgoCompress;
 begin
-  result := Algo(Pointer(Comp), Length(Comp));
+  result := Algo(pointer(Comp), Length(Comp));
 end;
 
 class function TAlgoCompress.Algo(Comp: PAnsiChar; CompLen: integer): TAlgoCompress;
@@ -7672,7 +7669,7 @@ begin
       inc(i, length(boundary));
       if i = length(Body) then
         exit; // reached the (premature) end
-      P := PUtf8Char(Pointer(Body)) + i - 1;
+      P := PUtf8Char(pointer(Body)) + i - 1;
       Finalize(part);
       // decode section header
       repeat
@@ -7705,7 +7702,7 @@ begin
           exit;
       until PWord(P)^ = 13 + 10 shl 8;
       // decode section content
-      i := P - PUtf8Char(Pointer(Body)) + 3; // i = just after header
+      i := P - PUtf8Char(pointer(Body)) + 3; // i = just after header
       j := PosEx(boundary, Body, i);
       if j = 0 then
       begin
@@ -8575,7 +8572,7 @@ const
      mtZip, mtPdf, mtRar, mt7z, mtSQlite3, mtWma, mtWmv, mtPng, mtGif, mtFont,
      mtWebm, mtTiff, mtTiff, mtTiff, mtWebp{=riff}, mtDoc, mtOgg, mtMp4);
 
-function GetMimeContentTypeFromMemory(Content: Pointer; Len: PtrInt): TMimeType;
+function GetMimeContentTypeFromMemory(Content: pointer; Len: PtrInt): TMimeType;
 var
   i: PtrInt;
 begin
@@ -8660,7 +8657,7 @@ begin
   end;
 end;
 
-function GetMimeContentTypeFromBuffer(Content: Pointer; Len: PtrInt;
+function GetMimeContentTypeFromBuffer(Content: pointer; Len: PtrInt;
   const DefaultContentType: RawUtf8; Mime: PMimeType): RawUtf8;
 var
   m: TMimeType;
@@ -8721,7 +8718,7 @@ begin
     FileExt^ := {%H-}ext;
 end;
 
-function GetMimeContentType(Content: Pointer; Len: PtrInt; const FileName: TFileName;
+function GetMimeContentType(Content: pointer; Len: PtrInt; const FileName: TFileName;
   const DefaultContentType: RawUtf8; Mime: PMimeType): RawUtf8;
 var
   ext: RawUtf8;
@@ -8755,7 +8752,7 @@ function GetMimeContentTypeHeader(const Content: RawByteString;
   const FileName: TFileName; Mime: PMimeType): RawUtf8;
 begin
   result := HEADER_CONTENT_TYPE + GetMimeContentType(
-      Pointer(Content), length(Content), FileName, BINARY_CONTENT_TYPE, Mime);
+      pointer(Content), length(Content), FileName, BINARY_CONTENT_TYPE, Mime);
 end;
 
 const
@@ -8790,7 +8787,7 @@ const
     $dbeeabed, // .rpm package file
     $e011cfd0); // msi = D0 CF 11 E0 A1 B1 1A E1
 
-function IsContentCompressed(Content: Pointer; Len: PtrInt): boolean;
+function IsContentCompressed(Content: pointer; Len: PtrInt): boolean;
 begin
   // see http://www.garykessler.net/library/file_sigs.html
   result := false;
@@ -9098,7 +9095,7 @@ begin
   L := length(Text);
   if L <> 0 then
   begin
-    MoveFast(Pointer(Text)^, Buffer^, L);
+    MoveFast(pointer(Text)^, Buffer^, L);
     inc(Buffer, L);
   end;
   result := Buffer;
@@ -11149,10 +11146,7 @@ end;
 procedure TRawByteStringBuffer.RawRealloc(needed: PtrInt);
 begin
   if fLen = 0 then // buffer from scratch (fBuffer may be '' or not)
-  begin
-    inc(needed, 128); // small overhead at first
-    FastSetString(fBuffer, needed); // no realloc
-  end
+    FastSetString(fBuffer, needed + 128) // no realloc + small initial overhead
   else
   begin
     inc(needed, needed shr 3 + 2048); // generous overhead on resize
@@ -11160,11 +11154,14 @@ begin
   end;
 end;
 
+const
+  APPEND_OVERLOAD = 24; // for AppendCRLF or IndexByte() read overflow
+
 procedure TRawByteStringBuffer.RawAppend(P: pointer; PLen: PtrInt);
 var
   needed: PtrInt;
 begin
-  needed := fLen + PLen + 2;
+  needed := fLen + PLen + APPEND_OVERLOAD;
   if needed > length(fBuffer) then
     RawRealloc(needed);
   MoveFast(P^, PByteArray(fBuffer)[fLen], PLen);
@@ -11221,10 +11218,22 @@ end;
 
 procedure TRawByteStringBuffer.Append(const Text: array of RawUtf8);
 var
-  i: PtrInt;
+  needed, i, l: PtrInt;
 begin
+  needed := 0;
   for i := 0 to high(Text) do
-    Append(Text[i]);
+    inc(needed, length(Text[i]));
+  if needed = 0 then
+    exit;
+  inc(needed, fLen + APPEND_OVERLOAD);
+  if needed > length(fBuffer) then
+    RawRealloc(needed);
+  for i := 0 to high(Text) do
+  begin
+    l := length(Text[i]);
+    MoveFast(pointer(Text[i])^, PByteArray(fBuffer)[fLen], l);
+    inc(fLen, l);
+  end;
 end;
 
 function TRawByteStringBuffer.TryAppend(P: pointer; PLen: PtrInt): boolean;
@@ -11242,6 +11251,7 @@ end;
 procedure TRawByteStringBuffer.Reserve(MaxSize: PtrInt);
 begin
   fLen := 0;
+  inc(MaxSize, APPEND_OVERLOAD);
   if MaxSize > length(fBuffer) then
     RawRealloc(MaxSize);
 end;
@@ -11296,19 +11306,6 @@ begin
   end;
   inc(Dest, result);
   dec(Count, result);
-end;
-
-procedure TRawByteStringBuffer.Insert(P: pointer; PLen: PtrInt;
-  Position: PtrInt; CRLF: boolean);
-begin
-  inc(PLen, 2 * ord(CRLF));
-  if PLen + fLen > length(fBuffer) then
-    RawRealloc(PLen + fLen); // need more space
-  MoveFast(pointer(fBuffer)^, PByteArray(fBuffer)[PLen], fLen);
-  dec(PLen, 2 * ord(CRLF));
-  MoveFast(P^, pointer(fBuffer)^, PLen);
-  if CRLF then
-    PWord(@PByteArray(fBuffer)[PLen])^ := $0a0d;
 end;
 
 procedure TRawByteStringBuffer.AsText(out Text: RawUtf8; Overhead: PtrInt;

@@ -1304,8 +1304,7 @@ type
 /// quickly parse the TFileVersion.UserAgent content
 // - identify e.g. 'myprogram/3.1.0.2W' or 'myprogram/3.1.0.2W32' text
 function UserAgentParse(const UserAgent: RawUtf8;
-  out ProgramName, ProgramVersion: RawUtf8;
-  out OS: TOperatingSystem): boolean;
+  out ProgramName, ProgramVersion: RawUtf8; out OS: TOperatingSystem): boolean;
 
 type
   /// the command line switches supported by TExecutableCommandLine
@@ -1780,14 +1779,34 @@ var
 function GetSmbios(info: TSmbiosBasicInfo): RawUtf8;
   {$ifdef HASINLINE} inline; {$endif}
 
+type
+  /// define how GetComputerUuid() computes its 128-bit UUID identifier
+  // - set of potential sources, which may be excluded from computation
+  TGetComputerUuid = set of (
+    gcuSmbios,
+    gcuSmbiosData,
+    gcuSmbiosText,
+    gcuCpuFeatures,
+    gcuCpuInfoText,
+    gcuBiosInfoText,
+    gcuMacAddress);
+
 /// retrieve a genuine 128-bit UUID identifier for this computer
 // - first try GetSmbios(sbiUuid), i.e. the SMBIOS System UUID
 // - otherwise, will compute a genuine hash from known hardware information
-// (CPU, Bios, MAC) and store it in a local file for the next access, e.g. into
-// '/var/tmp/.synopse.uid' on POSIX
+// (CPU, Bios, MAC) and store it in a local file for the next access (if
+// disable is void), e.g. into '/var/tmp/.synopse.uid' on POSIX
 // - on Mac, include the mormot.core.os.mac unit to properly read this UUID
 // - note: some BIOS have no UUID, so we fallback to our hardware hash on those
-procedure GetComputerUuid(out uuid: TGuid);
+// - you can specify some HW sources to be ignored during the calculation
+procedure GetComputerUuid(out uuid: TGuid; disable: TGetComputerUuid = []); overload;
+
+/// retrieve a genuine 128-bit UUID identifier for this computer
+// - returns GetSmbios(sbiUuid) if available
+// - if no GetSmbios(sbiUuid) is available, will compute a genuine hash from HW
+// and store it on a local file for the next access (if disable is void)
+// - you can specify some HW sources to be ignored during the calculation
+function GetComputerUuid(disable: TGetComputerUuid = []): RawUtf8; overload;
 
 
 { ****************** Operating System Specific Types (e.g. TWinRegistry) }
@@ -2240,7 +2259,7 @@ type
     dwMsgEncodingType: DWORD;
     pSigningCert: PCCERT_CONTEXT;
     HashAlgorithm: CRYPT_ALGORITHM_IDENTIFIER;
-    pvHashAuxInfo: Pointer;
+    pvHashAuxInfo: pointer;
     cMsgCert: DWORD;
     rgpMsgCert: PPCCERT_CONTEXT;
     cMsgCrl: DWORD;
@@ -2252,10 +2271,10 @@ type
     dwFlags: DWORD;
     dwInnerContentType: DWORD;
     HashEncryptionAlgorithm: CRYPT_ALGORITHM_IDENTIFIER;
-    pvHashEncryptionAuxInfo: Pointer;
+    pvHashEncryptionAuxInfo: pointer;
   end;
 
-  PFN_CRYPT_GET_SIGNER_CERTIFICATE = function(pvGetArg: Pointer;
+  PFN_CRYPT_GET_SIGNER_CERTIFICATE = function(pvGetArg: pointer;
     dwCertEncodingType: DWORD; pSignerId: PCERT_INFO;
     hMsgCertStore: HCERTSTORE): PCCERT_CONTEXT; stdcall;
   CRYPT_VERIFY_MESSAGE_PARA = record
@@ -2263,7 +2282,7 @@ type
     dwMsgAndCertEncodingType: DWORD;
     hCryptProv: HCRYPTPROV;
     pfnGetSignerCertificate: PFN_CRYPT_GET_SIGNER_CERTIFICATE;
-    pvGetArg: Pointer;
+    pvGetArg: pointer;
   end;
 
   /// direct access to the Windows CryptoApi
@@ -2306,7 +2325,7 @@ type
     /// fills a buffer with cryptographically random bytes
     // - since Windows Vista with Service Pack 1 (SP1), an AES counter-mode
     // based PRNG specified in NIST Special Publication 800-90 is used
-    GenRandom: function(hProv: HCRYPTPROV; dwLen: DWORD; pbBuffer: Pointer): BOOL; stdcall;
+    GenRandom: function(hProv: HCRYPTPROV; dwLen: DWORD; pbBuffer: pointer): BOOL; stdcall;
     /// sign a message (not resolved yet - in crypt32.dll)
     SignMessage: function(var pSignPara: CRYPT_SIGN_MESSAGE_PARA;
       fDetachedSignature: BOOL; cToBeSigned: DWORD; rgpbToBeSigned: pointer;
@@ -3268,7 +3287,7 @@ function DateTimeToWindowsFileTime(DateTime: TDateTime): integer;
 
 /// check if a file exists and can be written
 // - on POSIX, call fpaccess() and check for the W_OK attribute
-// - on Windows, supports aFileName longer than MAX_PATH
+// - on Windows, check faReadOnly and supports aFileName longer than MAX_PATH
 function FileIsWritable(const FileName: TFileName): boolean;
 
 /// reduce the visibility of a given file, and set its read/write attributes
@@ -3326,6 +3345,9 @@ function FileInfoByHandle(aFileHandle: THandle; FileId, FileSize: PInt64;
 // - will call fpStat() on POSIX to check the File and Executable bits
 function FileIsExecutable(const FileName: TFileName): boolean;
 
+/// check if a given file is a symbolic link
+function FileIsSymLink(const FileName: TFileName): boolean;
+
 /// compute the size of a directory's files, optionally with nested folders
 // - basic implementation using FindFirst/FindNext so won't be the fastest
 // available, nor fully accurate when files are actually (hard) links
@@ -3335,6 +3357,11 @@ function DirectorySize(const FileName: TFileName; Recursive: boolean = false;
 /// copy one file to another, similar to the Windows API
 function CopyFile(const Source, Target: TFileName;
   FailIfExists: boolean): boolean;
+
+/// create a symbolic link named SymLink pointing to the Target file
+// - won't work with directories, a non existing target file, or on Windows XP
+// - need specific (admin) priviledges on Windows, or developper mode enabled
+function FileSymLink(const SymLink, Target: TFileName): boolean;
 
 /// prompt the user for an error message to notify an unexpected issue
 // - in practice, text encoding is expected to be plain 7-bit ASCII
@@ -4087,7 +4114,7 @@ procedure PatchCodePtrUInt(Code: PPtrUInt; Value: PtrUInt;
 
 {$ifdef CPUINTEL}
 /// low-level i386/x86_64 asm routine patch and redirection
-procedure RedirectCode(Func, RedirectFunc: Pointer);
+procedure RedirectCode(Func, RedirectFunc: pointer);
 {$endif CPUINTEL}
 
 
@@ -4501,8 +4528,8 @@ type
     procedure SetBool(Index: integer; const Value: boolean);
     function GetUnlockedInt64(Index: integer): Int64;
     procedure SetUnlockedInt64(Index: integer; const Value: Int64);
-    function GetPointer(Index: integer): Pointer;
-    procedure SetPointer(Index: integer; const Value: Pointer);
+    function GetPointer(Index: integer): pointer;
+    procedure SetPointer(Index: integer; const Value: pointer);
     function GetUtf8(Index: integer): RawUtf8;
     procedure SetUtf8(Index: integer; const Value: RawUtf8);
     function GetIsLocked: boolean;
@@ -4655,7 +4682,7 @@ type
     // - pointers will be stored internally as a varUnknown variant
     // - returns nil if the Index is out of range, or does not store a pointer
     // - allow concurrent thread reading if RWUse was set to uRWLock
-    property LockedPointer[Index: integer]: Pointer
+    property LockedPointer[Index: integer]: pointer
       read GetPointer write SetPointer;
     /// safe locked access to an UTF-8 string value
     // - you may store up to 7 variables, using an 0..6 index, shared with
@@ -5125,7 +5152,7 @@ type
 function OpenSCManagerW(lpMachineName, lpDatabaseName: PWideChar;
   dwDesiredAccess: cardinal): SC_HANDLE; stdcall; external advapi32;
 function ChangeServiceConfig2W(hService: SC_HANDLE; dwsInfoLevel: cardinal;
-  lpInfo: Pointer): BOOL; stdcall; external advapi32;
+  lpInfo: pointer): BOOL; stdcall; external advapi32;
 function StartServiceW(hService: SC_HANDLE; dwNumServiceArgs: cardinal;
   lpServiceArgVectors: PPWideChar): BOOL; stdcall; external advapi32;
 function CreateServiceW(hSCManager: SC_HANDLE;
@@ -5140,7 +5167,7 @@ function CloseServiceHandle(hSCObject: SC_HANDLE): BOOL; stdcall; external advap
 function QueryServiceStatus(hService: SC_HANDLE;
   var lpServiceStatus: TServiceStatus): BOOL; stdcall; external advapi32;
 function QueryServiceStatusEx(hService: SC_HANDLE;
-  InfoLevel: SC_STATUS_TYPE; lpBuffer: Pointer; cbBufSize: cardinal;
+  InfoLevel: SC_STATUS_TYPE; lpBuffer: pointer; cbBufSize: cardinal;
   var pcbBytesNeeded: cardinal): BOOL; stdcall; external advapi32;
 function ControlService(hService: SC_HANDLE; dwControl: cardinal;
   var lpServiceStatus: TServiceStatus): BOOL; stdcall; external advapi32;
@@ -5336,8 +5363,8 @@ type
     fStatusRec: TServiceStatus;
     fArgsList: TRawUtf8DynArray;
     fStatusHandle: THandle;
-    function GetArgCount: Integer;
-    function GetArgs(Idx: Integer): RawUtf8;
+    function GetArgCount: integer;
+    function GetArgs(Idx: integer): RawUtf8;
     function GetInstalled: boolean;
     procedure SetStatus(const Value: TServiceStatus);
     procedure CtrlHandle(Code: cardinal);
@@ -5380,11 +5407,11 @@ type
     procedure Execute; virtual;
 
     /// Number of arguments passed to the service by the service controler
-    property ArgCount: Integer
+    property ArgCount: integer
       read GetArgCount;
     /// List of arguments passed to the service by the service controler
     // - Idx is in range 0..ArgCount - 1
-    property Args[Idx: Integer]: RawUtf8
+    property Args[Idx: integer]: RawUtf8
       read GetArgs;
     /// Any data You wish to associate with the service object
     property Data: cardinal
@@ -6551,7 +6578,7 @@ begin
 end;
 
 {$ifdef CPUINTEL}
-procedure RedirectCode(Func, RedirectFunc: Pointer);
+procedure RedirectCode(Func, RedirectFunc: pointer);
 var
   rel: PtrInt;
   NewJump: packed record
@@ -6712,16 +6739,16 @@ end;
 
 function DateTimeToWindowsFileTime(DateTime: TDateTime): integer;
 var
-  YY, MM, DD, H, m, s, ms: word;
+  yy, mm, dd, h, m, s, ms: word;
 begin
-  DecodeDate(DateTime, YY, MM, DD);
+  DecodeDate(DateTime, yy, mm, dd);
   DecodeTime(DateTime, h, m, s, ms);
-  if (YY < 1980) or
-     (YY > 2099) then
+  if (yy < 1980) or
+     (yy > 2099) then
     result := 0
   else
     result := (s shr 1) or (m shl 5) or (h shl 11) or
-      cardinal((DD shl 16) or (MM shl 21) or (cardinal(YY - 1980) shl 25));
+      cardinal((dd shl 16) or (mm shl 21) or (cardinal(yy - 1980) shl 25));
 end;
 
 function WindowsFileTimeToDateTime(WinTime: integer): TDateTime;
@@ -6747,21 +6774,21 @@ end;
 function DirectorySize(const FileName: TFileName; Recursive: boolean;
   const Mask: TFileName): Int64;
 var
-  SR: TSearchRec;
+  sr: TSearchRec;
   dir: TFileName;
 begin
   result := 0;
   dir := IncludeTrailingPathDelimiter(FileName);
-  if FindFirst(dir + Mask, faAnyFile, SR) <> 0 then
+  if FindFirst(dir + Mask, faAnyFile, sr) <> 0 then
     exit;
   repeat
-   if SearchRecValidFile(SR) then
-     inc(result, SR.Size)
+   if SearchRecValidFile(sr) then
+     inc(result, sr.Size)
    else if Recursive and
-           SearchRecValidFolder(SR) then
-     inc(result, DirectorySize(dir + SR.Name, true));
-  until FindNext(SR) <> 0;
-  FindClose(SR);
+           SearchRecValidFolder(sr) then
+     inc(result, DirectorySize(dir + sr.Name, true));
+  until FindNext(sr) <> 0;
+  FindClose(sr);
 end;
 
 function SafePathName(const Path: TFileName): boolean;
@@ -7038,7 +7065,7 @@ end;
 
 function StringFromFile(const FileName: TFileName; HasNoSize: boolean): RawByteString;
 var
-  F: THandle;
+  h: THandle;
   size: Int64;
   read, pos: integer;
   tmp: array[0..$7fff] of AnsiChar; // 32KB stack buffer
@@ -7046,14 +7073,14 @@ begin
   result := '';
   if FileName = '' then
     exit;
-  F := FileOpenSequentialRead(FileName); // = plain fpOpen() on POSIX
-  if ValidHandle(F) then
+  h := FileOpenSequentialRead(FileName); // = plain fpOpen() on POSIX
+  if ValidHandle(h) then
   begin
     if HasNoSize then
     begin
       pos := 0;
       repeat
-        read := FileRead(F, tmp, SizeOf(tmp)); // fill per 32KB local buffer
+        read := FileRead(h, tmp, SizeOf(tmp)); // fill per 32KB local buffer
         if read <= 0 then
           break;
         SetLength(result, pos + read); // in-place resize
@@ -7063,16 +7090,16 @@ begin
     end
     else
     begin
-      size := FileSize(F);
+      size := FileSize(h);
       if (size < MaxInt) and // 2GB seems big enough for a RawByteString
          (size > 0) then
       begin
         FastSetString(RawUtf8(result), size); // assume CP_UTF8 for FPC RTL bug
-        if not FileReadAll(F, pointer(result), size) then
+        if not FileReadAll(h, pointer(result), size) then
           result := ''; // error reading
       end;
     end;
-    FileClose(F);
+    FileClose(h);
   end;
 end;
 
@@ -7358,15 +7385,15 @@ end;
 
 function SortDynArrayFileName(const A, B): integer;
 var
-  Aname, Aext, Bname, Bext: TFileName;
+  an, ae, bn, be: TFileName;
 begin
   // code below is not very fast, but correct ;)
-  Aname := GetFileNameWithoutExt(string(A), @Aext);
-  Bname := GetFileNameWithoutExt(string(B), @Bext);
-  result := AnsiCompareFileName(Aext, Bext);
+  an := GetFileNameWithoutExt(string(A), @ae);
+  bn := GetFileNameWithoutExt(string(B), @be);
+  result := AnsiCompareFileName(ae, be);
   if result = 0 then
     // if both extensions matches, compare by filename
-    result := AnsiCompareFileName(Aname, Bname);
+    result := AnsiCompareFileName(an, bn);
 end;
 
 function EnsureDirectoryExists(const Directory: TFileName;
@@ -7401,28 +7428,28 @@ end;
 function DirectoryDelete(const Directory: TFileName; const Mask: TFileName;
   DeleteOnlyFilesNotDirectory: boolean; DeletedCount: PInteger): boolean;
 var
-  F: TSearchRec;
-  Dir: TFileName;
+  f: TSearchRec;
   n: integer;
+  dir: TFileName;
 begin
   n := 0;
   result := true;
   if DirectoryExists(Directory) then
   begin
-    Dir := IncludeTrailingPathDelimiter(Directory);
-    if FindFirst(Dir + Mask, faAnyFile - faDirectory, F) = 0 then
+    dir := IncludeTrailingPathDelimiter(Directory);
+    if FindFirst(dir + Mask, faAnyFile - faDirectory, f) = 0 then
     begin
       repeat
-        if SearchRecValidFile(F) then
-          if DeleteFile(Dir + F.Name) then
+        if SearchRecValidFile(f) then
+          if DeleteFile(dir + f.Name) then
             inc(n)
           else
             result := false;
-      until FindNext(F) <> 0;
-      FindClose(F);
+      until FindNext(f) <> 0;
+      FindClose(f);
     end;
     if not DeleteOnlyFilesNotDirectory and
-       not RemoveDir(Dir) then
+       not RemoveDir(dir) then
       result := false;
   end;
   if DeletedCount <> nil then
@@ -7433,8 +7460,8 @@ function DirectoryDeleteOlderFiles(const Directory: TFileName;
   TimePeriod: TDateTime; const Mask: TFileName; Recursive: boolean;
   TotalSize: PInt64): boolean;
 var
-  F: TSearchRec;
-  Dir: TFileName;
+  f: TSearchRec;
+  dir: TFileName;
   old: TDateTime;
 begin
   if not Recursive and
@@ -7444,25 +7471,25 @@ begin
   if (Directory = '') or
      not DirectoryExists(Directory) then
     exit;
-  Dir := IncludeTrailingPathDelimiter(Directory);
-  if FindFirst(Dir + Mask, faAnyFile, F) = 0 then
+  dir := IncludeTrailingPathDelimiter(Directory);
+  if FindFirst(dir + Mask, faAnyFile, f) = 0 then
   begin
     old := NowUtc - TimePeriod;
     repeat
-      if SearchRecValidFolder(F) then
+      if SearchRecValidFolder(f) then
       begin
         if Recursive then
           DirectoryDeleteOlderFiles(
-            Dir + F.Name, TimePeriod, Mask, true, TotalSize);
+            dir + f.Name, TimePeriod, Mask, true, TotalSize);
       end
-      else if SearchRecValidFile(F) and
-              (SearchRecToDateTimeUtc(F) < old) then
-        if not DeleteFile(Dir + F.Name) then
+      else if SearchRecValidFile(f) and
+              (SearchRecToDateTimeUtc(f) < old) then
+        if not DeleteFile(dir + f.Name) then
           result := false
         else if TotalSize <> nil then
-          inc(TotalSize^, F.Size);
-    until FindNext(F) <> 0;
-    FindClose(F);
+          inc(TotalSize^, f.Size);
+    until FindNext(f) <> 0;
+    FindClose(f);
   end;
 end;
 
@@ -7473,7 +7500,7 @@ function IsDirectoryWritable(const Directory: TFileName;
   Flags: TIsDirectoryWritable): boolean;
 var
   dir, last, fmt, fn: TFileName;
-  f: THandle;
+  h: THandle;
   retry: integer;
 begin
   // check the Directory itself
@@ -7518,14 +7545,14 @@ begin
       exit;
   until false;
   // ensure we can create this temporary file
-  f := FileCreate(fn);
-  if not ValidHandle(f) then
+  h := FileCreate(fn);
+  if not ValidHandle(h) then
     exit; // a file can't be created
   result := true;
   if (idwWriteSomeContent in flags) and // some pointers and hash
-     (FileWrite(f, Executable, SizeOf(Executable)) <> SizeOf(Executable)) then
+     (FileWrite(h, Executable, SizeOf(Executable)) <> SizeOf(Executable)) then
     result := false;
-  FileClose(f);
+  FileClose(h);
   if not DeleteFile(fn) then // success if the file can be created and deleted
     result := false
   else if result then
@@ -7621,7 +7648,7 @@ end;
 function TMemoryMap.Map(aFile: THandle; aCustomSize: PtrUInt;
   aCustomOffset: Int64; aFileOwned: boolean; aFileSize: Int64): boolean;
 var
-  Available: Int64;
+  available: Int64;
 begin
   fBuf := nil;
   fBufSize := 0;
@@ -7647,11 +7674,11 @@ begin
     fBufSize := fFileSize
   else
   begin
-    Available := fFileSize - aCustomOffset;
-    if Available < 0 then
+    available := fFileSize - aCustomOffset;
+    if available < 0 then
       exit;
-    if aCustomSize > Available then
-      fBufSize := Available;
+    if aCustomSize > available then
+      fBufSize := available;
     fBufSize := aCustomSize;
   end;
   fLoadedNotMapped := fBufSize < 1 shl 20;
@@ -7688,17 +7715,17 @@ end;
 
 function TMemoryMap.Map(const aFileName: TFileName): boolean;
 var
-  F: THandle;
+  h: THandle;
 begin
   result := false;
   // Memory-mapped file access does not go through the cache manager so
   // using FileOpenSequentialRead() is pointless here
-  F := FileOpen(aFileName, fmOpenReadShared);
-  if not ValidHandle(F) then
+  h := FileOpen(aFileName, fmOpenReadShared);
+  if not ValidHandle(h) then
     exit;
-  result := Map(F);
+  result := Map(h);
   if not result then
-    FileClose(F);
+    FileClose(h);
   fFileLocal := result;
 end;
 
@@ -7864,20 +7891,20 @@ end;
 {$ifdef UNIX}
 procedure ReserveExecutableMemoryPageAccess(Reserved: pointer; Exec: boolean);
 var
-  PageAlignedFakeStub: pointer;
+  aligned: pointer;
   flags: cardinal;
 begin
   if not MemoryProtection then
     // nothing to be done on this platform
     exit;
   // toggle execution permission of memory to be able to write into memory
-  PageAlignedFakeStub := Pointer(
+  aligned := pointer(
     (PtrUInt(Reserved) div SystemInfo.dwPageSize) * SystemInfo.dwPageSize);
   if Exec then
     flags := PROT_READ OR PROT_EXEC
   else
     flags := PROT_READ or PROT_WRITE;
-  if SynMProtect(PageAlignedFakeStub, SystemInfo.dwPageSize shl 1, flags) < 0 then
+  if SynMProtect(aligned, SystemInfo.dwPageSize shl 1, flags) < 0 then
      raise EOSException.Create('ReserveExecutableMemoryPageAccess: mprotect fail');
 end;
 {$else}
@@ -7931,21 +7958,21 @@ end;
 function ConsoleReadBody: RawByteString;
 var
   len, n: integer;
-  P: PByte;
+  p: PByte;
 begin
   len := ConsoleStdInputLen;
   FastNewRawByteString(result, len);
-  P := pointer(result);
+  p := pointer(result);
   while len > 0 do
   begin
-    n := FileRead(StdInputHandle, P^, len);
+    n := FileRead(StdInputHandle, p^, len);
     if n <= 0 then
     begin
       result := ''; // read error
       break;
     end;
     dec(len, n);
-    inc(P, n);
+    inc(p, n);
   end;
 end;
 
@@ -7957,7 +7984,7 @@ var
 function TSynLibrary.Resolve(const Prefix, ProcName: RawUtf8; Entry: PPointer;
   RaiseExceptionOnFailure: ExceptionClass): boolean;
 var
-  P: PAnsiChar;
+  p: PAnsiChar;
   name, search: RawUtf8;
 {$ifdef OSPOSIX}
   dlinfo: dl_info;
@@ -7968,9 +7995,9 @@ begin
      (fHandle = 0) or
      (ProcName = '') then
     exit; // avoid GPF
-  P := pointer(ProcName);
+  p := pointer(ProcName);
   repeat
-    name := GetNextItem(P); // try all alternate names
+    name := GetNextItem(p); // try all alternate names
     if name = '' then
       break;
     if name[1] = '?' then
@@ -8122,14 +8149,14 @@ end;
 constructor TFileVersion.Create(const aFileName: TFileName;
   aMajor, aMinor, aRelease, aBuild: integer);
 var
-  M, D: word;
+  m, d: word;
 begin
   fFileName := aFileName;
   SetVersion(aMajor, aMinor, aRelease, aBuild);
   if fBuildDateTime = 0 then // get build date from file age
     fBuildDateTime := FileAgeToDateTime(aFileName);
   if fBuildDateTime <> 0 then
-    DecodeDate(fBuildDateTime, BuildYear, M, D);
+    DecodeDate(fBuildDateTime, BuildYear, m, d);
 end;
 
 function TFileVersion.Version32: integer;
@@ -8220,8 +8247,7 @@ begin
 end;
 
 function UserAgentParse(const UserAgent: RawUtf8;
-  out ProgramName, ProgramVersion: RawUtf8;
-  out OS: TOperatingSystem): boolean;
+  out ProgramName, ProgramVersion: RawUtf8; out OS: TOperatingSystem): boolean;
 var
   i, v, vlen, o: PtrInt;
 begin
@@ -8252,13 +8278,13 @@ end;
 
 procedure SetExecutableVersion(const aVersionText: RawUtf8);
 var
-  P: PUtf8Char;
+  p: PUtf8Char;
   i: integer;
   ver: array[0 .. 3] of integer;
 begin
-  P := pointer(aVersionText);
+  p := pointer(aVersionText);
   for i := 0 to 3 do
-    ver[i] := GetNextUInt32(P);
+    ver[i] := GetNextUInt32(p);
   SetExecutableVersion(ver[0], ver[1], ver[2], ver[3]);
 end;
 
@@ -9194,7 +9220,7 @@ begin
 end;
 {$endif ISDELPHI}
 
-procedure GetComputerUuid(out uuid: TGuid);
+procedure GetComputerUuid(out uuid: TGuid; disable: TGetComputerUuid);
 var
   n, i: PtrInt;
   u: THash128Rec absolute uuid;
@@ -9214,50 +9240,84 @@ begin
   // first try to retrieve the Machine BIOS UUID
   if not _SmbiosRetrieved then
     ComputeGetSmbios; // maybe from local SMB_CACHE file for non-root
-  if (_Smbios[sbiUuid] <> '') and
+  if not (gcuSmbios in disable) and
+     (_Smbios[sbiUuid] <> '') and
      TryStringToGUID('{' + string(_Smbios[sbiUuid]) + '}', uuid) then
     exit;
-  // did we already compute this UUID?
-  fn := UUID_CACHE;
-  s := StringFromFile(fn);
-  if length(s) = SizeOf(uuid) then
+  // did we already compute (and persist) this UUID?
+  if disable = [] then // we persist a fully-qualified UUID only
   begin
-    uuid := PGuid(s)^; // seems to be a valid UUID binary blob
-    exit;
+    fn := UUID_CACHE;
+    s := StringFromFile(fn);
+    if length(s) = SizeOf(uuid) then
+    begin
+      uuid := PGuid(s)^; // seems to be a valid UUID binary blob
+      exit;
+    end;
   end;
   // no known UUID: compute and store a 128-bit hash from HW specs
   // which should remain identical even between full OS reinstalls
   // note: /etc/machine-id is no viable alternative since it is from SW random
-  {$ifdef CPUINTELARM}
-  crc128c(@CpuFeatures, SizeOf(CpuFeatures), u.b);
-  {$else}
   s := CPU_ARCH_TEXT;
   crc128c(pointer(s), length(s), u.b); // rough starting point
+  {$ifdef CPUINTELARM}
+  if not (gcuCpuFeatures in disable) then
+    crc128c(@CpuFeatures, SizeOf(CpuFeatures), u.b); // override
   {$endif CPUINTELARM}
-  if RawSmbios.Data <> '' then // some bios have no uuid but some HW info
+  if (RawSmbios.Data <> '') and // some bios have no uuid but some HW info
+     not (gcuSmbiosData in disable) then
     crc32c128(@u.b, pointer(RawSmbios.Data), length(RawSmbios.Data));
   n := 0;
-  for i := 0 to length(_Smbios) - 1 do // some of _Smbios[] may be set
-    crctext(PRawUtf8Array(@_Smbios)[i]);
-  crctext(CpuCacheText);
-  crctext(BiosInfoText);
-  crctext(CpuInfoText);
-  if Assigned(GetSystemMacAddress) then
+  if not (gcuSmbiosText in disable) then
+    for i := 0 to length(_Smbios) - 1 do // some of _Smbios[] may be set
+      crctext(PRawUtf8Array(@_Smbios)[i]);
+  if not (gcuCpuInfoText in disable) then
+    crctext(CpuCacheText);
+  if not (gcuBiosInfoText in disable) then
+    crctext(BiosInfoText);
+  if not (gcuCpuInfoText in disable) then
+    crctext(CpuInfoText);
+  if Assigned(GetSystemMacAddress) and
+     not (gcuMacAddress in disable) then
     // from mormot.net.sock or mormot.core.os.posix.inc for Linux only
     mac := GetSystemMacAddress;
   if mac <> nil then
-  begin
     // MAC should make it unique at least over the local network
     for i := 0 to high(mac) do
-      crctext(mac[i]);
+      crctext(mac[i])
+  else
+  begin
+    // unpersisted fallback if mormot.net.sock is not included (very unlikely)
+    crctext(Executable.Host);
+    exit; // unpersisted
+  end;
+  if fn <> '' then // disable = []
     // we have enough unique HW information to store it locally for next startup
     // note: RawSmbios.Data may not be genuine e.g. between VMs
     if FileFromBuffer(@u, SizeOf(u), fn) then
       FileSetSticky(fn); // use S_ISVTX so that file is not removed from /var/tmp
-  end
-  else
-    // unpersisted fallback if mormot.net.sock is not included (very unlikely)
-    crctext(Executable.Host);
+end;
+
+var
+  _GetComputerUuid: RawUtf8;
+
+function GetComputerUuid(disable: TGetComputerUuid): RawUtf8;
+var
+  u: TGuid;
+begin
+  if disable = [] then
+  begin
+    result := _GetComputerUuid; // try from cache
+    if result <> '' then
+      exit;
+  end;
+  GetComputerUuid(u, disable);
+  result := RawUtf8(LowerCase(copy(GUIDToString(u), 2, 36)));
+  if disable <> [] then
+    exit; // cache fully-qualified UUID only
+  GlobalLock;
+  _GetComputerUuid := result;
+  GlobalUnLock;
 end;
 
 procedure DecodeSmbiosUuid(src: PGuid; out dest: RawUtf8; const raw: TRawSmbiosInfo);
@@ -10124,141 +10184,141 @@ begin
   end;
 end;
 
-function TSynLocker.GetPointer(Index: integer): Pointer;
+function TSynLocker.GetPointer(Index: integer): pointer;
 begin
   if cardinal(Index) < cardinal(fPaddingUsedCount) then
-  {$ifdef HASFASTTRYFINALLY}
-  try
-  {$else}
-  begin
-  {$endif HASFASTTRYFINALLY}
-    RWLock(cReadOnly);
-    with Padding[Index] do
-      if VType = varUnknown then
-        result := VUnknown
-      else
-        result := nil;
-  {$ifdef HASFASTTRYFINALLY}
-  finally
-  {$endif HASFASTTRYFINALLY}
-    RWUnLock(cReadOnly);
-  end
-  else
-    result := nil;
+    {$ifdef HASFASTTRYFINALLY}
+    try
+    {$else}
+    begin
+    {$endif HASFASTTRYFINALLY}
+      RWLock(cReadOnly);
+      with Padding[Index] do
+        if VType = varUnknown then
+          result := VUnknown
+        else
+          result := nil;
+    {$ifdef HASFASTTRYFINALLY}
+    finally
+    {$endif HASFASTTRYFINALLY}
+      RWUnLock(cReadOnly);
+    end
+    else
+      result := nil;
 end;
 
-procedure TSynLocker.SetPointer(Index: integer; const Value: Pointer);
+procedure TSynLocker.SetPointer(Index: integer; const Value: pointer);
 begin
   if cardinal(Index) <= high(Padding) then
-  try
-    RWLock(cWrite);
-    if Index >= fPaddingUsedCount then
-      fPaddingUsedCount := Index + 1;
-    with Padding[Index] do
-    begin
-      VarClearAndSetType(PVariant(@VType)^, varUnknown);
-      VUnknown := Value;
+    try
+      RWLock(cWrite);
+      if Index >= fPaddingUsedCount then
+        fPaddingUsedCount := Index + 1;
+      with Padding[Index] do
+      begin
+        VarClearAndSetType(PVariant(@VType)^, varUnknown);
+        VUnknown := Value;
+      end;
+    finally
+      RWUnLock(cWrite);
     end;
-  finally
-    RWUnLock(cWrite);
-  end;
 end;
 
 function TSynLocker.GetUtf8(Index: integer): RawUtf8;
 begin
   if cardinal(Index) < cardinal(fPaddingUsedCount) then
-  {$ifdef HASFASTTRYFINALLY}
-  try
-  {$else}
-  begin
-  {$endif HASFASTTRYFINALLY}
-    RWLock(cReadOnly);
-    VariantStringToUtf8(variant(Padding[Index]), result);
-  {$ifdef HASFASTTRYFINALLY}
-  finally
-  {$endif HASFASTTRYFINALLY}
-    RWUnLock(cReadOnly);
-  end
-  else
-    result := '';
+    {$ifdef HASFASTTRYFINALLY}
+    try
+    {$else}
+    begin
+    {$endif HASFASTTRYFINALLY}
+      RWLock(cReadOnly);
+      VariantStringToUtf8(variant(Padding[Index]), result);
+    {$ifdef HASFASTTRYFINALLY}
+    finally
+    {$endif HASFASTTRYFINALLY}
+      RWUnLock(cReadOnly);
+    end
+    else
+      result := '';
 end;
 
 procedure TSynLocker.SetUtf8(Index: integer; const Value: RawUtf8);
 begin
   if cardinal(Index) <= high(Padding) then
-  try
-    RWLock(cWrite);
-    if Index >= fPaddingUsedCount then
-      fPaddingUsedCount := Index + 1;
-    RawUtf8ToVariant(Value, variant(Padding[Index]));
-  finally
-    RWUnLock(cWrite);
-  end;
+    try
+      RWLock(cWrite);
+      if Index >= fPaddingUsedCount then
+        fPaddingUsedCount := Index + 1;
+      RawUtf8ToVariant(Value, variant(Padding[Index]));
+    finally
+      RWUnLock(cWrite);
+    end;
 end;
 
 function TSynLocker.LockedInt64Increment(Index: integer; const Increment: Int64): Int64;
 begin
   if cardinal(Index) <= high(Padding) then
-  try
-    RWLock(cWrite);
-    result := 0;
-    if Index < fPaddingUsedCount then
-      VariantToInt64(variant(Padding[Index]), result)
+    try
+      RWLock(cWrite);
+      result := 0;
+      if Index < fPaddingUsedCount then
+        VariantToInt64(variant(Padding[Index]), result)
+      else
+        fPaddingUsedCount := Index + 1;
+      variant(Padding[Index]) := Int64(result + Increment);
+    finally
+      RWUnLock(cWrite);
+    end
     else
-      fPaddingUsedCount := Index + 1;
-    variant(Padding[Index]) := Int64(result + Increment);
-  finally
-    RWUnLock(cWrite);
-  end
-  else
-    result := 0;
+      result := 0;
 end;
 
 function TSynLocker.LockedExchange(Index: integer; const Value: variant): variant;
 begin
   VarClear(result);
   if cardinal(Index) <= high(Padding) then
-  try
-    RWLock(cWrite);
-    with Padding[Index] do
-    begin
-      if Index < fPaddingUsedCount then
-        result := PVariant(@VType)^
-      else
-        fPaddingUsedCount := Index + 1;
-      PVariant(@VType)^ := Value;
+    try
+      RWLock(cWrite);
+      with Padding[Index] do
+      begin
+        if Index < fPaddingUsedCount then
+          result := PVariant(@VType)^
+        else
+          fPaddingUsedCount := Index + 1;
+        PVariant(@VType)^ := Value;
+      end;
+    finally
+      RWUnLock(cWrite);
     end;
-  finally
-    RWUnLock(cWrite);
-  end;
 end;
 
 function TSynLocker.LockedPointerExchange(Index: integer; Value: pointer): pointer;
 begin
   if cardinal(Index) <= high(Padding) then
-  try
-    RWLock(cWrite);
-    with Padding[Index] do
-    begin
-      if Index < fPaddingUsedCount then
-        if VType = varUnknown then
-          result := VUnknown
+    try
+      RWLock(cWrite);
+      with Padding[Index] do
+      begin
+        if Index < fPaddingUsedCount then
+          if VType = varUnknown then
+            result := VUnknown
+          else
+          begin
+            VarClear(PVariant(@VType)^);
+            result := nil;
+          end
         else
         begin
-          VarClear(PVariant(@VType)^);
+          fPaddingUsedCount := Index + 1;
           result := nil;
-        end
-      else
-      begin
-        fPaddingUsedCount := Index + 1;
-        result := nil;
+        end;
+        VType := varUnknown;
+        VUnknown := Value;
       end;
-      VType := varUnknown;
-      VUnknown := Value;
-    end;
-  finally
-    RWUnLock(cWrite);
-  end
+    finally
+      RWUnLock(cWrite);
+    end
   else
     result := nil;
 end;
@@ -10585,7 +10645,7 @@ var
   n: PtrInt;
   state: set of (sWhite, sInArg, sInSQ, sInDQ, sSpecial, sBslash);
   c: AnsiChar;
-  D, P: PAnsiChar;
+  d, p: PAnsiChar;
 begin
   result := [pcInvalidCommand];
   if argv <> nil then
@@ -10595,22 +10655,22 @@ begin
   if cmd = '' then
     exit;
   if argv = nil then
-    D := nil
+    d := nil
   else
   begin
     if temp = nil then
       exit;
     SetLength(temp^, length(cmd));
-    D := pointer(temp^);
+    d := pointer(temp^);
   end;
   state := [];
   n := 0;
-  P := pointer(cmd);
+  p := pointer(cmd);
   repeat
-    c := P^;
-    if D <> nil then
-      D^ := c;
-    inc(P);
+    c := p^;
+    if d <> nil then
+      d^ := c;
+    inc(p);
     case c of
       #0:
         begin
@@ -10630,10 +10690,10 @@ begin
          if state = [sInArg] then
          begin
            state := [];
-           if D <> nil then
+           if d <> nil then
            begin
-             D^ := #0;
-             inc(D);
+             d^ := #0;
+             inc(d);
            end;
            continue;
          end;
@@ -10645,7 +10705,7 @@ begin
            (state * [sInSQ, sBslash] = []) then
           if sInDQ in state then
           begin
-            case P^ of
+            case p^ of
               '"', '\', '$', '`':
                 begin
                   include(state, sBslash);
@@ -10653,35 +10713,35 @@ begin
                 end;
             end;
           end
-          else if P^ = #0 then
+          else if p^ = #0 then
           begin
             include(result, pcHasEndingBackSlash);
             exit;
           end
           else
           begin
-            if D <> nil then
-              D^ := P^;
-            inc(P);
+            if d <> nil then
+              d^ := p^;
+            inc(p);
           end;
       '^':
         if not posix and
            (state * [sInSQ, sInDQ, sBslash] = []) then
-          if PWord(P)^ = $0a0d then
+          if PWord(p)^ = $0a0d then
           begin
-            inc(P, 2);
+            inc(p, 2);
             continue;
           end
-          else if P^ = #0 then
+          else if p^ = #0 then
           begin
             include(result, pcHasEndingBackSlash);
             exit;
           end
           else
           begin
-            if D <> nil then
-              D^ := P^;
-            inc(P);
+            if d <> nil then
+              d^ := p^;
+            inc(p);
           end;
       '''':
         if posix and
@@ -10695,7 +10755,7 @@ begin
           begin
             if argv <> nil then
             begin
-              argv[n] := D;
+              argv[n] := d;
               inc(n);
               if n = high(argv^) then
                 exit;
@@ -10719,7 +10779,7 @@ begin
           begin
             if argv <> nil then
             begin
-              argv[n] := D;
+              argv[n] := d;
               inc(n);
               if n = high(argv^) then
                 exit;
@@ -10772,21 +10832,21 @@ begin
     begin
       if argv <> nil then
       begin
-        argv[n] := D;
+        argv[n] := d;
         inc(n);
         if n = high(argv^) then
           exit;
       end;
       state := [sInArg];
     end;
-    if D <> nil then
-      inc(D);
+    if d <> nil then
+      inc(d);
   until false;
 end;
 
 procedure TrimDualSpaces(var s: RawUtf8);
 var
-  f, i: integer;
+  f, i: PtrInt;
 begin
   f := 1;
   repeat
