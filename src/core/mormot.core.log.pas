@@ -2152,18 +2152,12 @@ end;
 
 procedure TDwarfReader.ReadString(var s: ShortString);
 var
-  temp: AnsiChar;
-  i: PtrUInt;
+  c: AnsiChar;
 begin
-  i := 0;
-  while read.NextByteSafe(@temp) and
-        ({%H-}temp <> #0) do
-  begin
-    inc(i);
-    if i <= 255 then
-      s[i] := temp;
-  end;
-  s[0] := AnsiChar(i);
+  s[0] := #0;
+  while read.NextByteSafe(@c) and
+        ({%H-}c <> #0) do
+    AppendShortChar(c, s);
 end;
 
 procedure TDwarfReader.ReadAbbrevTable(file_offset, file_size: QWord);
@@ -5307,15 +5301,15 @@ begin
     {$ifdef OSWINDOWS}
     with SystemInfo, OSVersionInfo do
     begin
-      Add('*');
+      AddDirect('*');
       Add(wProcessorArchitecture);
-      Add('-');
+      AddDirect('-');
       Add(wProcessorLevel);
-      Add('-');
+      AddDirect('-');
       Add(wProcessorRevision);
     {$endif OSWINDOWS}
     {$ifdef CPUINTEL}
-      Add(':');
+      AddDirect(':');
       AddBinToHexMinChars(@CpuFeatures, SizeOf(CpuFeatures), {lower=}true);
     {$endif CPUINTEL}
     {$ifdef CPUARM3264}
@@ -5324,31 +5318,31 @@ begin
     {$endif CPUARM3264}
       AddShorter(' OS=');
     {$ifdef OSWINDOWS}
-      Add(ord(OSVersion));
-      Add('.');
-      Add(wServicePackMajor);
-      Add('=');
-      Add(dwMajorVersion);
-      Add('.');
-      Add(dwMinorVersion);
-      Add('.');
-      Add(dwBuildNumber);
+      AddB(ord(OSVersion));
+      AddDirect('.');
+      AddU(wServicePackMajor);
+      AddDirect('=');
+      AddU(dwMajorVersion);
+      AddDirect('.');
+      AddU(dwMinorVersion);
+      AddDirect('.');
+      AddU(dwBuildNumber);
     end;
     {$else}
     AddString(OS_NAME[OS_KIND]);
-    Add('=');
+    AddDirect('=');
     AddTrimSpaces(pointer(SystemInfo.uts.sysname));
-    Add('-');
+    AddDirect('-');
     AddTrimSpaces(pointer(SystemInfo.uts.release));
     AddReplace(pointer(SystemInfo.uts.version), ' ', '-');
     {$endif OSWINDOWS}
     if OSVersionInfoEx <> '' then
     begin
-      Add('/');
+      AddDirect('/');
       AddTrimSpaces(OSVersionInfoEx);
     end;
     AddShorter(' Wow64=');
-    Add({$ifdef OSWINDOWS} integer(IsWow64) {$else} 0 {$endif});
+    AddB({$ifdef OSWINDOWS} ord(IsWow64) {$else} 0 {$endif});
     AddShort(' Freq=1000000'); // we use QueryPerformanceMicroSeconds()
     if IsLibrary then
     begin
@@ -5369,7 +5363,7 @@ begin
            (P^ <> '=') then
         begin
           AddNoJsonEscapeW(PWord(P), 0);
-          Add(#9);
+          AddDirect(#9);
         end;
         inc(P, L + 1);
       end;
@@ -5387,7 +5381,7 @@ begin
     if WithinEvents then
       fWriterEcho.AddEndOfLine(sllNone)
     else
-      Add(#10, #10);
+      AddDirect(#10, #10);
     FlushToStream;
     fWriterEcho.EchoReset; // header is not to be sent to console
   end;
@@ -5709,7 +5703,8 @@ begin
   // file name should include current timestamp if no rotation is involved
   if (fFileRotationSize = 0) and
      (fFileRotationDailyAtHourTix = 0) then
-    fFileName := FormatString('% %', [fFileName, NowToFileShort]);
+    fFileName := FormatString('% %',
+      [fFileName, NowToFileShort(fFamily.LocalTimestamp)]);
   {$ifdef OSWINDOWS}
   // include library name
   if IsLibrary and
@@ -6501,8 +6496,9 @@ var
 begin
   result := false;
   if (aOldLogFileName = '') or // last call is always with ''
-     not FileInfoByName(aOldLogFileName, fsize, ftime) then
-    // old log file does not exist
+     not FileInfoByName(aOldLogFileName, fsize, ftime) or
+     (fsize < 0) then
+    // old log file does not exist (or is a folder)
     exit
   else if fsize = 0 then
     // just delete a void .log file (not from TSynLog, but supported anyway)

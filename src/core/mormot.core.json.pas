@@ -4592,15 +4592,17 @@ function UrlEncodeJsonObject(const UriName: RawUtf8; ParametersJson: PUtf8Char;
 var
   i, j: PtrInt;
   sep: AnsiChar;
+  w: TTextWriter;
   Params: TNameValuePUtf8CharDynArray;
   temp: TTextWriterStackBuffer;
 begin
   if ParametersJson = nil then
     result := UriName
   else
-    with TTextWriter.CreateOwnedStream(temp) do
+  begin
+    w := TTextWriter.CreateOwnedStream(temp);
     try
-      AddString(UriName);
+      w.AddString(UriName);
       if (JsonDecode(ParametersJson, Params, true) <> nil) and
          (Params <> nil) then
       begin
@@ -4617,18 +4619,19 @@ begin
             if Name.Len = 0 then
               continue; // was within PropNamesToIgnore[]
             if IncludeQueryDelimiter then
-              AddDirect(sep);
-            AddShort(Name.Text, Name.Len);
-            AddDirect('=');
-            AddString(UrlEncode(Value.Text));
+              w.AddDirect(sep);
+            w.AddShort(Name.Text, Name.Len);
+            w.AddDirect('=');
+            UrlEncode(w, Value.Text, Value.Len);
             sep := '&';
             IncludeQueryDelimiter := true;
           end;
       end;
-      SetText(result);
+      w.SetText(result);
     finally
-      Free;
+      w.Free;
     end;
+  end;
 end;
 
 function UrlEncodeJsonObject(const UriName, ParametersJson: RawUtf8;
@@ -5108,7 +5111,7 @@ var
   W: TJsonWriter;
 begin
   W := Ctxt.W;
-  W.AddU(Data^);
+  W.AddB(Data^);
 end;
 
 procedure _JS_SmallInt(Data: PSmallInt; const Ctxt: TJsonSaveContext);
@@ -5370,7 +5373,7 @@ begin
       Ctxt.Info.Cache.EnumInfo^.GetEnumNameAll(Ctxt.W.fBlockComment, '', true);
   end
   else
-    Ctxt.W.AddU(Data^);
+    Ctxt.W.AddB(Data^);
 end;
 
 procedure _JS_Set(Data: PCardinal; const Ctxt: TJsonSaveContext);
@@ -10825,7 +10828,7 @@ begin
         W.AddNoJsonEscapeW(PPWord(Data)^, 0);
     // unescaped (and unquoted) numbers, date/time, guid or hash
     ptByte:
-      W.AddU(PByte(Data)^);
+      W.AddB(PByte(Data)^);
     ptWord:
       W.AddU(PWord(Data)^);
     ptInteger:
