@@ -226,7 +226,7 @@ end;
 type
   TProxySocket = class(THttpServerSocket)
   protected
-    fExpires: cardinal;
+    fExpires: cardinal; // shr MilliSecsPerSecShl
   published
     property Method;
     property URL;
@@ -282,7 +282,7 @@ begin
         fPendingGet.Safe.WriteLock;
         try
           found := -1;
-          now := GetTickCount64 shr 10;
+          now := GetTickCount64 shr MilliSecsPerSecShl;
           for i := fPendingGet.Count - 1 downto 0 do
           begin
             old := fPendingGet.ObjectPtr[i];
@@ -357,14 +357,14 @@ begin
     res := NewSocket(
       fRtspServer, fRtspPort, nlTcp, {bind=}false, 1000, 1000, 1000, 0, rtsp);
     if res <> nrOK then
-      raise ERtspOverHttp.CreateUtf8('No RTSP server on %:% (%)',
+      ERtspOverHttp.RaiseUtf8('No RTSP server on %:% (%)',
         [fRtspServer, fRtspPort, ToText(res)^]);
     // create the main POST connection and its associated RTSP connection
     postconn := TPostConnection.Create(self, aRemoteIp);
     rtspconn := TRtspConnection.Create(self, aRemoteIp);
     if not inherited ConnectionNew(aSocket, postconn) or
        not inherited ConnectionNew(rtsp, rtspconn) then
-      raise ERtspOverHttp.CreateUtf8('inherited %.ConnectionNew(%) % failed',
+      ERtspOverHttp.RaiseUtf8('inherited %.ConnectionNew(%) % failed',
         [self, aSocket, cookie]);
     aConnection := postconn;
     postconn.fRtspTag := rtspconn.Handle;

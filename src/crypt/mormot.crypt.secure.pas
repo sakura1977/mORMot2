@@ -3214,7 +3214,8 @@ function DerToPem(const der: TCertDer; kind: TPemKind): TCertPem; overload;
 /// convert a single-instance PEM text file into a binary DER
 // - if the supplied buffer doesn't start with '-----BEGIN .... -----'
 // trailer, will expect the input to be plain DER binary and directly return it
-function PemToDer(const pem: TCertPem; kind: PPemKind = nil): TCertDer;
+function PemToDer(const pem: TCertPem; const kind: PPemKind = nil): TCertDer;
+  {$ifdef HASINLINE} inline; {$endif}
 
 /// parse a multi-PEM text input and return the next PEM content
 // - search and identify any PEM_BEGIN/PEM_END markers
@@ -4643,7 +4644,7 @@ begin
   if Tix64 = 0 then
     Tix64 := GetTickCount64;
   created := created and pred(QWord(1) shl 48);
-  if Tix64 - created > NonceExpSec shl 10 then
+  if Tix64 - created > NonceExpSec shl MilliSecsPerSecShl then
     exit;
   // fast challenge against the 64-bit Opaque value (typically a connection ID)
   DefaultHasher128(@nonce128, @Opaque, SizeOf(Opaque)); // see DigestServerInit
@@ -6875,7 +6876,7 @@ begin
     exit;
   end
   else if fAesAead in fFlags then
-    raise ECrypt.CreateUtf8('%.Process(TBytes) is unsupported for %',
+    ECrypt.RaiseUtf8('%.Process(TBytes) is unsupported for %',
       [self, fCryptAlgo.AlgoName]) // MacAndCrypt() requires RawByteString
   // standard encryption with no AEAD/checksum
   else if fEncrypt in fFlags then
@@ -8560,7 +8561,7 @@ begin
   result := d;
 end;
 
-function PemToDer(const pem: TCertPem; kind: PPemKind): TCertDer;
+function PemToDer(const pem: TCertPem; const kind: PPemKind): TCertDer;
 var
   P: PUtf8Char;
 begin
@@ -9756,21 +9757,23 @@ begin
   if t.Year > 1900 then
     if (t.Year <= 2000) or
        (t.Year >= 2050) then
-      result := Asn(ASN1_GENTIME, [FormatUtf8('%%%%%%Z', [
+       result := Asn(ASN1_GENTIME, [Make([
         UInt4DigitsToShort(t.Year),
         UInt2DigitsToShortFast(t.Month),
         UInt2DigitsToShortFast(t.Day),
         UInt2DigitsToShortFast(t.Hour),
         UInt2DigitsToShortFast(t.Minute),
-        UInt2DigitsToShortFast(t.Second)])])
+        UInt2DigitsToShortFast(t.Second),
+        'Z'])])
     else
-      result := Asn(ASN1_UTCTIME, [FormatUtf8('%%%%%%Z', [
+      result := Asn(ASN1_UTCTIME, [Make([
         UInt2DigitsToShortFast(t.Year - 2000),
         UInt2DigitsToShortFast(t.Month),
         UInt2DigitsToShortFast(t.Day),
         UInt2DigitsToShortFast(t.Hour),
         UInt2DigitsToShortFast(t.Minute),
-        UInt2DigitsToShortFast(t.Second)])])
+        UInt2DigitsToShortFast(t.Second),
+        'Z'])])
   else
     ECrypt.RaiseUtf8('Invalid AsnTime(%)', [dt]);
 end;

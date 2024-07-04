@@ -91,8 +91,8 @@ const
 
   /// a convenient array constant to open a file for writing without exclusion
   fmCreateOrRewrite: array[{rewrite=}boolean] of cardinal = (
-   fmCreateShared,
-   fmOpenWriteShared);
+    fmCreateShared,
+    fmOpenWriteShared);
 
 const
   /// void HTTP Status Code (not a standard value, for internal use only)
@@ -540,6 +540,23 @@ function SidToKnown(const text: RawUtf8): TWellKnownSid; overload;
 
 /// recognize some well-known SIDs from the supplied SID dynamic array
 function SidToKnownGroups(const sids: PSids): TWellKnownSids;
+
+const // some time conversion constants with Milli/Micro/NanoSec resolution
+  SecsPerHour  = SecsPerMin * MinsPerHour; // missing in oldest Delphi
+  SecsPerDay   = SecsPerMin * MinsPerDay;
+  SecsPerWeek  = 7 * SecsPerDay;
+  SecsPerMonth = 2629746; // rough approximation of SecsPerDay * 365.2425 / 12
+  SecsPerYear  = 12 * SecsPerMonth;
+  MilliSecsPerSec      = 1000;
+  MilliSecsPerSecShl   = 10; // 1 shl 10 = 1024 = rough approximation of 1000
+  MilliSecsPerMin      = MilliSecsPerSec  * SecsPerMin;
+  MilliSecsPerHour     = MilliSecsPerMin  * MinsPerHour;
+  MilliSecsPerDay      = MilliSecsPerHour * HoursPerDay;
+  MicroSecsPerMilliSec = 1000;
+  MicroSecsPerSec      = MicroSecsPerMilliSec * MilliSecsPerSec;
+  NanoSecsPerMicroSec  = 1000;
+  NanoSecsPerMilliSec  = NanoSecsPerMicroSec  * MicroSecsPerMilliSec;
+  NanoSecsPerSec       = NanoSecsPerMilliSec  * MilliSecsPerSec;
 
 
 { ****************** Gather Operating System Information }
@@ -3343,7 +3360,7 @@ function FileSeek64(Handle: THandle; const Offset: Int64;
 // - if FileName is a folder/directory, then returned FileSize equals -1
 // - use a single Operating System call, so is faster than FileSize + FileAge
 function FileInfoByName(const FileName: TFileName; out FileSize: Int64;
-  out FileTimestampUtc: TUnixMSTime): boolean;
+  out FileTimestampUtc: TUnixMSTime): boolean; overload;
 
 /// get low-level file information, in a cross-platform way
 // - returns true on success
@@ -3354,6 +3371,12 @@ function FileInfoByName(const FileName: TFileName; out FileSize: Int64;
 // as failover on such systems (probably the latest file metadata writing)
 function FileInfoByHandle(aFileHandle: THandle; FileId, FileSize: PInt64;
   LastWriteAccess, FileCreateDateTime: PUnixMSTime): boolean;
+
+/// get low-level file information, in a cross-platform way
+// - is a wrapper around FileInfoByHandle() function
+// - returns true on success
+function FileInfoByName(const FileName: TFileName; FileId, FileSize: PInt64;
+  LastWriteAccess, FileCreateDateTime: PUnixMSTime): boolean; overload;
 
 /// check if a given file is likely to be an executable
 // - will check the DOS/WinPE executable header in its first bytes on Windows
@@ -3606,11 +3629,11 @@ function AnsiCompareFileName(const S1, S2 : TFileName): integer;
 // - returns the full expanded directory name, including trailing path delimiter
 // - returns '' on error, unless RaiseExceptionOnCreationFailure is set
 function EnsureDirectoryExists(const Directory: TFileName;
-  RaiseExceptionOnCreationFailure: ExceptionClass = nil): TFileName;
+  RaiseExceptionOnCreationFailure: ExceptionClass = nil): TFileName; overload;
 
 /// just a wrapper around EnsureDirectoryExists(NormalizeFileName(Directory))
 function NormalizeDirectoryExists(const Directory: TFileName;
-  RaiseExceptionOnCreationFailure: ExceptionClass = nil): TFileName;
+  RaiseExceptionOnCreationFailure: ExceptionClass = nil): TFileName; overload;
 
 /// delete the content of a specified directory
 // - only one level of file is deleted within the folder: no recursive deletion
@@ -6757,7 +6780,7 @@ end;
 
 function NowUtc: TDateTime;
 begin
-  result := UnixMSTimeUtcFast / Int64(MSecsPerDay) + Int64(UnixDelta);
+  result := UnixMSTimeUtcFast / Int64(MilliSecsPerDay) + Int64(UnixDelta);
 end;
 
 function DateTimeToWindowsFileTime(DateTime: TDateTime): integer;
@@ -6792,6 +6815,19 @@ const
 function WindowsFileTime64ToUnixMSTime(WinTime: QWord): TUnixMSTime;
 begin
   result := (Int64(WinTime) - UnixFileTimeDelta) div FileTimePerMs;
+end;
+
+function FileInfoByName(const FileName: TFileName; FileId, FileSize: PInt64;
+  LastWriteAccess, FileCreateDateTime: PUnixMSTime): boolean;
+var
+  h: THandle;
+begin
+  result := false;
+  h := FileOpenSequentialRead(FileName); // = plain fpOpen() on POSIX
+  if not ValidHandle(h) then
+    exit;
+  result := FileInfoByHandle(h, FileId, FileSize, LastWriteAccess, FileCreateDateTime);
+  FileClose(h);
 end;
 
 function DirectorySize(const FileName: TFileName; Recursive: boolean;
@@ -7856,12 +7892,11 @@ end;
 
 procedure TExecutableResource.Close;
 begin
-  if HGlobal <> 0 then
-  begin
-    UnlockResource(HGlobal); // only needed outside of Windows
-    FreeResource(HGlobal);
-    HGlobal := 0;
-  end;
+  if HGlobal = 0 then
+    exit;
+  UnlockResource(HGlobal); // only needed outside of Windows
+  FreeResource(HGlobal);
+  HGlobal := 0;
 end;
 
 

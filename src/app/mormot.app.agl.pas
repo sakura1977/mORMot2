@@ -47,6 +47,7 @@ type
 
   /// define one TSynAngelizeService action
   // - depending on the context, as "method:param" pair
+  // - may contain e.g. 'exec:/path/to/file', 'start:%run%' or even 'start'
   TSynAngelizeAction = type RawUtf8;
 
   /// define one or several TSynAngelizeService action(s)
@@ -173,7 +174,7 @@ type
       read fRun write fRun;
     /// human-friendly Unicode text which could be displayed on Web or Console UI
     // - in addition to the Name short identifier
-    // - contains e.g. "Name": "Authentication Service",
+    // - contains e.g. "Description": "Authentication Service",
     property Description: RawUtf8
       read fDescription write fDescription;
     /// sub-services are started from their increasing Level
@@ -454,7 +455,7 @@ type
     /// finalize the stored information
     destructor Destroy; override;
     /// read and parse all *.service definitions from Settings.Folder
-    // - as called by Start overriden method
+    // - e.g. as called by Start overriden method
     // - may be called before head to validate the execution settings
     // - raise ESynAngelize on invalid settings or dubious StateFile
     function LoadServicesFromSettingsFolder: integer;
@@ -539,7 +540,7 @@ begin
     fRetryEvent.SetEvent; // unlock WaitFor(pause) below
 end;
 
-function ComputePause(tix: Int64; var lastunstable: Int64): integer;
+function ComputePauseSec(tix: Int64; var lastunstable: Int64): integer;
 var
   min: integer;
 begin
@@ -548,7 +549,7 @@ begin
     lastunstable := tix
   else
   begin
-    min := (tix - lastunstable) div 60000;
+    min := (tix - lastunstable) div MilliSecsPerMin;
     if min > 0 then    // retry every 2 sec until 1 min
       if min < 5 then
         result := 15   // retry every 15 sec until 5 min
@@ -582,7 +583,7 @@ var
 
 begin
   log := fLog.Add;
-  timeout := fService.RetryStableSec * 1000;
+  timeout := fService.RetryStableSec shl MilliSecsPerSecShl;
   sn := fService.Name;
   se := fService.AbortExitCodes;
   notifytix := false;
@@ -639,7 +640,7 @@ begin
         if tix - start < timeout then
         begin
           // it did not last RetryStableSec: seems not stable - pause and retry
-          pause := ComputePause(tix, lastunstable);
+          pause := ComputePauseSec(tix, lastunstable);
           if fService <> nil then
           begin
             fService.DoNotify(doExitRetry,
@@ -839,7 +840,7 @@ begin
       // any exception on DoOne() should break the starting
       fOwner.DoOne(log, self, acDoStart, fStart[a]);
   if fWatch <> nil then
-    fNextWatch := GetTickCount64 + fWatchDelaySec * 1000;
+    fNextWatch := GetTickCount64 + fWatchDelaySec * MilliSecsPerSec;
 end;
 
 function TSynAngelizeService.DoStop(log: TSynLog): boolean;
@@ -1046,17 +1047,17 @@ function TSynAngelize.CustomParseCmd(P: PUtf8Char): boolean;
 begin
   result := true; // the command has been identified and processed
   case IdemPPChar(P, @AGL_CMD) of
-    0:
+    0: // --list
       ListServices;
-    1:
+    1: // --settings
       begin
         WriteCopyright;
         ConsoleWrite('Found %', [Plural('setting', LoadServicesFromSettingsFolder)]);
       end;
-    2:
+    2: // --new
       NewService;
-    3,
-    4:
+    3, // --retry
+    4: // --resume
       begin
         WriteCopyright;
         {$ifdef OSWINDOWS}
@@ -1101,7 +1102,7 @@ end;
 const
   _STATEMAGIC = $5131e3a6;
 
-function SortByLevel(const A, B): integer; // to display by increasing Level
+function SortByLevel(const A, B): integer; // run and display by increasing Level
 begin
   result := TSynAngelizeService(A).Level - TSynAngelizeService(B).Level;
   if result = 0 then
@@ -1499,7 +1500,7 @@ begin
             else
               sec := sec * 3; // wait up to 3 gracefull ending phases
             Log.Log(sllTrace, 'Stop: % wait for ending up to % sec', [p, sec], Sender);
-            endtix := GetTickCount64 + sec * 1000;
+            endtix := GetTickCount64 + sec shl MilliSecsPerSecShl;
             repeat
               SleepHiRes(10);
               if Service.fRunner = nil then
@@ -1800,7 +1801,7 @@ begin
   begin
     log.Log(sllTrace, 'StartServices: wait % sec for level #% start',
       [sec, level], self);
-    endtix := GetTickCount64 + sec * 1000;
+    endtix := GetTickCount64 + sec shl MilliSecsPerSecShl;
     for i := 0 to high(fStarted) do
     begin
       s := fStarted[i];
@@ -1859,7 +1860,7 @@ begin
   begin
     log.Log(sllTrace, 'StartWatching', self);
     fWatchThread := TSynBackgroundThreadProcess.Create('watchdog',
-      WatchEverySecond, 1000, nil, log.Family.OnThreadEnded);
+      WatchEverySecond, MilliSecsPerSec, nil, log.Family.OnThreadEnded);
   end
   else
     log.Log(sllTrace, 'StartWatching: no need to watch', self);
@@ -1879,6 +1880,7 @@ begin
   tix := GetTickCount64;
   for i := 0 to high(fService) do // ordered by s.Level
   begin
+    // check the services for any pending "watch" task
     s := fService[i];
     if (s.fNextWatch = 0) or
        (tix < s.fNextWatch) then
@@ -1899,7 +1901,7 @@ begin
             [s.Name, s.fWatch[a], E.ClassType], self);
       end;
     tix := GetTickCount64; // may have changed during DoWatch() progress
-    s.fNextWatch := tix + s.WatchDelaySec * 1000;
+    s.fNextWatch := tix + s.WatchDelaySec * MilliSecsPerSec;
   end;
 end;
 

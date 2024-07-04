@@ -1804,7 +1804,7 @@ begin
             (DefaultHasher(0, pointer(s), fdst.Size) = HashFile(dstfn))) then
           continue;
         FileFromString(s, dstfn);
-        FileSetDateFromUnixUtc(dstfn, reftime div MSecsPerSec);
+        FileSetDateFromUnixUtc(dstfn, reftime div MilliSecsPerSec);
         inc(result);
         if sfoWriteFileNameToConsole in Options then
           ConsoleWrite('synched %', [dstfn]);
@@ -4474,7 +4474,7 @@ begin
     if fSnapShotAfterMinutes = 0 then
       fSnapshotTimestamp := 0
     else
-      fSnapshotTimestamp := GetTickCount64 + fSnapShotAfterMinutes * 60000;
+      fSnapshotTimestamp := GetTickCount64 + fSnapShotAfterMinutes * MilliSecsPerMin;
   finally
     fSafe.WriteUnLock;
   end;
@@ -5363,7 +5363,7 @@ begin
      (aTypeInfo^.Kind <> rkDynArray) then
     exit;
   iteminfo := aTypeInfo^.DynArrayItemType(ElemSize);
-  if (iteminfo <> nil) or
+  if (iteminfo <> nil) or // managed elem type is not simple
      (Source = nil) or
      // (Source[0] <> AnsiChar(ElemSize)) or mORMot 2 stores elemsize=0
      (Source[1] <> #0) then
@@ -5437,11 +5437,11 @@ begin
   if (ArrayRtti.Parser <> ptDynArray) or
      Reader.EOF then
     exit;
-  if ArrayRtti.Cache.ItemInfo = nil then
+  if ArrayRtti.Cache.ItemInfoManaged = nil then
     ArrayLoad := nil
   else
-    ArrayLoad := RTTI_BINARYLOAD[ArrayRtti.Cache.ItemInfo^.Kind];
-  Count := DynArrayLoadHeader(Reader, ArrayRtti.Info, ArrayRtti.Cache.ItemInfo);
+    ArrayLoad := RTTI_BINARYLOAD[ArrayRtti.Cache.ItemInfoManaged^.Kind];
+  Count := DynArrayLoadHeader(Reader, ArrayRtti.Info, ArrayRtti.Cache.ItemInfoManaged);
   result := true;
 end;
 
@@ -5457,7 +5457,7 @@ begin
      not Reader.EOF then
   begin
     if Assigned(ArrayLoad) then
-      ArrayLoad(Item, Reader, ArrayRtti.Cache.ItemInfo)
+      ArrayLoad(Item, Reader, ArrayRtti.Cache.ItemInfoManaged)
     else
       Reader.Copy(Item, ArrayRtti.Cache.ItemSize);
     inc(Current);
@@ -5657,8 +5657,8 @@ begin
   SetParameters(aParameters); // should parse the JSON-encoded parameters
 end;
 
-constructor TSynFilterOrValidate.CreateUtf8(const Format: RawUtf8; const Args,
-  Params: array of const);
+constructor TSynFilterOrValidate.CreateUtf8(const Format: RawUtf8;
+  const Args, Params: array of const);
 begin
   Create(FormatJson(Format, Args, Params));
 end;

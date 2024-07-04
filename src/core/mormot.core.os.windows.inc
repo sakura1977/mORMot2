@@ -333,7 +333,7 @@ begin
   if PInt64(@FT)^ = 0 then
     result := 0
   else // inlined UnixTimeToDateTime()
-    result := FileTimeToUnixMSTime(FT) / MSecsPerDay + UnixDateDelta;
+    result := FileTimeToUnixMSTime(FT) / MilliSecsPerDay + UnixDateDelta;
 end;
 
 procedure DateTimeToFileTime(dt: TDateTime; out FT: TFileTime);
@@ -702,7 +702,7 @@ begin
   if _QueryPerformanceFrequencyPer10 then
     Value := QWord(v) div 10 // faster div by a constant (especially on FPC_64)
   else
-    Value := QWord((QWord(v) * 1000000) div _QueryPerformanceFrequency);
+    Value := QWord((QWord(v) * MicroSecsPerSec) div _QueryPerformanceFrequency);
 end;
 
 var
@@ -1346,7 +1346,7 @@ end;
 
 function GetUptimeSec: cardinal;
 begin
-  result := GetTickCount64 div MSecsPerSec; // good enough
+  result := GetTickCount64 div MilliSecsPerSec; // good enough
 end;
 
 procedure SleepHiRes(ms: cardinal);
@@ -2538,7 +2538,6 @@ procedure ConsoleWrite(const Text: RawUtf8; Color: TConsoleColor;
 var
   txt: RawByteString;
   l: PtrInt;
-  written: cardinal;
 begin
   if not HasConsole then
     exit;
@@ -2554,7 +2553,7 @@ begin
   try
     if not NoColor then
       TextColor(Color);
-    WriteFile(StdOut, pointer(txt)^, l, written, nil);
+    FileWriteAll(StdOut, pointer(txt), l);
     // FlushFileBuffers(StdOut); // don't: would block until read on the pipe
   finally
     ConsoleCriticalSection.UnLock;

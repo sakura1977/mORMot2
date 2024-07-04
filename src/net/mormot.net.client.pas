@@ -180,6 +180,42 @@ type
   /// define how THttpClientSocketWGet.Alternate should operate this file
   TWGetAlternateOptions = set of TWGetAlternateOption;
 
+  /// the various steps of THttpClientSocket.WGet() process
+  TWGetStep = (
+    wgsUrlFile,
+    wgsFileName,
+    wgsHashed,
+    wgsAlreadExisting,
+    wgsFromCache,
+    wgsResume,
+    wgsHead,
+    wgsAbortResume,
+    wgsFromScratch,
+    wgsNewStream,
+    wgsDeleteFile,
+    wgsAlternateFromCache,
+    wgsAlternateLastPeer,
+    wgsAlternateBroadcast,
+    wgsAlternateGet,
+    wgsAlternateSuccess,
+    wgsAlternateFailed,
+    wgsAlternateReset,
+    wgsAlternateAlreadyInCache,
+    wgsAlternateWrongSizeInCache,
+    wgsAlternateCopiedInCache,
+    wgsProgressive,
+    wgsProgressiveFailed,
+    wgsGet,
+    wgsSetDate,
+    wgsLastMod);
+  /// which steps have been performed during THttpClientSocket.WGet() process
+  TWGetSteps = set of TWGetStep;
+
+  /// callback event for THttpClientSocket.WGet() process
+  // - as set to THttpClientSocketWGet.OnStep
+  // - an additional text information, depending on each step, is supplied
+  TOnWGetStep = procedure(Step: TWGetStep; const Context: RawUtf8) of object;
+
   /// parameters set for THttpClientSocket.WGet() process
   // - some parameters are optional, and you should call Clear by default
   // - you could call redirectly the WGet method after having called Clear
@@ -195,6 +231,10 @@ type
     OnProgress: TOnStreamProgress;
     /// optional callback if TFileStreamEx.Create(FileName, Mode) is not good enough
     OnStreamCreate: TOnStreamCreate;
+    /// optional callback event raised during WGet() process
+    // - alternative for business logic tracking: the OnProgress callback is
+    // more about human interaction in GUI or console
+    OnStep: TOnWGetStep;
     /// optional callback to allow an alternate download method
     // - can be used for a local peer-to-peer download cache via THttpPeerCache
     // - if defined, it will make a HEAD on the server to ensure the file still
@@ -238,8 +278,13 @@ type
     // each packet, whereas this property is about the global time elapsed
     // during the whole download process
     TimeOutSec: integer;
-    /// initialize the default parameters
+    /// when WGet() has been called, contains all the steps involed during the
+    // process
+    OutSteps: TWGetSteps;
+    /// initialize the default parameters - reset all fields to 0 / nil / ''
     procedure Clear;
+    /// method used internally during process to notify Steps and OnStep()
+    procedure SetStep(Step: TWGetStep; const Context: array of const);
     /// after Clear, instantiate and wrap THttpClientSocket.WGet
     // - would return the downloaded file name on success
     function WGet(const url: RawUtf8; const destfile: TFileName;
@@ -264,7 +309,7 @@ type
     // - should return HTTP_SUCCESS or HTTP_PARTIALCONTENT on success
     // - should return 0 if hash was not found, to fallback to a regular GET
     function OnDownload(Sender: THttpClientSocket;
-      const Params: THttpClientSocketWGet; const Url: RawUtf8;
+      var Params: THttpClientSocketWGet; const Url: RawUtf8;
       ExpectedFullSize: Int64; OutStream: TStreamRedirect): integer;
     /// notify the alternate download implementation that there is a file
     // currently downloading into a .partial local file content
@@ -279,7 +324,7 @@ type
     // pcfResponsePartial with the new file name
     // - this method is called after any file has been successfully downloaded
     // - Params.Hasher/Hash are expected to be populated
-    procedure OnDowloaded(const Params: THttpClientSocketWGet;
+    procedure OnDowloaded(var Params: THttpClientSocketWGet;
       const Partial: TFileName; OnDownloadingID: THttpPartialID);
     /// notify the alternate download implementation that the data supplied
     // by OnDownload() was incorrect
@@ -526,10 +571,11 @@ type
 
 /// returns the HTTP User-Agent header value of a mORMot client including
 // the Instance class name in its minified/uppercase-only translation
-// - typical value is "Mozilla/5.0 (Linux x64; mORMot) HCS/2.0 Tests/3"
+// - typical value is "Mozilla/5.0 (Linux x64; mORMot) HCS/2 Tests/3"
 // for THttpClientSocket from a Tests.exe application in version 3.x
 // - note: the framework would identify the 'mORMot' pattern in the user-agent
 // header to enable advanced behavior e.g. about JSON transmission
+// - framework is identified as '/2' with no release number, for security reasons
 function DefaultUserAgent(Instance: TObject): RawUtf8;
 
 /// create a THttpClientSocket, returning nil on error
@@ -561,6 +607,8 @@ function WGet(const url: RawUtf8; const destfile: TFileName;
   sockettimeout: cardinal = 10000; redirectmax: integer = 0;
   consoledisplay: boolean = false): string;
 
+function ToText(wgs: TWGetStep): PShortString; overload;
+function ToText(wgs: TWGetSteps; trimmed: boolean = true): RawUtf8; overload;
 
 var
   /// global overriden value for the GetSystemProxyUri() function
@@ -1525,9 +1573,8 @@ begin
   vers[0] := #0;
   if Executable.Version.Major <> 0 then
     FormatShort16('/%', [Executable.Version.Major], vers);
-  result := FormatUtf8(
-    'Mozilla/5.0 (' + OS_TEXT + ' ' + CPU_ARCH_TEXT + '; mORMot) %/% %%',
-    [name, copy(SYNOPSE_FRAMEWORK_VERSION, 1, 3), Executable.ProgramName, vers]);
+  FormatUtf8('Mozilla/5.0 (' + OS_TEXT + ' ' + CPU_ARCH_TEXT + '; mORMot) %/2 %%',
+    [name, Executable.ProgramName, vers], result);
 end;
 
 
@@ -1554,6 +1601,15 @@ begin
     s.Free;
   end;
 end;
+
+procedure THttpClientSocketWGet.SetStep(
+  Step: TWGetStep; const Context: array of const);
+begin
+  include(OutSteps, Step);
+  if Assigned(OnStep) then
+    OnStep(Step, Make(Context));
+end;
+
 
 function WGet(const url: RawUtf8; const destfile: TFileName;
   const tunnel: RawUtf8; hasher: TStreamRedirectClass; const hash: RawUtf8;
@@ -1582,6 +1638,15 @@ begin
   end;
 end;
 
+function ToText(wgs: TWGetStep): PShortString;
+begin
+  result := GetEnumName(TypeInfo(TWGetStep), ord(wgs));
+end;
+
+function ToText(wgs: TWGetSteps; trimmed: boolean): RawUtf8;
+begin
+  result := GetSetName(TypeInfo(TWGetSteps), wgs, trimmed);
+end;
 
 var
   _PROXYSET: boolean; // retrieve environment variables only once
@@ -2064,7 +2129,9 @@ var
 
   function GetExpectedSizeAndRedirection: boolean;
   begin
+    // try to get expected target size with a HEAD request
     res := Head(requrl, params.KeepAlive, params.Header);
+    params.SetStep(wgsHead, [requrl, '=', res]);
     if not (res in HTTP_GET_OK) then
       EHttpSocket.RaiseUtf8('%.WGet: %:%/% failed as %',
         [self, fServer, fPort, requrl, StatusCodeToShort(res)]);
@@ -2086,6 +2153,7 @@ var
     else
       redirected := TFileStreamEx.Create(part, Mode);
     stream := params.Hasher.Create(redirected);
+    params.SetStep(wgsNewStream, [redirected]);
   end;
 
   procedure DoRequestAndFreeStream;
@@ -2107,8 +2175,11 @@ var
     begin
       // alternate download (e.g. local peer-to-peer cache) from file hash
       res := params.Alternate.OnDownload(self, params, requrl, expsize, stream);
-      if res <> 0 then
-        altdownload := true; // to notify OnDownloadFailed
+      altdownload := res <> 0; // to notify OnDownloadFailed
+      if altdownload then
+        params.SetStep(wgsAlternateSuccess, [res])
+      else
+        params.SetStep(wgsAlternateFailed, []);
     end;
     if res = 0 then
     begin
@@ -2119,10 +2190,14 @@ var
          not (waoNoProgressiveDownloading in params.AlternateOptions) and
          ((expsize <> 0) or
           GetExpectedSizeAndRedirection) then
+      begin
         altdownloading := params.Alternate.OnDownloading(params, part, expsize);
+        params.SetStep(wgsProgressive, [altdownloading]);
+      end;
       // regular direct GET, if not done via Alternate.OnDownload()
       res := Request(requrl, 'GET', params.KeepAlive, params.Header, '', '',
         {retry=}false, {instream=}nil, stream);
+      params.SetStep(wgsGet, [res]);
     end;
     // verify (partial) response
     if not (res in HTTP_GET_OK) then
@@ -2133,7 +2208,10 @@ var
     parthash := stream.GetHash; // hash updated on each stream.Write()
     FreeAndNil(stream);
     if Http.ContentLastModified > 0 then
+    begin
       FileSetDateFromUnixUtc(part, Http.ContentLastModified);
+      params.SetStep(wgsLastMod, [Http.ContentLastModified]);
+    end;
   end;
 
   procedure AbortAlternateDownloading;
@@ -2143,13 +2221,15 @@ var
     except
       // ignore any fatal error in callbacks
     end;
+    params.SetStep(wgsProgressiveFailed, [altdownloading]);
     altdownloading := 0;
   end;
 
-  procedure DeletePartAndResetDownload;
+  procedure DeletePartAndResetDownload(const Context: RawUtf8);
   begin
     if altdownload then // something went wrong with OnDownload()
     try
+      params.SetStep(wgsAlternateReset, [Context]);
       params.Alternate.OnDownloadFailed(params); // notify
     except
       // intercept any fatal error in callbacks
@@ -2157,6 +2237,7 @@ var
     altdownload := false;
     if altdownloading <> 0 then
       AbortAlternateDownloading;
+    params.SetStep(wgsDeleteFile, [Context]);
     DeleteFile(part); // this .part was clearly incorrect
   end;
 
@@ -2170,29 +2251,31 @@ begin
   urlfile := ExtractResourceName(url); // TUri + UrlDecode() + sanitize filename
   if urlfile = '' then
     urlfile := 'index';
+  params.SetStep(wgsUrlFile, [urlfile]);
   result := destfile;
   if result = '' then
     result := GetSystemPath(spTemp) + Utf8ToString(urlfile)
   else if DirectoryExists(result) then // not a file, but a folder
     result := MakePath([result, urlfile]);
+  params.SetStep(wgsFileName, [result]);
   // retrieve the .hash of this file
   TrimSelf(params.Hash);
   if params.HashFromServer and
-     Assigned(params.Hasher) and
-     (params.Hash = '') then
+     Assigned(params.Hasher) then
+  begin
+    // try to retrieve the hash from the HTTP server
+    parthash := params.Hasher.GetHashFileExt;
+    if parthash <> '' then
     begin
-      // try to retrieve the hash from the HTTP server
-      parthash := params.Hasher.GetHashFileExt;
-      if parthash <> '' then
-      begin
-        parthash := url + parthash; // e.g. 'files/somefile.zip.md5'
-        if Get(parthash, 5000) = 200 then
-          // handle 'c7d8e61e82a14404169af3fa5a72be85 *file.name' format
-          params.Hash := Split(TrimU(Http.Content), ' ');
-        if Assigned(OnLog) then
-          OnLog(sllTrace, 'WGet: hash from % = %', [parthash, params.Hash], self);
-      end;
+      parthash := url + parthash; // e.g. 'files/somefile.zip.md5'
+      if Get(parthash, 5000) = 200 then
+        // handle 'c7d8e61e82a14404169af3fa5a72be85 *file.name' format
+        params.Hash := Split(TrimU(Http.Content), ' ');
+      if Assigned(OnLog) then
+        OnLog(sllTrace, 'WGet: hash from % = %', [parthash, params.Hash], self);
     end;
+    params.SetStep(wgsHashed, [params.Hash]);
+  end;
   // try to get from local HashCacheDir
   if (params.HashCacheDir <> '') and
      DirectoryExists(params.HashCacheDir) then
@@ -2214,6 +2297,7 @@ begin
         TStreamRedirect.NotifyEnded(params.OnProgress, nil,
           '% already available - % of',
           [urlfile, params.Hasher.GetHashName], size, start);
+      params.SetStep(wgsAlreadExisting, [result]);
       exit;
     end
     else if cached <> '' then
@@ -2232,6 +2316,7 @@ begin
           TStreamRedirect.NotifyEnded(params.OnProgress, nil,
             '% from local cache - % and copy of',
             [urlfile, params.Hasher.GetHashName], size, start);
+        params.SetStep(wgsFromCache, [cached]);
         exit;
       end;
     end;
@@ -2252,6 +2337,7 @@ begin
   begin
     if Assigned(OnLog) then
       OnLog(sllTrace, 'WGet %: resume % (%)', [url, part, KB(size)], self);
+    params.SetStep(wgsResume, [url]);
     // try to get expected target size with a HEAD request
     if GetExpectedSizeAndRedirection and
        (size < expsize) then
@@ -2263,6 +2349,7 @@ begin
     else
     begin
       resumed := false;
+      params.SetStep(wgsAbortResume, [part]);
       DeleteFile(part); // reject this .part if unknown or too big
       if Assigned(OnLog) then
         OnLog(sllTrace, 'WGet %: size=% expected=% -> reset %',
@@ -2275,6 +2362,7 @@ begin
     resumed := false;
     if Assigned(OnLog) then
       OnLog(sllTrace, 'WGet %: start downloading %', [url, part], self);
+    params.SetStep(wgsFromScratch, [part]);
     NewStream(fmCreate);
   end;
   // actual file retrieval
@@ -2289,16 +2377,16 @@ begin
       begin
         if Assigned(OnLog) then
           OnLog(sllDebug,
-            'WGet %: wrong hash after resume -> reset and retry', [url]);
-        DeletePartAndResetDownload; // get rid of wrong file
-        NewStream(fmCreate);       // setup a new output stream
-        requrl := url;            // reset any redirection
-        DoRequestAndFreeStream;  // try again without any resume
+            'WGet %: wrong hash after resume -> reset and retry', [url], self);
+        DeletePartAndResetDownload('resume'); // get rid of wrong file
+        NewStream(fmCreate);                  // setup a new output stream
+        requrl := url;                        // reset any redirection
+        DoRequestAndFreeStream;               // try again without any resume
       end;
       // now the hash should be correct
       if not PropNameEquals(parthash, params.Hash) then
       begin
-        DeletePartAndResetDownload;
+        DeletePartAndResetDownload('hash');
         EHttpSocket.RaiseUtf8('%.WGet: %:%/% hash failure (% vs %)',
           [self, fServer, fPort, url, parthash, params.Hash]);
       end;
@@ -2307,7 +2395,7 @@ begin
     if cached <> '' then
     begin
       if Assigned(OnLog) then
-        OnLog(sllTrace, 'WGet %: copy into cached %', [url, cached]);
+        OnLog(sllTrace, 'WGet %: copy into cached %', [url, cached], self);
       CopyFile(part, cached, {failsexist=}false);
     end;
     // notify e.g. THttpPeerCache of the newly downloaded file
@@ -2334,6 +2422,9 @@ begin
       if (FileSize(part) < 32768) or // not worth it, and maybe HTML error msg
          not params.Resume then      // resume is not enabled
         DeleteFile(part); // force next attempt from scratch
+    if Assigned(OnLog) and
+       (params.OutSteps <> []) then
+      OnLog(sllTrace, 'WGet %: %', [url, ToText(params.OutSteps)], self);
   end;
 end;
 
@@ -2586,7 +2677,7 @@ begin
     SendTimeout := HTTP_DEFAULT_SENDTIMEOUT;
   if ReceiveTimeout = 0 then
     ReceiveTimeout := HTTP_DEFAULT_RECEIVETIMEOUT;
-  InternalConnect(ConnectionTimeOut, SendTimeout, ReceiveTimeout); // raise an exception on error
+  InternalConnect(ConnectionTimeOut, SendTimeout, ReceiveTimeout); // raise exception on error
 end;
 
 constructor THttpRequest.Create(const aUri: RawUtf8; const aProxyName: RawUtf8;
@@ -2934,7 +3025,7 @@ procedure TWinHttp.InternalSendRequest(const aMethod: RawUtf8;
             EWinHttp.RaiseFromLastError;
           inc(Current, BytesWritten);
           if not fOnUpload(Self, Current, L) then
-            raise EWinHttp.CreateUtf8('%: OnUpload canceled %', [self, aMethod]);
+            EWinHttp.RaiseUtf8('%: OnUpload canceled %', [self, aMethod]);
         end;
       end;
     end
@@ -3274,7 +3365,7 @@ begin
     if _http.Request(url, 'GET', 0, inH, '', '', outH, outD) = 101 then
       fSocket := _http.fSocket
     else
-      raise EWinHttp.CreateUtf8('%.Create: % handshake failed', [self, _http]);
+      EWinHttp.RaiseUtf8('%.Create: % handshake failed', [self, _http]);
   finally
     _http.Free;
   end;

@@ -3407,11 +3407,9 @@ begin
     if (fStatement <> nil) and
        fStatement.Connection.Properties.LogSqlStatementOnException then
       try
-        fMessageUtf8 := fMessageUtf8 + ' - ' +
-          fStatement.GetSqlWithInlinedParams;
-      except
-        fMessageUtf8 := fMessageUtf8 + ' - ' +
-          fStatement.Sql; // if parameter access failed -> append with ?
+        Append(fMessageUtf8, [' - ', fStatement.GetSqlWithInlinedParams]);
+      except // if parameter access failed -> append with ?
+        Append(fMessageUtf8, [' - ', fStatement.Sql]);
       end;
   end;
   {$endif SYNDB_SILENCE}
@@ -3614,12 +3612,12 @@ end;
 
 procedure TSqlDBConnectionProperties.SetConnectionTimeOutMinutes(minutes: cardinal);
 begin
-  fConnectionTimeOutTicks := minutes * 60000; // minutes to ms conversion
+  fConnectionTimeOutTicks := minutes * MilliSecsPerMin;
 end;
 
 function TSqlDBConnectionProperties.GetConnectionTimeOutMinutes: cardinal;
 begin
-  result := fConnectionTimeOutTicks div 60000;
+  result := fConnectionTimeOutTicks div MilliSecsPerMin;
 end;
 
 function TSqlDBConnectionProperties.GetMainConnection: TSqlDBConnection;

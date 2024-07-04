@@ -5751,43 +5751,34 @@ begin
   result := -1;
 end;
 
+function FileExt(p: PUtf8Char; sepChar: AnsiChar): PUtf8Char;
+  {$ifdef HASINLINE} inline; {$endif}
+begin
+  result := nil;
+  repeat
+    if p^ = sepChar then
+      result := p; // get last '.' position from p into ext
+    inc(p);
+  until p^ = #0;
+end;
+
 function IdemFileExt(p: PUtf8Char; extup: PAnsiChar; sepChar: AnsiChar): boolean;
-var
-  ext: PUtf8Char;
 begin
   if (p <> nil) and
      (extup <> nil) then
-  begin
-    ext := nil;
-    repeat
-      if p^ = sepChar then
-        ext := p; // get last '.' position from p into ext
-      inc(p);
-    until p^ = #0;
-    result := IdemPChar(ext, extup);
-  end
+    result := IdemPChar(FileExt(p, sepChar), extup)
   else
     result := false;
 end;
 
 function IdemFileExts(p: PUtf8Char; const extup: array of PAnsiChar;
   sepChar: AnsiChar): integer;
-var
-  ext: PUtf8Char;
 begin
-  result := -1;
   if (p <> nil) and
      (high(extup) > 0) then
-  begin
-    ext := nil;
-    repeat
-      if p^ = sepChar then
-        ext := p; // get last '.' position from p into ext
-      inc(p);
-    until p^ = #0;
-    if ext <> nil then
-      result := IdemPCharArray(ext, extup);
-  end;
+    result := IdemPCharArray(FileExt(p, sepChar), extup)
+  else
+    result := -1;
 end;
 
 function PosCharAny(Str: PUtf8Char; Characters: PAnsiChar): PUtf8Char;
@@ -9339,7 +9330,7 @@ begin
     exit;
   if tix64 = 0 then
     tix64 := GetTickCount64;
-  if tix64 shr 10 < fNextTix then
+  if tix64 shr MilliSecsPerSecShl < fNextTix then
     exit;
   fSafe.WriteLock;
   try
@@ -9385,7 +9376,7 @@ begin
           aReadMs^ := stop - start;
         end;
         if fFlushSeconds <> 0 then
-          fNextTix := (GetTickCount64 shr 10) + fFlushSeconds;
+          fNextTix := (GetTickCount64 shr MilliSecsPerSecShl) + fFlushSeconds;
       end;
     finally
       fSafe.WriteUnLock;
@@ -10261,7 +10252,7 @@ end;
 
 const
   // reference 8-bit upper chars as in WinAnsi/CP1252 for NormToUpper/Lower[]
-  WinAnsiToUp: array[138..255] of byte = (
+  {%H-}WinAnsiToUp: array[138..255] of byte = (
     83,  139, 140, 141, 90,  143, 144, 145, 146, 147, 148, 149, 150, 151, 152,
     153, 83,  155, 140, 157,  90,  89, 160, 161, 162, 163, 164, 165, 166, 167,
     168, 169, 170, 171, 172, 173, 174, 175, 176, 177, 178, 179, 180, 181, 182,
