@@ -2575,6 +2575,7 @@ type
     fFileName: TFileName;
     fLoadedAsIni: boolean;
     fSettingsOptions: TSynJsonFileSettingsOptions;
+    fInitialFileHash: cardinal;
     // could be overriden to validate the content coherency and/or clean fields
     function AfterLoad: boolean; virtual;
   public
@@ -2589,13 +2590,18 @@ type
     function FolderName: TFileName;
     /// persist the settings as a JSON file, named from LoadFromFile() parameter
     // - will use the INI format if it was used at loading, or fsoWriteIni is set
-    procedure SaveIfNeeded; virtual;
+    // - return TRUE if file has been modified, FALSE if was not needed or failed
+    function SaveIfNeeded: boolean; virtual;
     /// optional persistence file name, as set by LoadFromFile()
     property FileName: TFileName
       read fFileName write fFileName;
     /// allow to customize the storing process
     property SettingsOptions: TSynJsonFileSettingsOptions
       read fSettingsOptions write fSettingsOptions;
+    /// can be used to compare two instances original file content
+    // - will use DefaultHasher, so hash could change after process restart
+    property InitialFileHash: cardinal
+      read fInitialFileHash write fInitialFileHash;
   end;
   /// meta-class definition of TSynJsonFileSettings
   TSynJsonFileSettingsClass = class of TSynJsonFileSettings;
@@ -11862,9 +11868,12 @@ function TSynJsonFileSettings.LoadFromFile(const aFileName: TFileName;
 begin
   fFileName := aFileName;
   fInitialJsonContent := RawUtf8FromFile(aFileName); // may detect BOM
+  fInitialFileHash := DefaultHash(fInitialJsonContent);
   result := LoadFromJson(fInitialJsonContent, aSectionName);
-  if not result then
-    fInitialJsonContent := ''; // file was neither valid JSON nor INI: ignore
+  if result then
+    exit; // success
+  fInitialJsonContent := ''; // file was neither valid JSON nor INI: ignore
+  fInitialFileHash := 0;
 end;
 
 function TSynJsonFileSettings.FolderName: TFileName;
@@ -11875,10 +11884,11 @@ begin
     result := ExtractFilePath(fFileName);
 end;
 
-procedure TSynJsonFileSettings.SaveIfNeeded;
+function TSynJsonFileSettings.SaveIfNeeded: boolean;
 var
   saved: RawUtf8;
 begin
+  result := false;
   if (self = nil) or
      (fFileName = '') or
      (fsoDisableSaveIfNeeded in fSettingsOptions) then
@@ -11889,8 +11899,11 @@ begin
     saved := ObjectToJson(self, SETTINGS_WRITEOPTIONS);
   if saved = fInitialJsonContent then
     exit;
-  FileFromString(saved, fFileName);
+  result := FileFromString(saved, fFileName);
+  if not result then
+    exit;
   fInitialJsonContent := saved;
+  fInitialFileHash := DefaultHash(saved);
 end;
 
 
@@ -11921,6 +11934,7 @@ begin
   JSON_ESCAPE[13]  := ord('r');
   JSON_ESCAPE[ord('\')] := ord('\');
   JSON_ESCAPE[ord('"')] := ord('"');
+  // branchless JSON unescaping - default JSON_UNESCAPE_UNEXPECTED = #0
   for c := #32 to #127 do
     JSON_UNESCAPE[c] := c;
   JSON_UNESCAPE['b'] := #8;
@@ -11928,7 +11942,8 @@ begin
   JSON_UNESCAPE['n'] := #10;
   JSON_UNESCAPE['f'] := #12;
   JSON_UNESCAPE['r'] := #13;
-  JSON_UNESCAPE['u'] := JSON_UNESCAPE_UTF16;
+  JSON_UNESCAPE['u'] := JSON_UNESCAPE_UTF16; // = #1
+  // fast JSON parsing using JSON_CHARS[] and JSON_TOKENS[] lookup tables
   for c := low(c) to high(c) do
   begin
     if c in [#0, ',', ']', '}', ':'] then
@@ -11951,7 +11966,7 @@ begin
     if c in ['_', '0'..'9', 'a'..'z', 'A'..'Z', '.', '[', ']'] then
       include(JSON_CHARS[c], jcJsonIdentifier);
     if c in ['_', 'a'..'z', 'A'..'Z', '$'] then
-      // exclude '0'..'9' as already in jcDigitFirstChar
+      // exclude '0'..'9' as already in jtFirstDigit
       JSON_TOKENS[c] := jtIdentifierFirstChar;
   end;
   JSON_TOKENS[#0 ]  := jtEndOfBuffer;
