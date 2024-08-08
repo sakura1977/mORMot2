@@ -12,6 +12,7 @@ unit mormot.net.ws.core;
    - WebSockets Asynchronous Frames Parsing
    - WebSockets Client and Server Shared Process
    - TWebSocketProtocolChat Simple Protocol
+   - Socket.IO / Engine.IO Raw Protocols
 
   *****************************************************************************
 
@@ -1016,6 +1017,113 @@ var
   /// the allowed maximum size, in MB, of a WebSockets frame
   WebSocketsMaxFrameMB: cardinal = 256;
 
+
+{ ****************** Socket.IO / Engine.IO Raw Protocols }
+
+type
+  /// define the Engine.IO available packet types
+  // - defined in their numeric order, so ord() would give the proper ID number
+  TEngineIOPacket = (
+   eioOpen,
+   eioClose,
+   eioPing,
+   eioPong,
+   eioMessage,
+   eioUpgrade,
+   eioNoop);
+
+  /// define the Socket.IO available packet types
+  // - defined in their numeric order, so ord() would give the proper ID number
+  // - such packets are likely to be nested in a eioMessage frame
+  TSocketIOPacket = (
+    sioOpen,
+    sioDisconnect,
+    sioEvent,
+    sioAck,
+    sioConnectError,
+    sioBinaryEvent,
+    sioBinaryAck);
+
+
+/// compute the URI for a WebSocket-only Engine.IO upgrade
+// - server should respond with a HTTP_SWITCHINGPROTOCOLS = 101 response,
+// followed with a eioOpen response frame
+// - PollingUpgradeSid can be used from an upgrade on a long-polling connection
+function SocketIOHandshakeUri(const Root: RawUtf8 = '/socket.io/';
+  const PollingUpgradeSid: RawUtf8 = ''): RawUtf8;
+
+/// event names 'connect', 'message' and 'disconnect' are reserved
+function SocketIOReserved(const event: RawUtf8): boolean;
+
+
+type
+  /// exception class raised during Socket.IO process
+  ESocketIO = class(ESynException);
+
+  /// abstract parent for client side and server side Engine.IO sessions support
+  // - several Socket.IO namespaces are maintained over this main Engine.IO session
+  TEngineIOAbstract = class(TSynPersistent)
+  protected
+    fSafe: TLightLock;
+    fVersion: integer;
+    fEngineSid: RawUtf8;
+    fPingInterval, fPingTimeout, fMaxPayload: integer;
+    fNameSpaces: TRawUtf8DynArray;
+  public
+    /// initialize this class instance with some default values
+    constructor Create; override;
+  published
+    /// the associated Engine.IO Session ID
+    // - as computed on the server side, and received on client side
+    property EngineSid: RawUtf8
+      read fEngineSid;
+    /// the protocol version used by this class, as used for EIO=? parmeter
+    // - is currently fixed to 4
+    property Version: integer
+      read fVersion;
+    /// the ping interval, used in Engine.IO heartbeat mechanism (in milliseconds)
+    // - ping packets are now sent by the server, since protocol v4
+    // - default value is 20000, i.e. 20 seconds
+    property PingInterval: integer
+      read fPingInterval write fPingInterval;
+    /// the ping timeout, used in Engine.IO heartbeat mechanism (in milliseconds)
+    // - default value is 25000, i.e. 25 seconds
+    property PingTimeout: integer
+      read fPingTimeout write fPingTimeout;
+    /// optional number of bytes per chunk, used in Engine.IO payloads mechanism
+    // - default value is 0, meaning no
+    property MaxPayload: integer
+      read fMaxPayload write fMaxPayload;
+  end;
+
+  /// abstract parent for one client side and server side Socket.IO session
+  // - each session has its own namespace
+  TSocketIONamespace = class(TSynPersistent)
+  protected
+    fOwner: TEngineIOAbstract;
+    fSid, fNameSpace: RawUtf8;
+  public
+    /// access to the associates Engine.IO main connection
+    property Owner: TEngineIOAbstract
+      read fOwner;
+  published
+    /// the associated Socket.IO Session ID, as computed on the server side
+    // - default namespace is '/'
+    property Sid: RawUtf8
+      read fSid;
+    /// the associated Socket.IO Session ID, as computed on the server side
+    property NameSpace: RawUtf8
+      read fNameSpace;
+  end;
+  PSocketIONamespace = ^TSocketIONamespace;
+
+
+/// case insensitive search within an array of TSocketIONamespace
+function SocketIOGetNameSpace(one: PSocketIONamespace; count: integer;
+  const name: RawUtf8): pointer;
+
+/// retrieve the NameSpace properties of an array of TSocketIONamespace
+function SocketIOGetNameSpaces(one: PSocketIONamespace; count: integer): TRawUtf8DynArray;
 
 
 implementation
@@ -3308,6 +3416,85 @@ begin
   result := Sender.SendFrame(frame)
 end;
 
+
+{ ****************** Socket.IO / Engine.IO Raw Protocols }
+
+// reference: https://sockjs.com/docs/v4/socket-io-protocol/
+
+function SocketIOHandshakeUri(const Root, PollingUpgradeSid: RawUtf8): RawUtf8;
+var
+  r: RawUtf8;
+begin
+  r := Root;
+  if r = '' then
+    r := '/socket.io/'
+  else
+  begin
+    // normalize root
+    if r[1] <> '/' then
+      insert('/', r, 1);
+    if r[length(r)] <> '/' then
+      Append(r, '/');
+  end;
+  // EIO        4          Mandatory, the version of the protocol.
+  // transport  websocket  Mandatory, the name of the transport.
+  // sid        <sid>      None here - direct websockets, not from HTTP polling.
+  // t          <random>   Ensure that the request is not cached by the browser.
+  FormatUtf8('%?EIO=4&transport=websocket&t=%',
+    [r, CardinalToHexShort(Random32)], result);
+  if PollingUpgradeSid <> '' then
+    Append(result, '&sid=', PollingUpgradeSid);
+end;
+
+function SocketIOReserved(const event: RawUtf8): boolean;
+begin
+  result := (event = 'connect') or
+            (event = 'message') or
+            (event = 'disconnect'); // case sensitive
+end;
+
+
+{ TEngineIOSessionsAbstract }
+
+constructor TEngineIOAbstract.Create;
+begin
+  inherited Create;
+  fVersion := 4;
+  fPingTimeout := 20000;
+  fPingInterval := 25000;
+end;
+
+
+function SocketIOGetNameSpace(one: PSocketIONamespace; count: integer;
+  const name: RawUtf8): pointer;
+begin
+  if one <> nil then
+    repeat
+      result := one^;
+      if TSocketIONamespace(result).NameSpace = name then
+        exit; // O(n) brute force search is fast enough
+      inc(one);
+      dec(count);
+    until count = 0;
+  result := nil;
+end;
+
+function SocketIOGetNameSpaces(one: PSocketIONamespace; count: integer): TRawUtf8DynArray;
+var
+  p: PRawUtf8;
+begin
+  result := nil;
+  if one = nil then
+    exit;
+  SetLength(result, count);
+  p := pointer(result);
+  repeat
+    p^ := one^.NameSpace;
+    inc(one);
+    inc(p);
+    dec(count);
+  until count = 0;
+end;
 
 
 initialization
