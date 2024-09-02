@@ -1400,7 +1400,7 @@ function StrCompL(P1, P2: pointer; L: PtrInt; Default: PtrInt = 0): PtrInt;
 function StrCompIL(P1, P2: pointer; L: PtrInt; Default: PtrInt = 0): PtrInt;
   {$ifdef HASINLINE}inline;{$endif}
 
-/// our fast version of StrIComp(), to be used with PUtf8Char/PAnsiChar
+/// our fast version of StrIComp(), to be used with PUtf8Char/PAnsiChar as TUtf8Compare
 function StrIComp(Str1, Str2: pointer): PtrInt;
   {$ifdef HASINLINE}inline;{$endif}
 
@@ -1425,6 +1425,9 @@ type
 var
   /// a quick wrapper to StrComp or StrIComp comparison functions
   StrCompByCase: array[{CaseInsensitive=}boolean] of TUtf8Compare;
+
+/// comparison function first by Int64 value, then by text, for TUtf8Compare
+function StrCompByNumber(Str1, Str2: pointer): PtrInt;
 
 /// retrieve the next UCS4 CodePoint stored in U, then update the U pointer
 // - this function will decode the UTF-8 content before using NormToUpper[]
@@ -1863,17 +1866,17 @@ function StringReplaceTabs(const Source, TabText: RawUtf8): RawUtf8;
 /// UTF-8 dedicated (and faster) alternative to StringOfChar((Ch,Count))
 function RawUtf8OfChar(Ch: AnsiChar; Count: integer): RawUtf8;
 
-/// format a text content with SQL-like quotes
+/// format a text content with SQL/pascal-like quotes
 // - this function implements what is specified in the official SQLite3
 // documentation: "A string constant is formed by enclosing the string in single
 // quotes ('). A single quote within the string can be encoded by putting two
 // single quotes in a row - as in Pascal."
 function QuotedStr(const S: RawUtf8; Quote: AnsiChar = ''''): RawUtf8; overload;
 
-/// format a text content with SQL-like quotes
+/// format a text content with SQL/pascal-like quotes
 procedure QuotedStr(const S: RawUtf8; Quote: AnsiChar; var result: RawUtf8); overload;
 
-/// format a text buffer with SQL-like quotes
+/// format a text buffer with SQL/pascal-like quotes
 procedure QuotedStr(P: PUtf8Char; PLen: PtrInt; Quote: AnsiChar;
   var result: RawUtf8); overload;
 
@@ -6054,7 +6057,6 @@ begin
   until result = L;
 end;
 
-
 function StrIComp(Str1, Str2: pointer): PtrInt;
 var
   c1, c2: byte; // integer/PtrInt are actually slower on FPC
@@ -6086,6 +6088,22 @@ begin
     else
       // Str1=''
       result := -1;
+end;
+
+function StrCompByNumber(Str1, Str2: pointer): PtrInt;
+var
+  v1, v2: Int64;
+  err: integer;
+begin
+  v1 := GetInt64(Str1, err);
+  if err = 0 then
+    v2 := GetInt64(Str2, err)
+  else
+    v2 := 0; // to please the Delphi compiler
+  if err = 0 then
+    result := CompareInt64(v1, v2)
+  else
+    result := StrComp(Str1, Str2);
 end;
 
 function GetLineContains(p, pEnd, up: PUtf8Char): boolean;
@@ -8283,17 +8301,15 @@ begin
   begin
     FastSetString(Value, p, len);
     result := true;
-  end
-  else
-  begin
-    if not KeepNotFoundValue then
-      {$ifdef FPC}
-      FastAssignNew(Value);
-      {$else}
-      Value := '';
-      {$endif FPC}
-    result := false;
+    exit;
   end;
+  if not KeepNotFoundValue then
+    {$ifdef FPC}
+    FastAssignNew(Value);
+    {$else}
+    Value := '';
+    {$endif FPC}
+  result := false;
 end;
 
 function GetLineSize(P, PEnd: PUtf8Char): PtrUInt;

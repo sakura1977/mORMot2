@@ -226,6 +226,7 @@ type
 
   TRestHttpClientGenericClass = class of TRestHttpClientGeneric;
 
+  {$ifdef USEHTTPREQUEST}
 
   /// HTTP/1.1 RESTful JSON mORMot Client abstract class using either WinINet,
   // WinHttp or libcurl API
@@ -265,6 +266,8 @@ type
 
   /// meta-class of TRestHttpClientRequest types
   TRestHttpClientRequestClass = class of TRestHttpClientRequest;
+
+  {$endif USEHTTPREQUEST}
 
 
 { ************ TRestHttpClientSocket REST Client Class over Sockets }
@@ -584,7 +587,7 @@ begin
     Call.OutBody := Content;
   end
   else
-    Call.OutStatus := HTTP_NOTIMPLEMENTED; // 501 indicates not socket closed
+    Call.OutStatus := HTTP_CLIENTERROR; // indicates no socket
   if log <> nil then
     with Call do
       log.Log(sllClient, '% % status=% len=% state=%',
@@ -660,10 +663,10 @@ begin
   Definition.DatabaseName := UrlEncode([
     'IgnoreTlsCertificateErrors', ord(fExtendedOptions.TLS.IgnoreCertificateErrors),
     'ConnectTimeout', fConnectTimeout,
-    'SendTimeout', fSendTimeout,
+    'SendTimeout',    fSendTimeout,
     'ReceiveTimeout', fReceiveTimeout,
-    'ProxyName', fProxyName,
-    'ProxyByPass', fProxyByPass], {TrimLeadingQuestionMark=}true);
+    'ProxyName',   fProxyName,
+    'ProxyByPass', fProxyByPass], [ueTrimLeadingQuestionMark]);
 end;
 
 constructor TRestHttpClientGeneric.RegisteredClassCreateFrom(aModel: TOrmModel;
@@ -783,7 +786,7 @@ begin
 end;
 
 
-
+{$ifdef USEHTTPREQUEST}
 
 { TRestHttpClientRequest }
 
@@ -831,7 +834,7 @@ var
   OutData: RawByteString;
 begin
   if fRequest = nil then
-    result.Lo := HTTP_NOTIMPLEMENTED
+    result.Lo := HTTP_CLIENTERROR // better than 501 NOT IMPLEMENTED
   else
   begin
     result.Lo := fRequest.Request(url, method, KeepAliveMS, Header,
@@ -843,6 +846,7 @@ begin
   end;
 end;
 
+{$endif USEHTTPREQUEST}
 
 
 { ************ TRestHttpClientWebsockets REST Client Class over WebSockets }
