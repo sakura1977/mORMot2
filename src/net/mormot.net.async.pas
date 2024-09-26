@@ -597,6 +597,7 @@ type
     fConnectionHigh: integer;
     fThreadPoolCount: integer;
     fLastConnectionFind: integer;
+    fThreadPollingWakeupSafe: TLightLock; // topmost to ensure aarch64 alignment
     fLastHandle: integer;
     fOptions: TAsyncConnectionsOptions;
     fLog: TSynLogClass;
@@ -611,7 +612,6 @@ type
     fIocpAccept: PWinIocpSubscription;
     {$else}
     fThreadReadPoll: TAsyncConnectionsThread;
-    fThreadPollingWakeupSafe: TLightLock;
     fThreadPollingWakeupLoad: integer;
     fThreadPollingLastWakeUpTix: integer;
     fThreadPollingAwakeCount: integer;
@@ -5555,7 +5555,7 @@ begin
                   end;
               end;
             HTTP_NOTFOUND:
-              if (siz < 0) and
+              if (siz < 0) and // siz=-1 if the requested resource was a folder
                  not (psoNoFolderHtmlIndex in fSettings.Server.Options) then
               begin
                 // return the folder files info as cached HTML

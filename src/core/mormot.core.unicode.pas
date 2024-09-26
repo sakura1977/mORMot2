@@ -8,6 +8,7 @@ unit mormot.core.unicode;
 
    Efficient Unicode Conversion Classes shared by all framework units
    - UTF-8 Efficient Encoding / Decoding
+   - Cross-Platform Charset and CodePage Support
    - UTF-8 / UTF-16 / Ansi Conversion Classes
    - Text File Loading with BOM/Unicode Support
    - Low-Level String Conversion Functions
@@ -267,6 +268,41 @@ function Utf8TruncatedLength(text: PAnsiChar;
 // - end the parsing at first #13 or #10 character
 function Utf8FirstLineToUtf16Length(source: PUtf8Char): PtrInt;
 
+
+{ ************** Cross-Platform Charset and CodePage Support }
+
+const
+  ANSI_CHARSET        = 0;
+  DEFAULT_CHARSET     = 1;
+  SYMBOL_CHARSET      = 2;
+  SHIFTJIS_CHARSET    = 128;
+  HANGEUL_CHARSET     = 129;
+  JOHAB_CHARSET       = 130;
+  GB2312_CHARSET      = 134;
+  CHINESEBIG5_CHARSET = 136;
+  GREEK_CHARSET       = 161;
+  TURKISH_CHARSET     = 162;
+  VIETNAMESE_CHARSET  = 163;
+  HEBREW_CHARSET      = 177;
+  ARABIC_CHARSET      = 178;
+  BALTIC_CHARSET      = 186;
+  RUSSIAN_CHARSET     = 204;
+  THAI_CHARSET        = 222;
+  EASTEUROPE_CHARSET  = 238;
+  OEM_CHARSET         = 255;
+
+/// convert a char set to a code page
+function CharSetToCodePage(CharSet: integer): cardinal;
+
+/// convert a code page to a char set
+function CodePageToCharSet(CodePage: cardinal): integer;
+
+/// return a code page number into human-friendly text
+function CodePageToText(aCodePage: cardinal): TShort16;
+
+/// check if a code page is known to be of fixed width, i.e. not MBCS
+// - i.e. will be implemented as a TSynAnsiFixedWidth
+function IsFixedWidthCodePage(aCodePage: cardinal): boolean;
 
 
 { **************** UTF-8 / UTF-16 / Ansi Conversion Classes }
@@ -557,7 +593,6 @@ type
       SourceChars: cardinal): PAnsiChar; override;
   end;
 
-
 var
   /// global TSynAnsiConvert instance to handle WinAnsi encoding (code page 1252)
   // - this instance is global and instantied during the whole program life time
@@ -578,13 +613,6 @@ var
 
   /// global TSynAnsiConvert instance with no encoding (RawByteString/RawBlob)
   RawByteStringConvert: TSynAnsiFixedWidth;
-
-/// check if a code page is known to be of fixed width, i.e. not MBCS
-// - i.e. will be implemented as a TSynAnsiFixedWidth
-function IsFixedWidthCodePage(aCodePage: cardinal): boolean;
-
-/// return a code page number into human-friendly text
-function CodePageToText(aCodePage: cardinal): TShort16;
 
 
 { *************** Text File Loading with BOM/Unicode Support }
@@ -1427,6 +1455,7 @@ var
   StrCompByCase: array[{CaseInsensitive=}boolean] of TUtf8Compare;
 
 /// comparison function first by Int64 value, then by text, for TUtf8Compare
+// - so plain numbers will appear first, then case-sensitive text values
 function StrCompByNumber(Str1, Str2: pointer): PtrInt;
 
 /// retrieve the next UCS4 CodePoint stored in U, then update the U pointer
@@ -1988,7 +2017,11 @@ function TrimLeftLowerCase(const V: RawUtf8): PUtf8Char;
 /// trim first lowercase chars ('otDone' will return 'Done' e.g.)
 // - return an RawUtf8 string: enumeration names are pure 7-bit ANSI with Delphi 7
 // to 2007, and UTF-8 encoded with Delphi 2009+
-function TrimLeftLowerCaseShort(V: PShortString): RawUtf8;
+function TrimLeftLowerCaseShort(V: PShortString): RawUtf8; overload;
+  {$ifdef HASINLINE}inline;{$endif}
+
+/// trim first lowercase chars ('otDone' will return 'Done' e.g.)
+procedure TrimLeftLowerCaseShort(V: PShortString; var U: RawUtf8); overload;
 
 /// trim first lowercase chars ('otDone' will return 'Done' e.g.)
 // - return a ShortString: enumeration names are pure 7-bit ANSI with Delphi 7
@@ -2059,6 +2092,30 @@ procedure CamelCase(const text: RawUtf8; var s: RawUtf8;
   const isWord: TSynByteSet = [ord('0')..ord('9'), ord('a')..ord('z'), ord('A')..ord('Z')]); overload;
   {$ifdef HASINLINE}inline;{$endif}
 
+const
+  // published for unit testing (e.g. if properly sorted)
+  RESERVED_KEYWORDS: array[0..91] of RawUtf8 = (
+    'ABSOLUTE', 'ABSTRACT', 'ALIAS', 'AND', 'ARRAY', 'AS', 'ASM', 'ASSEMBLER',
+    'BEGIN', 'CASE', 'CLASS', 'CONST', 'CONSTREF', 'CONSTRUCTOR', 'DESTRUCTOR',
+    'DIV', 'DO', 'DOWNTO', 'ELSE', 'END', 'EXCEPT', 'EXPORT', 'EXTERNAL',
+    'FALSE', 'FAR', 'FILE', 'FINALIZATION', 'FINALLY', 'FOR', 'FORWARD',
+    'FUNCTION', 'GENERIC', 'GOTO', 'IF', 'IMPLEMENTATION', 'IN', 'INHERITED',
+    'INITIALIZATION', 'INLINE', 'INTERFACE', 'IS', 'LABEL', 'LIBRARY', 'MOD',
+    'NEAR', 'NEW', 'NIL', 'NOT', 'OBJECT', 'OF', 'ON', 'OPERATOR', 'OR', 'OUT',
+    'OVERRIDE', 'PACKED', 'PRIVATE', 'PROCEDURE', 'PROGRAM', 'PROPERTY',
+    'PROTECTED', 'PUBLIC', 'PUBLISHED', 'RAISE', 'READ', 'RECORD',
+    'REINTRODUCE', 'REPEAT', 'RESOURCESTRING', 'SELF', 'SET', 'SHL', 'SHR',
+    'STATIC', 'STRING', 'THEN', 'THREADVAR', 'TO', 'TRUE', 'TRY', 'TYPE',
+    'UNIT', 'UNTIL', 'USES', 'VAR', 'VARIANT', 'VIRTUAL', 'WHILE', 'WITH',
+    'WRITE', 'WRITELN', 'XOR');
+
+/// quickly check if a text is a case-insensitive pascal code keyword
+function IsReservedKeyWord(const aName: RawUtf8): boolean;
+
+/// wrap CamelCase() and IsReservedKeyWord() to generate a valid pascal identifier
+// - if aName is void after camel-casing, will raise an EOpenApi
+function SanitizePascalName(const aName: RawUtf8; KeyWordCheck: boolean): RawUtf8;
+
 var
   /// these procedure type must be defined if a default system.pas is used
   // - expect generic "string" type, i.e. UnicodeString for Delphi 2009+
@@ -2098,7 +2155,10 @@ function FindRawUtf8(const Values: array of RawUtf8; const Value: RawUtf8;
 
 /// true if Value was added successfully in Values[]
 function AddRawUtf8(var Values: TRawUtf8DynArray; const Value: RawUtf8;
-  NoDuplicates: boolean = false; CaseSensitive: boolean = true): boolean; overload;
+  NoDuplicates: boolean; CaseSensitive: boolean = true): boolean; overload;
+
+/// return the newly added Value index at the end of Values[]
+function AddRawUtf8(var Values: TRawUtf8DynArray; const Value: RawUtf8): PtrInt; overload;
 
 /// add the Value to Values[], with an external count variable, for performance
 function AddRawUtf8(var Values: TRawUtf8DynArray; var ValuesCount: integer;
@@ -2125,8 +2185,12 @@ function RawUtf8DynArrayEquals(const A, B: TRawUtf8DynArray;
 function AddString(var Values: TStringDynArray; const Value: string): PtrInt;
 
 /// convert the string dynamic array into a dynamic array of UTF-8 strings
-procedure StringDynArrayToRawUtf8DynArray(const Source: TStringDynArray;
-  var result: TRawUtf8DynArray);
+procedure StringDynArrayToRawUtf8DynArray(const Source: array of string;
+  var result: TRawUtf8DynArray); overload;
+
+/// convert the string dynamic array into a dynamic array of UTF-8 strings
+function StringDynArrayToRawUtf8DynArray(
+  const Source: array of string): TRawUtf8DynArray; overload;
 
 /// convert the string list into a dynamic array of UTF-8 strings
 procedure StringListToRawUtf8DynArray(Source: TStringList;
@@ -2220,6 +2284,9 @@ procedure QuickSortRawUtf8(var Values: TRawUtf8DynArray; ValuesCount: integer;
 /// sort a RawUtf8 array, low values first
 procedure QuickSortRawUtf8(Values: PRawUtf8Array; L, R: PtrInt;
   caseInsensitive: boolean = false); overload;
+
+/// sort and remove any duplicated RawUtf8 from Values[]
+procedure DeduplicateRawUtf8(var Values: TRawUtf8DynArray);
 
 {$ifdef OSPOSIX}
 type
@@ -3243,6 +3310,95 @@ begin
     until false;
 end;
 
+
+{ ************** Cross-Platform Charset and CodePage Support }
+
+function CharSetToCodePage(CharSet: integer): cardinal;
+begin
+  case CharSet of
+    SHIFTJIS_CHARSET:
+      result := 932;
+    HANGEUL_CHARSET:
+      result := 949;
+    GB2312_CHARSET:
+      result := 936;
+    HEBREW_CHARSET:
+      result := 1255;
+    ARABIC_CHARSET:
+      result := 1256;
+    GREEK_CHARSET:
+      result := 1253;
+    TURKISH_CHARSET:
+      result := 1254;
+    VIETNAMESE_CHARSET:
+      result := 1258;
+    THAI_CHARSET:
+      result := 874;
+    EASTEUROPE_CHARSET:
+      result := 1250;
+    RUSSIAN_CHARSET:
+      result := 1251;
+    BALTIC_CHARSET:
+      result := 1257;
+  else
+    result := CP_WINANSI; // default ANSI_CHARSET = iso-8859-1 = windows-1252
+  end;
+end;
+
+function CodePageToCharSet(CodePage: cardinal): integer;
+begin
+  case CodePage of
+    932:
+      result := SHIFTJIS_CHARSET;
+    949:
+      result := HANGEUL_CHARSET;
+    936:
+      result := GB2312_CHARSET;
+    1255:
+      result := HEBREW_CHARSET;
+    1256:
+      result := ARABIC_CHARSET;
+    1253:
+      result := GREEK_CHARSET;
+    1254:
+      result := TURKISH_CHARSET;
+    1258:
+      result := VIETNAMESE_CHARSET;
+    874:
+      result := THAI_CHARSET;
+    1250:
+      result := EASTEUROPE_CHARSET;
+    1251:
+      result := RUSSIAN_CHARSET;
+    1257:
+      result := BALTIC_CHARSET;
+  else
+    result := ANSI_CHARSET; // default is iso-8859-1 = windows-1252
+  end;
+end;
+
+function IsFixedWidthCodePage(aCodePage: cardinal): boolean;
+begin
+  result := ((aCodePage >= 1250) and
+             (aCodePage <= 1258)) or
+            (aCodePage = CP_LATIN1) or
+            (aCodePage >= CP_RAWBLOB);
+end;
+
+function CodePageToText(aCodePage: cardinal): TShort16;
+begin
+  case aCodePage of
+    CP_UTF8:
+      result := 'utf8';
+    CODEPAGE_US:
+      result := 'WinAnsi';
+  else
+    begin
+      PCardinal(@result)^ := 2 + ord('c') shl 8 + ord('p') shl 16;
+      AppendShortCardinal(aCodePage, result);
+    end;
+  end;
+end;
 
 
 { **************** UTF-8 / Unicode / Ansi Conversion Classes }
@@ -4311,30 +4467,6 @@ function TSynAnsiUtf16.Utf8BufferToAnsi(Dest: PAnsiChar;
   Source: PUtf8Char; SourceChars: cardinal): PAnsiChar;
 begin
   result := Dest + Utf8ToWideChar(PWideChar(Dest), Source, SourceChars, true);
-end;
-
-
-function IsFixedWidthCodePage(aCodePage: cardinal): boolean;
-begin
-  result := ((aCodePage >= 1250) and
-             (aCodePage <= 1258)) or
-            (aCodePage = CP_LATIN1) or
-            (aCodePage >= CP_RAWBLOB);
-end;
-
-function CodePageToText(aCodePage: cardinal): TShort16;
-begin
-  case aCodePage of
-    CP_UTF8:
-      result := 'utf8';
-    CODEPAGE_US:
-      result := 'WinAnsi';
-  else
-    begin
-      PCardinal(@result)^ := 2 + ord('c') shl 8 + ord('p') shl 16;
-      AppendShortCardinal(aCodePage, result);
-    end;
-  end;
 end;
 
 
@@ -8429,22 +8561,30 @@ begin
 end;
 
 function TrimLeftLowerCaseShort(V: PShortString): RawUtf8;
+begin
+  TrimLeftLowerCaseShort(V, result);
+end;
+
+procedure TrimLeftLowerCaseShort(V: PShortString; var U: RawUtf8);
 var
   p: PAnsiChar;
   len: PtrInt;
 begin
   len := length(V^);
   p := @V^[1];
-  while (len > 0) and
-        (p^ in ['a'..'z']) do
-  begin
-    inc(p);
-    dec(len);
-  end;
-  if len = 0 then
-    FastSetString(result, @V^[1], length(V^))
-  else
-    FastSetString(result, p, len);
+  if len > 0 then
+    while p^ in ['a'..'z'] do
+    begin
+      inc(p);
+      dec(len);
+      if len = 0 then
+      begin
+        p := @V^[1]; // nothing to trim
+        len := length(V^);
+        break;
+      end;
+    end;
+  FastSetString(U, p, len);
 end;
 
 procedure AppendShortComma(text: PAnsiChar; len: PtrInt; var result: ShortString;
@@ -8693,6 +8833,26 @@ begin
   CamelCase(pointer(text), length(text), s, isWord);
 end;
 
+function IsReservedKeyWord(const aName: RawUtf8): boolean;
+var
+  up: array[byte] of AnsiChar;
+begin
+  UpperCopy255Buf(@up, pointer(aName), length(aName))^ := #0;
+  result := FastFindPUtf8CharSorted(
+    @RESERVED_KEYWORDS, high(RESERVED_KEYWORDS), @up) >= 0; // O(log(n)) search
+end;
+
+function SanitizePascalName(const aName: RawUtf8; KeyWordCheck: boolean): RawUtf8;
+begin
+  CamelCase(aName, result);
+  if result = '' then
+    raise ESynUnicode.CreateFmt('Unexpected SanitizePascalName(%s)', [aName]);
+  result[1] := UpCase(result[1]);
+  if KeyWordCheck and
+     IsReservedKeyWord(result) then
+    result := '_' + result; // avoid identifier name collision
+end;
+
 procedure GetCaptionFromPCharLen(P: PUtf8Char; out result: string);
 var
   tmp: array[byte] of AnsiChar;
@@ -8778,23 +8938,21 @@ begin
     result := FindRawUtf8(@Values[0], Value, result + 1, CaseSensitive);
 end;
 
+function AddRawUtf8(var Values: TRawUtf8DynArray; const Value: RawUtf8): PtrInt;
+begin
+  result := length(Values);
+  SetLength(Values, result + 1);
+  Values[result] := Value;
+end;
+
 function AddRawUtf8(var Values: TRawUtf8DynArray; const Value: RawUtf8;
   NoDuplicates, CaseSensitive: boolean): boolean;
-var
-  i: PtrInt;
 begin
+  result := false;
   if NoDuplicates then
-  begin
-    i := FindRawUtf8(Values, Value, CaseSensitive);
-    if i >= 0 then
-    begin
-      result := false;
+    if FindRawUtf8(Values, Value, CaseSensitive) >= 0 then
       exit;
-    end;
-  end;
-  i := length(Values);
-  SetLength(Values, i + 1);
-  Values[i] := Value;
+  AddRawUtf8(Values, Value);
   result := true;
 end;
 
@@ -8867,7 +9025,7 @@ begin
   Values[result] := Value;
 end;
 
-procedure StringDynArrayToRawUtf8DynArray(const Source: TStringDynArray;
+procedure StringDynArrayToRawUtf8DynArray(const Source: array of string;
   var Result: TRawUtf8DynArray);
 var
   i: PtrInt;
@@ -8876,6 +9034,12 @@ begin
   SetLength(Result, length(Source));
   for i := 0 to length(Source) - 1 do
     StringToUtf8(Source[i], Result[i]);
+end;
+
+function StringDynArrayToRawUtf8DynArray(
+  const Source: array of string): TRawUtf8DynArray;
+begin
+  StringDynArrayToRawUtf8DynArray(Source, result);
 end;
 
 procedure StringListToRawUtf8DynArray(Source: TStringList; var Result: TRawUtf8DynArray);
@@ -9254,6 +9418,51 @@ begin
   qs.Compare := StrCompByCase[caseInsensitive];
   qs.CoValues := nil;
   qs.Sort(pointer(Values), L, R);
+end;
+
+function DeduplicateRawUtf8Sorted(val: PPointerArray; last: PtrInt): PtrInt;
+var
+  i: PtrInt;
+begin
+  // sub-function for better code generation
+  i := 0;
+  repeat // here last>0 so i<last
+    if RawUtf8(val[i]) = RawUtf8(val[i + 1]) then
+      break;
+    inc(i);
+    if i <> last then
+      continue;
+    result := i;
+    exit;
+  until false;
+  result := i;
+  inc(i);
+  if i = last then
+    exit;
+  repeat
+    if RawUtf8(val[i]) <> RawUtf8(val[i + 1]) then
+    begin
+      FastAssignNew(val[result], val[i]);
+      val[i] := nil;
+      inc(result);
+    end;
+    inc(i);
+  until i = last;
+  FastAssignNew(val[result], val[i]);
+  val[i] := nil;
+end;
+
+procedure DeduplicateRawUtf8(var Values: TRawUtf8DynArray);
+var
+  c, n: PtrInt;
+begin
+  c := length(Values);
+  if c = 0 then
+    exit;
+  QuickSortRawUtf8(Values, c);
+  n := DeduplicateRawUtf8Sorted(pointer(Values), c - 1) + 1;
+  if n <> c then
+    SetLength(Values, n);
 end;
 
 procedure MakeUniqueArray(var Values: TRawUtf8DynArray);

@@ -12,6 +12,7 @@ uses
   classes,
   mormot.core.base,
   mormot.core.os,
+  mormot.core.os.security,
   mormot.core.text,
   mormot.core.buffers,
   mormot.core.unicode,
@@ -265,6 +266,8 @@ type
     procedure DmiSmbios;
     /// test Security IDentifier (SID) process
     procedure _SID;
+    /// test the SecurityDescriptor / SDDL process
+    procedure _SDDL;
     /// validates the median computation using the "Quick Select" algorithm
     procedure QuickSelect;
     /// test the TSynCache class
@@ -2557,12 +2560,23 @@ begin
   Check(IsEqualGuid(RawUtf8ToGuid(s), Guid));
   Check(TrimGuid(s));
   CheckEqual(s, 'c9a646d39c614cb7bfcdee2522c8f633');
+  FillZero(g);
+  CheckEqual(GuidArrayToCsv([]), '');
+  CheckEqual(GuidArrayToCsv([g]), '00000000-0000-0000-0000-000000000000');
+  CheckEqual(GuidArrayToCsv([Guid, g, g2]),
+    'C9A646D3-9C61-4CB7-BFCD-EE2522C8F633,00000000-0000-0000-0000-000000000000,' +
+    'C9A646D3-9C61-4CB7-BFCD-EE2522C8F633');
   CheckEqual(MacTextFromHex(''), '');
   CheckEqual(MacTextFromHex('1'), '');
   CheckEqual(MacTextFromHex('12'), '12');
   CheckEqual(MacTextFromHex('123'), '');
   CheckEqual(MacTextFromHex('1234'), '12:34');
   CheckEqual(MacTextFromHex('12345'), '');
+  ToHumanHex(x, @Guid, SizeOf(guid));
+  CheckEqual(x, 'd3:46:a6:c9:61:9c:b7:4c:bf:cd:ee:25:22:c8:f6:33');
+  CheckEqual(MacTextFromHex(mormot.core.text.BinToHex(@Guid, SizeOf(guid))), x);
+  ToHumanHex(x, @Guid, SizeOf(guid), {reverse=}true);
+  CheckEqual(x, '33:f6:c8:22:25:ee:cd:bf:4c:b7:9c:61:c9:a6:46:d3');
   x := 'c9:a6:46:d3:9c:61:4c:b7:bf:cd:ee:25:22:c8:f6:33';
   CheckEqual(MacTextFromHex(s), x);
   CheckEqual(MacTextFromHex(UpperCase(s)), x);
@@ -2767,11 +2781,11 @@ begin
     Check(c.Arg(1, 'the #directory name to process'));
     Check(c.Arg(2, 'some #comment text to add'));
     CheckHash(c.FullDescription('this is test #2 executable', 'exename'), $DDDDB7D4);
-    Check(not c.Option(['v', 'verbose'], 'generate verbose output'));
+    Check(not c.Option('&verbose', 'generate verbose output'));
     CheckHash(c.FullDescription('this is test #2 executable', 'exename'), $2293B264);
     Check(not c.Get('logfolder', f, 'optional log #folder to write to'));
     Check(not c.Option('log', 'log the process to a local file'));
-    Check(not c.Get(['t', 'threads'], t, '#number of threads to run'));
+    Check(not c.Get('&threads', t, '#number of threads to run'));
     CheckEqual(c.DetectUnknown, '');
     CheckHash(c.FullDescription('this is test #2 executable', 'exename'), $3CFE0EB3);
     c.Clear;
@@ -2781,10 +2795,10 @@ begin
     CheckEqual(length(c.Options), 2);
     CheckEqual(length(c.Names), 3);
     CheckEqual(length(c.Values), length(c.Names));
-    Check(c.Option(['v', 'verbose'], 'generate verbose output'));
+    Check(c.Option('&verbose', 'generate verbose output'));
     Check(not c.Option('log', 'log the process to a local file'));
     t := 0;
-    Check(c.Get(['t', 'threads'], t, '#number of threads to run', 5));
+    Check(c.Get('&threads', t, '#number of threads to run', 5));
     CheckEqual(t, 10);
     f := c.Param('dest', 'destination #folder', 'c:\');
     CheckEqual(f, 'toto');
@@ -2808,6 +2822,31 @@ begin
   finally
     c.Free;
   end;
+  {$ifdef OSWINDOWS}
+  Check(IsSystemFolder('c:\program files'));
+  Check(IsSystemFolder('c:\program Files\toto'));
+  Check(IsSystemFolder('c:\Program files (x86)'));
+  Check(IsSystemFolder('d:\Program Files (X86)\toto'));
+  Check(IsSystemFolder('c:\windows'));
+  Check(IsSystemFolder('c:\windows\toto'));
+  Check(not IsSystemFolder('c:\program file'));
+  Check(not IsSystemFolder('c:\program files other\toto'));
+  Check(not IsSystemFolder('c:\windowstorage'));
+  if IsUacVirtualizationEnabled then
+  begin
+    Check(IsUacVirtualFolder('c:\program files'));
+    Check(IsUacVirtualFolder('c:\program Files\toto'));
+    Check(IsUacVirtualFolder('c:\Program files (x86)'));
+    Check(IsUacVirtualFolder('d:\Program Files (X86)\toto'));
+    Check(IsUacVirtualFolder('c:\windows'));
+    Check(IsUacVirtualFolder('c:\windows\toto'));
+    Check(not IsUacVirtualFolder('c:\program file'));
+    Check(not IsUacVirtualFolder('c:\program files other\toto'));
+    Check(not IsUacVirtualFolder('c:\windowstorage'));
+  end
+  else
+    Check(not IsUacVirtualFolder('c:\program files'));
+  {$endif OSWINDOWS}
 end;
 
 procedure TTestCoreBase._IsMatch;
@@ -3274,45 +3313,63 @@ var
   tmp: RawUtf8;
   vs: TRawUtf8DynArray;
   timer: TPrecisionTimer;
+
+  procedure DoOne(const u: RawUtf8);
+  var
+    local: RawUtf8; // will force dec(RefCnt) when leaving DoOne()
+  begin
+    local := int.Unique(u);
+    CheckEqual(local, u);
+  end;
+
 const
   MAX = 500000;
   ONESIZE = 32; // assume each SmallUInt32Utf8[] uses 32 heap bytes
   DIRSIZE = ONESIZE * (MAX + 1);
   INTSIZE = ONESIZE * 512;
 begin
-  {$ifndef HASINLINE} // inlining induces optimizations which trigger Clean
   int := TRawUtf8Interning.Create(1);
   try
-    check(int.Count = 0);
-    check(int.Unique('test') = 'test');
-    check(int.Count = 1);
-    check(int.Unique('test') = 'test');
-    check(int.Count = 1);
-    check(int.Clean = 0);
-    check(int.Unique('single') = 'single');
-    check(int.Count = 2);
-    check(int.Clean = 1);
-    check(int.Count = 1);
-    check(int.Clean = 0);
-    check(int.Count = 1);
-    check(int.Unique('single1') = 'single1');
-    check(int.Count = 2);
-    check(int.Unique('test2') = 'test2');
-    check(int.Count = 3);
-    check(int.Unique('test2') = 'test2');
-    check(int.Count = 3);
-    check(int.Unique('single2') = 'single2');
-    check(int.Count = 4);
-    check(int.Clean = 2);
-    check(int.Count = 2);
+    CheckEqual(int.Count, 0);
+    DoOne('test');
+    CheckEqual(int.Count, 1);
+    DoOne('test');
+    CheckEqual(int.Count, 1);
+    CheckEqual(int.Clean, 1);
+    DoOne('single');
+    CheckEqual(int.Count, 1);
+    CheckEqual(int.Clean, 1);
+    CheckEqual(int.Count, 0);
+    CheckEqual(int.Clean, 0);
+    CheckEqual(int.Count, 0);
+    DoOne('single1');
+    CheckEqual(int.Count, 1);
+    DoOne('single1');
+    CheckEqual(int.Count, 1);
+    DoOne('test2');
+    CheckEqual(int.Count, 2);
+    DoOne('test2');
+    CheckEqual(int.Count, 2);
+    DoOne('single2');
+    CheckEqual(int.Count, 3);
+    CheckEqual(int.Clean, 3);
+    CheckEqual(int.Count, 0);
+    int.Unique(tmp, 'kept', 4);
+    CheckEqual(tmp, 'kept');
+    CheckEqual(GetRefCount(tmp), 2);
+    CheckEqual(int.Count, 1);
+    CheckEqual(int.Clean, 0);
+    CheckEqual(int.Count, 1);
+    tmp := '';
+    CheckEqual(int.Clean, 1);
+    CheckEqual(int.Count, 0);
     int.Clear;
-    check(int.Count = 0);
-    check(int.Clean = 0);
-    check(int.Count = 0);
+    CheckEqual(int.Count, 0);
+    CheckEqual(int.Clean, 0);
+    CheckEqual(int.Count, 0);
   finally
     int.Free;
   end;
-  {$endif HASINLINE}
   int := TRawUtf8Interning.Create(16);
   try
     for i := 0 to MAX do
@@ -4376,6 +4433,20 @@ begin
   Check(xxHash32(0, 'ABBREVIATIONS', 13) = 3058487595);
   Check(xxHash32(0, 'LORD', 4) = 3395586315);
   Check(xxHash32(0, 'MICROINSTRUCTION''S', 18) = 1576115228);
+  a[0] := #0;
+  AppendShortIntHex(0, a);
+  Check(a = '00');
+  AppendShortIntHex(1, a);
+  Check(a = '0001');
+  AppendShortIntHex(255, a);
+  Check(a = '0001ff');
+  AppendShortIntHex($12345, a);
+  Check(a = '0001ff012345');
+  a[0] := #0;
+  AppendShortIntHex(Int64(-1), a);
+  CheckEqual(length(a), SizeOf(Int64) * 2);
+  for i := 1 to length(a) do
+    Check(a[1] = 'f');
   for i := -10000 to 10000 do
     Check(GetInteger(Pointer(Int32ToUtf8(i))) = i);
   for i := 0 to 10000 do
@@ -4489,6 +4560,12 @@ begin
     Check(SysUtils.IntToStr(j) = string(a));
     Check(format('%d', [j]) = string(a));
     Check(format('%.8x', [j]) = IntToHex(j, 8));
+    if j >= 0 then
+    begin
+      a[0] := #0;
+      AppendShortIntHex(j, a);
+      CheckEqual(RawUtf8(a), RawUtf8(PointerToHexShort(pointer(PtrInt(j)))));
+    end;
     case i of
       9990:
         d := 1E110;
@@ -5297,6 +5374,9 @@ begin
   CheckEqual(U, 'a1'#13#10'2345');
   AppendLine(U, ['bcdef']);
   CheckEqual(U, 'a1'#13#10'2345'#13#10'bcdef');
+  Append(U, #13#10);
+  AppendLine(U, ['ghij']);
+  CheckEqual(U, 'a1'#13#10'2345'#13#10'bcdef'#13#10'ghij');
   U := QuotedStr('', '"');
   CheckEqual(U, '""');
   U := QuotedStr('abc', '"');
@@ -6196,6 +6276,7 @@ var
   raw: TRawSmbiosInfo;
   os:  TSmbiosBasicInfos;
   dec: TSmbiosInfo;
+  bak: byte;
   s: RawUtf8;
   b: RawByteString;
 
@@ -6235,15 +6316,16 @@ begin
      CheckFailed(CompressSynLZ(raw.Data, false) <> '', '_REFSMB synlz') then
     exit;
   PCardinal(@raw)^ := $010003ff;
+  bak := PByte(@_SmbiosDecodeUuid)^;
+  _SmbiosDecodeUuid := sduVersion; // consistent UUID decoding on all platforms
   CheckEqual(DecodeSmbios(raw, os), 3066, 'DecodeSmbios');
   Check(DecodeSmbiosInfo(raw, dec), 'DecodeSmbiosInfo');
+  PByte(@_SmbiosDecodeUuid)^ := bak;
   CheckAgainst(dec, os);
   CheckHash(BinarySave(@dec.Bios,
     TypeInfo(TSmbiosBios), rkRecordTypes), $9362A439, 'Bios');
-  {$ifndef OSDARWIN}
   CheckHash(BinarySave(@dec.System,
-    TypeInfo(TSmbiosSystem), rkRecordTypes), $A5E69307, 'System');
-  {$endif OSDARWIN}
+    TypeInfo(TSmbiosSystem), rkRecordTypes), $E9451367, 'System');
   CheckHash(BinarySave(@dec.Board[0],
     TypeInfo(TSmbiosBoard), rkRecordTypes), $25B6CB6C, 'Board');
   CheckHash(BinarySave(@dec.Chassis[0],
@@ -6269,12 +6351,10 @@ begin
     TypeInfo(TSmbiosSlot), rkRecordTypes), $0BE08E2D, 'Slot');
   CheckHash(BinarySave(@dec.Battery[0],
     TypeInfo(TSmbiosBattery), rkRecordTypes), $7FDA54A0, 'Battery');
-  {$ifndef OSDARWIN}
   CheckHash(BinarySave(@dec,
-    TypeInfo(TSmbiosInfo), rkRecordTypes), $807823B2, 'BinarySave1');
+    TypeInfo(TSmbiosInfo), rkRecordTypes), $C038E432, 'BinarySave1');
   SaveJson(dec, TypeInfo(TSmbiosInfo), [twoIgnoreDefaultInRecord], s);
-  CheckHash(s, $7A3BEEB8, 'BinarySave2');
-  {$endif OSDARWIN}
+  CheckHash(s, $87F82F78, 'BinarySave2');
 end;
 
 {$ifdef OSWINDOWS}
@@ -6296,6 +6376,7 @@ var
   sids: TRawUtf8DynArray;
   {$endif OSWINDOWS}
 begin
+  // validate cross-platform SID process
   CheckEqual(SizeOf(TSid), 1032, 'TSid');
   for k := low(k) to high(k) do
   begin
@@ -6309,6 +6390,7 @@ begin
     CheckEqual(s, RawSidToText(s2));
     CheckUtf8(SidCompare(pointer(s1), pointer(s2)) = 0, s);
   end;
+  // validate Windows specific SID function, especially about the current user
   {$ifdef OSWINDOWS}
   CurrentRawSid(s1, wttProcess);
   CurrentRawSid(s2, wttThread);
@@ -6332,30 +6414,314 @@ begin
     else
       CheckUtf8(not CurrentUserHasGroup(s), s);
   end;
-  Check(IsSystemFolder('c:\program files'));
-  Check(IsSystemFolder('c:\program Files\toto'));
-  Check(IsSystemFolder('c:\Program files (x86)'));
-  Check(IsSystemFolder('d:\Program Files (X86)\toto'));
-  Check(IsSystemFolder('c:\windows'));
-  Check(IsSystemFolder('c:\windows\toto'));
-  Check(not IsSystemFolder('c:\program file'));
-  Check(not IsSystemFolder('c:\program files other\toto'));
-  Check(not IsSystemFolder('c:\windowstorage'));
-  if IsUacVirtualizationEnabled then
-  begin
-    Check(IsUacVirtualFolder('c:\program files'));
-    Check(IsUacVirtualFolder('c:\program Files\toto'));
-    Check(IsUacVirtualFolder('c:\Program files (x86)'));
-    Check(IsUacVirtualFolder('d:\Program Files (X86)\toto'));
-    Check(IsUacVirtualFolder('c:\windows'));
-    Check(IsUacVirtualFolder('c:\windows\toto'));
-    Check(not IsUacVirtualFolder('c:\program file'));
-    Check(not IsUacVirtualFolder('c:\program files other\toto'));
-    Check(not IsUacVirtualFolder('c:\windowstorage'));
-  end
-  else
-    Check(not IsUacVirtualFolder('c:\program files'));
   {$endif OSWINDOWS}
+end;
+
+const
+  // some reference Security Descriptor self-relative buffers
+  SD_B64: array[0..7] of RawUtf8 = (
+    // 0 [MS-DTYP] 2.5.1.4 SDDL String to Binary Example
+    'AQAUsJAAAACgAAAAFAAAADAAAAACABwAAQAAAAKAFAAAAACAAQEAAAAAAAEAAAAAAgBgAAQAAAAAAxgA' +
+    'AAAAoAECAAAAAAAFIAAAACECAAAAAxgAAAAAEAECAAAAAAAFIAAAACACAAAAAxQAAAAAEAEBAAAAAAAF' +
+    'EgAAAAADFAAAAAAQAQEAAAAAAAMAAAAAAQIAAAAAAAUgAAAAIAIAAAECAAAAAAAFIAAAACACAAA=',
+    // https://learn.microsoft.com/en-us/windows/win32/secauthz/security-descriptor-string-format
+    // 1
+    'AQAUgCgBAAA4AQAAFAAAADAAAAACABwAAQAAAALAFAArAA0AAQEAAAAAAAEAAAAABAD4AAcAAAAAABQA' +
+    'PwAPAAEBAAAAAAAFEgAAAAAAGAA/AA8AAQIAAAAAAAUgAAAAJAIAAAUALAADAAAAAQAAALp6lr/mDdAR' +
+    'ooUAqgAwSeIBAgAAAAAABSAAAAAkAgAABQAsAAMAAAABAAAAnHqWv+YN0BGihQCqADBJ4gECAAAAAAAF' +
+    'IAAAACQCAAAFACwAAwAAAAEAAAD/pKhtUg7QEaKGAKoAMEniAQIAAAAAAAUgAAAAJAIAAAUALAADAAAA' +
+    'AQAAAKh6lr/mDdARooUAqgAwSeIBAgAAAAAABSAAAAAmAgAAAAAUABQAAgABAQAAAAAABQsAAAABAgAA' +
+    'AAAABSAAAAAkAgAAAQEAAAAAAAUSAAAA',
+    // 2
+    'AQAEgDAAAABAAAAAAAAAABQAAAACABwAAQAAAAAAFAA/AA4QAQEAAAAAAAAAAAAAAQIAAAAAAAUgAAAA' +
+    'JAIAAAEBAAAAAAAFEgAAAA==',
+    // 3
+    'AQAEgAAAAAAAAAAAAAAAABQAAAACABwAAQAAAAAAFAAAAAAQAQEAAAAAAAUHAAAA',
+    // 4
+    'AQAEgBQAAAAwAAAAAAAAAEwAAAABBQAAAAAABRUAAADRYBkx0xfaYIKt9RgBAgAAAQUAAAAAAAUVAAAA' +
+    '0WAZMdMX2mCCrfUYAAIAAAIALAABAAAAAAAkAP8BHwABBQAAAAAABRUAAADRYBkx0xfaYIKt9RgAAgAA',
+    // executable file access security descriptors, exported from several Windows VMs
+    // 5 WinXP
+    'AQAEgBQAAAAwAAAAAAAAAEwAAAABBQAAAAAABRUAAACCi6YoI/P2Y4qnMj/rAwAAAQUAAAAAAAUVAAAA' +
+    'goumKCPz9mOKpzI/AQIAAAIAcAAEAAAAAAAYAP8BHwABAgAAAAAABSAAAAAgAgAAAAAUAP8BHwABAQAA' +
+    'AAAABRIAAAAAACQA/wEfAAEFAAAAAAAFFQAAAIKLpigj8/ZjiqcyP+sDAAAAABgAqQASAAECAAAAAAAF' +
+    'IAAAACECAAA=',
+    // 6 Win7
+    'AQAEhBQAAAAkAAAAAAAAAEAAAAABAgAAAAAABSAAAAAgAgAAAQUAAAAAAAUVAAAA0WAZMdMX2mCCrfUY' +
+    'AQIAAAIAYAAEAAAAABAYAP8BHwABAgAAAAAABSAAAAAgAgAAABAUAP8BHwABAQAAAAAABRIAAAAAEBgA' +
+    'qQASAAECAAAAAAAFIAAAACECAAAAEBQAvwETAAEBAAAAAAAFCwAAAA==',
+    // 7 Win10
+    'AQAEhBQAAAAwAAAAAAAAAEwAAAABBQAAAAAABRUAAACrWLmSPIyOxBiy0bzpAwAAAQUAAAAAAAUVAAA' +
+    'Aq1i5kjyMjsQYstG8AQIAAAIAYAAEAAAAABAYAP8BHwABAgAAAAAABSAAAAAgAgAAABAUAP8BHwABAQ' +
+    'AAAAAABRIAAAAAEBgAqQASAAECAAAAAAAFIAAAACECAAAAEBQAvwETAAEBAAAAAAAFCwAAAA==');
+  // the expected SDDL export of those binary buffers
+  SD_TXT: array[0..high(SD_B64)] of RawUtf8 = (
+    // 0
+    'O:BAG:BAD:P(A;OICI;GXGR;;;BU)(A;OICI;GA;;;BA)(A;OICI;GA;;;SY)(A;OICI;GA;;;CO)' +
+    'S:P(AU;FA;GR;;;WD)',
+    // 1
+    'O:AOG:SYD:(A;;KA;;;SY)(A;;KA;;;AO)(OA;;CCDC;bf967aba-0de6-11d0-a285-00aa003049e2' +
+    ';;AO)(OA;;CCDC;bf967a9c-0de6-11d0-a285-00aa003049e2;;AO)(OA;;CCDC;6da8a4ff-0e52-' +
+    '11d0-a286-00aa003049e2;;AO)(OA;;CCDC;bf967aa8-0de6-11d0-a285-00aa003049e2;;PO)(A' +
+    ';;LCRPRC;;;AU)S:(AU;SAFA;CCDCSWWPSDWDWO;;;WD)',
+    // 2
+    'O:AOG:SYD:(A;;CCDCLCSWRPWPRCWDWOGA;;;S-1-0-0)',
+    // 3
+    'D:(A;;GA;;;AN)',
+    // 4
+    'O:S-1-5-21-823746769-1624905683-418753922-513' +
+    'G:S-1-5-21-823746769-1624905683-418753922-512' +
+    'D:(A;;FA;;;S-1-5-21-823746769-1624905683-418753922-512)',
+    // 5
+    'O:S-1-5-21-682003330-1677128483-1060284298-1003' +
+    'G:S-1-5-21-682003330-1677128483-1060284298-513' +
+    'D:(A;;FA;;;BA)(A;;FA;;;SY)' +
+      '(A;;FA;;;S-1-5-21-682003330-1677128483-1060284298-1003)(A;;0x1200a9;;;BU)',
+    // 6
+    'O:BA' +
+    'G:S-1-5-21-823746769-1624905683-418753922-513' +
+    'D:AI(A;ID;FA;;;BA)(A;ID;FA;;;SY)(A;ID;0x1200a9;;;BU)(A;ID;0x1301bf;;;AU)',
+    // 7
+    'O:S-1-5-21-2461620395-3297676348-3167859224-1001' +
+    'G:S-1-5-21-2461620395-3297676348-3167859224-513' +
+    'D:AI(A;ID;FA;;;BA)(A;ID;FA;;;SY)(A;ID;0x1200a9;;;BU)(A;ID;0x1301bf;;;AU)');
+  // the Domain SID to be used for RID recognition
+  DOM_TXT: array[4..high(SD_B64)] of RawUtf8 = (
+    'S-1-5-21-823746769-1624905683-418753922',    // 4
+    'S-1-5-21-682003330-1677128483-1060284298',   // 5
+    'S-1-5-21-823746769-1624905683-418753922',    // 6
+    'S-1-5-21-2461620395-3297676348-3167859224'); // 7
+  // the SDDL with proper RID recognition
+  RID_TXT: array[4..high(SD_B64)] of RawUtf8 = (
+    'O:DUG:DAD:(A;;FA;;;DA)',
+    'O:S-1-5-21-682003330-1677128483-1060284298-1003G:DUD:(A;;FA;;;BA)(A;;FA;;;SY)' +
+    '(A;;FA;;;S-1-5-21-682003330-1677128483-1060284298-1003)(A;;0x1200a9;;;BU)',
+    'O:BAG:DUD:AI(A;ID;FA;;;BA)(A;ID;FA;;;SY)(A;ID;0x1200a9;;;BU)(A;ID;0x1301bf;;;AU)',
+    'O:S-1-5-21-2461620395-3297676348-3167859224-1001G:DUD:AI(A;ID;FA;;;BA)' +
+    '(A;ID;FA;;;SY)(A;ID;0x1200a9;;;BU)(A;ID;0x1301bf;;;AU)');
+  // some ACE conditional expressions
+  COND_TXT: array[0..2] of RawUtf8 = (
+    'D:(XA;;FX;;;WD;(@User.Title=="PM" && (@User.Division=="Finance" || ' +
+      '@User.Division ==" Sales")))',
+    'D:(XA;;FX;;;WD;(@User.Project Any_of @Resource.Project))(A;ID;FA;;;SY)',
+    'D:(XA;;FR;;;WD;(Member_of {SID(Smartcard_SID), SID(BO)} ' +
+      '&& @Device.Bitlocker))(A;ID;FA;;;SY)');
+  // [MS-DTYP] 2.4.4.17.9 Examples: Conditional Expression Binary Representation
+  ARTX_HEX: array[0..2] of RawUtf8 = (
+    '61727478f80a0000005400690074006c00650010040000005600500080000000',
+    '61727478f91200000073006d006100720074006300610072006400' +
+    '040100000000000000030280fb0e0000006d0061006e006100670065006400' +
+    '040100000000000000030280a1fa080000006400650070007400' +
+    '5018000000100a000000530061006c006500730010040000004800520088a0' +
+    '00000000000000000000000000',
+    '61727478f91c00000063006c0065006100720061006e00630065004c006500760065006c00' +
+    'fa220000007200650071007500690072006500640043006c0065006100720061006e0063006500' +
+    '85501500000051100000000102000000000005200000002002000089a1000000');
+  ARTX_TXT: array[0..high(ARTX_HEX)] of RawUtf8 = (
+    '(Title=="VP")',
+    '(((@User.smartcard==1) || (@Device.managed==1)) && (@Resource.dept Any_of{"Sales","HR"}))',
+    '((@User.clearanceLevel>=@Resource.requiredClearance) || (Member_of{SID(BA)}))');
+
+procedure TTestCoreBase._SDDL;
+var
+  i, j: PtrInt;
+  c: TSecControls;
+  k: TWellKnownSid;
+  r: TWellKnownRid;
+  bin, saved: RawSecurityDescriptor;
+  u, dom, json: RawUtf8;
+  domsid: RawSid;
+  sd, sd2: TSecurityDescriptor;
+  tree: TAceTree;
+  p: PUtf8Char;
+begin
+  // validate internal structures and types
+  CheckEqual(KnownSidToSddl(wksNull), '');
+  CheckEqual(KnownSidToSddl(wksWorld), 'WD');
+  CheckEqual(KnownSidToSddl(wksLocal), '');
+  CheckEqual(KnownSidToSddl(wksNetwork), 'NU');
+  CheckEqual(KnownSidToSddl(wksSelf), 'PS');
+  CheckEqual(KnownSidToSddl(wksLocalSystem), 'SY');
+  CheckEqual(KnownSidToSddl(wksBuiltinAdministrators), 'BA');
+  CheckEqual(KnownSidToSddl(wksBuiltinNetworkConfigurationOperators), 'NO');
+  CheckEqual(KnownSidToSddl(wksBuiltinPerfLoggingUsers), 'LU');
+  CheckEqual(KnownSidToSddl(wksBuiltinEventLogReadersGroup), 'ER');
+  CheckEqual(KnownSidToSddl(wksBuiltinAccessControlAssistanceOperators), 'AA');
+  CheckEqual(KnownSidToSddl(wksBuiltinWriteRestrictedCode), 'WR');
+  CheckEqual(KnownSidToSddl(wksCapabilityInternetClient), '');
+  CheckEqual(KnownSidToSddl(high(TWellKnownSid)), '');
+  for k := low(k) to high(k) do
+    Check((KnownSidToSddl(k) <> '') = (k in wksWithSddl));
+  for r := low(r) to high(r) do
+    Check((KnownRidToSddl(r) <> '') = (r in wkrWithSddl));
+  CheckEqual(ord(scDaclAutoInheritReq), 8);
+  CheckEqual(ord(scSelfRelative), 15);
+  c := [scSelfRelative];
+  CheckEqual(PWord(@c)^, $8000);
+  CheckEqual(ord(samGenericRead), 31, 'sam');
+  dom := 'S-1-5-21-823746769-1624905683-418753922';
+  CheckEqual(KnownSidToText(wkrUserAdmin, dom), dom + '-500');
+  CheckEqual(KnownSidToText(wkrSecurityMandatorySystem, dom), dom + '-16384');
+  // validate against some reference binary material
+  for i := 0 to high(SD_B64) do
+  begin
+    // high-level IsValidSecurityDescriptor() and SecurityDescriptorToText()
+    bin := Base64ToBin(SD_B64[i]);
+    Check(bin <> '', 'b64');
+    Check(IsValidSecurityDescriptor(pointer(bin), length(bin)), 'bin');
+    Check(SecurityDescriptorToText(bin, u), 'sdtt1');
+    CheckEqual(u, SD_TXT[i]);
+    {$ifdef OSWINDOWS} // validate against the OS API
+    Check(CryptoApi.SecurityDescriptorToText(pointer(bin), u), 'winapi1');
+    CheckEqual(u, SD_TXT[i], 'winapi2');
+    {$endif OSWINDOWS}
+    // TSecurityDescriptor binary load and export as SDDL or binary
+    sd.Clear;
+    CheckEqual(sd.ToText, '', 'clear');
+    Check(sd.Flags = [scSelfRelative]);
+    Check(sd.FromBinary(bin));
+    Check(sd.Dacl <> nil, 'dacl');
+    Check(scSelfRelative in sd.Flags);
+    Check((sd.Sacl = nil) = (i > 1), 'sacl');
+    CheckEqual(sd.ToText, SD_TXT[i], 'ToText');
+    Check(sd.Dacl[0].Opaque = '');
+    Check(sd.Dacl[0].ConditionalExpression = '');
+    saved := sd.ToBinary;
+    Check(IsValidSecurityDescriptor(pointer(saved), length(saved)), 'saved');
+    Check(SecurityDescriptorToText(saved, u), 'sdtt2');
+    CheckEqual(u, SD_TXT[i]);
+    {$ifdef OSWINDOWS}
+    Check(CryptoApi.SecurityDescriptorToText(pointer(saved), u), 'winapi3');
+    CheckEqual(u, SD_TXT[i], 'winapi4');
+    {$endif OSWINDOWS}
+    if i >= 3 then // serialization offsets seem not consistent
+      Check(saved = bin, 'ToBinary');
+    // TSecurityDescriptor load from SDDL into another instance
+    Check(not sd2.FromText(''));
+    CheckEqual(sd2.ToText, '', 'fromnil');
+    Check(not sd.IsEqual(sd2));
+    Check(sd2.FromText(u), 'fromu');
+    CheckEqual(sd2.ToText, u, 'fromutou');
+    Check(sd.IsEqual(sd2));
+    Check(sd2.IsEqual(sd));
+    bin := sd2.ToBinary;
+    Check(bin = saved, 'saved2');
+    // TSecurityDescriptor JSON
+    json := SecurityDescriptorToJson(sd);
+    Check(IsValidJson(json), 'savejson');
+    sd2.Clear;
+    Check(SecurityDescriptorFromJson(json, sd2), 'loadjson');
+    Check(sd.IsEqual(sd2));
+    Check(scSelfRelative in sd2.Flags);
+    // TSecurityDescriptor.Add and Delete high-level methods
+    Check(scDaclPresent in sd.Flags);
+    if sd.Sacl <> nil then
+    begin
+      Check(scSaclPresent in sd.Flags);
+      continue;
+    end;
+    Check(not (scSaclPresent in sd.Flags));
+    Check(sd.Add('') = nil);
+    Check(sd.IsEqual(sd2));
+    Check(sd.Add('(toto;;;;)') = nil);
+    Check(sd.Add('(D;;;;;SY)') = nil);
+    Check(sd.Add('(A;;;;;SY)') = nil);
+    Check(sd.IsEqual(sd2));
+    Check(sd.Add('(A;;KA;;;SY)') <> nil);
+    Check(not sd.IsEqual(sd2));
+    CheckEqual(sd.ToText, u + '(A;;KA;;;SY)');
+    Check(sd.Add(satCallbackAudit, 'AU', 'KR') <> nil);
+    CheckEqual(sd.ToText, u + '(A;;KA;;;SY)(XU;;KR;;;AU)');
+    sd.Delete(100);
+    sd.Delete(length(sd.Dacl) - 2);
+    CheckEqual(sd.ToText, u + '(XU;;KR;;;AU)');
+    Check(not sd.IsEqual(sd2));
+    sd.Delete(length(sd.Dacl) - 1);
+    CheckEqual(sd.ToText, u);
+    Check(sd.IsEqual(sd2));
+    Check(sd.ToBinary = saved);
+    Check(scDaclPresent in sd.Flags);
+    for j := 1 to length(sd.Dacl) do
+      sd.Delete(0);
+    Check(sd.Dacl = nil);
+    Check(not (scDaclPresent in sd.Flags));
+    Check(sd.Add('(A;;KA;;;SY)') <> nil);
+    Check(PosEx('(A;;KA;;;SY)', sd.ToText) <> 0);
+    Check(scDaclPresent in sd.Flags);
+  end;
+  // validate parsing RID in text (e.g. DU,DA)
+  Check(not sd.FromText(RID_TXT[4]), 'dom0');
+  Check(not sd.IsEqual(sd2));
+  Check(sd.FromText(' O: DU G: DA D: ( A ; ; FA ; ; ; DA ) ', dom), 'dom1');
+  Check(not sd.IsEqual(sd2));
+  u := sd.ToText;
+  CheckEqual(u, FormatUtf8('O:%-513G:%-512D:(A;;FA;;;%-512)', [dom, dom, dom]));
+  CheckEqual(u, SD_TXT[4], 'domasref');
+  u := sd.ToText(dom);
+  CheckEqual(u, RID_TXT[4], 'rid');
+  saved := sd.ToBinary;
+  CheckHash(saved, $3B028A48, 'dombin');
+  Check(IsValidSecurityDescriptor(pointer(saved), length(saved)), 'saveddom');
+  Check(TryDomainTextToSid(dom, domsid));
+  u := 'rid';
+  sd.AppendAsText(u, pointer(domsid));
+  CheckEqual(u, 'ridO:DUG:DAD:(A;;FA;;;DA)');
+  CheckEqual(sd.Dacl[0].SidText, dom + '-512');
+  CheckEqual(sd.Dacl[0].SidText(pointer(domsid)), 'DA');
+  CheckEqual(sd.Dacl[0].MaskText, 'FA');
+  Check(sd.Dacl[0].SidText('DU', pointer(domsid)));
+  CheckEqual(sd.Dacl[0].SidText, dom + '-513');
+  CheckEqual(sd.Dacl[0].SidText(pointer(domsid)), 'DU');
+  // RID reference material with several domains
+  for i := low(DOM_TXT) to high(DOM_TXT) do
+  begin
+    Check(TryDomainTextToSid(DOM_TXT[i], domsid));
+    Check(sd.FromText(SD_TXT[i]));
+    u := '';
+    sd.AppendAsText(u, pointer(domsid));
+    CheckEqual(u, RID_TXT[i]);
+    p := pointer(u);
+    Check(sd2.FromText(p, pointer(domsid)));
+    Check(sd.IsEqual(sd2));
+  end;
+  // validate conditional ACEs binary
+  for i := 0 to high(ARTX_HEX) do
+  begin
+    Check(not tree.Init(''));
+    CheckEqual(tree.Count, 0);
+    CheckEqual(tree.ToText, '');
+    bin := mormot.core.text.HexToBin(ARTX_HEX[i]);
+    Check(bin <> '');
+    Check(tree.Init(bin));
+    CheckEqual(tree.Count, 0);
+    CheckEqual(tree.ToText, '');
+    Check(tree.FromBinary);
+    Check(tree.Count > 0);
+    u := tree.ToText;
+    CheckEqual(u, ARTX_TXT[i]);
+  end;
+  // validate conditional ACEs
+  for i := 0 to high(COND_TXT) do
+  begin
+    Check(sd.FromText(COND_TXT[i]));
+    Check(length(sd.Dacl) in [1, 2]);
+    CheckEqual(length(sd.Sacl), 0);
+    Check(sd.Dacl[0].AceType = satCallbackAccessAllowed);
+    if not CheckFailed(sd.Dacl[0].Opaque <> '') then
+    begin
+      u := sd.Dacl[0].ConditionalExpression;
+      Check(u <> '');
+      Check(u[1] = '(');
+      Check(u[length(u)] = ')');
+    end;
+    CheckEqual(sd.ToText, COND_TXT[i]);
+    saved := sd.ToBinary;
+    Check(saved <> '');
+    Check(IsValidSecurityDescriptor(pointer(saved), length(saved)), 'savcond');
+    Check(sd2.FromBinary(saved));
+    Check(sd.IsEqual(sd2));
+    CheckEqual(sd2.ToText, COND_TXT[i]);
+  end;
 end;
 
 function IPNUSL(const s1, s2: RawUtf8; len: integer): boolean;
@@ -6363,8 +6729,6 @@ begin
   result := IdemPropNameUSameLenNotNull(pointer(s1), pointer(s2), len);
 end;
 
-{$IFDEF FPC} {$PUSH} {$ENDIF} {$HINTS OFF}
-// [dcc64 Hint] H2135 FOR or WHILE loop executes zero times - deleted
 procedure TTestCoreBase._IdemPropName;
 const
   abcde: PUtf8Char = 'ABcdE';
@@ -6482,7 +6846,6 @@ begin
   Check(PosExChar('B', 'AB') = 2, 'ABC');
   Check(PosExChar('C', 'ABC') = 3, 'ABC');
 end;
-{$IFDEF FPC} {$POP} {$ELSE} {$HINTS ON} {$ENDIF}
 
 procedure TTestCoreBase._TSynCache;
 var

@@ -1122,7 +1122,7 @@ type
   // internal JSON format (which is faster than a query to the SQLite3 engine)
   // - internally make use of an efficient hashing algorithm for fast response
   // (i.e. TSynNameValue will use the TDynArrayHashed wrapper mechanism)
-  TSynCache = class(TSynPersistent)
+  TSynCache = class(TObjectWithProps)
   protected
     fNameValue: TSynNameValue;
     fRamUsed: cardinal;
@@ -1936,6 +1936,14 @@ type
     // - replace deprecated TTextWriter.RegisterCustomJSONSerializer() method
     class function RegisterCustomSerializer(Info: PRttiInfo;
       const Reader: TOnRttiJsonRead; const Writer: TOnRttiJsonWrite): TRttiJson;
+    /// register some custom functions for JSON serialization of a given type
+    // - more simple than TOnRttiJsonRead and TOnRttiJsonWrite event callbacks
+    class function RegisterCustomSerializers(Info: PRttiInfo;
+      Reader: TRttiJsonLoad; Writer: TRttiJsonSave): TRttiJson; overload;
+    /// register some custom functions for JSON serialization of several types
+    // - expects the parameters as PRttiInfo / TRttiJsonLoad / TRttiJsonSave trios
+    class procedure RegisterCustomSerializers(
+      const InfoReaderWriterTrios: array of pointer); overload;
     /// unregister any custom callback for JSON serialization of a given TypeInfo()
     // - will also work after RegisterFromText() or RegisterCustomEnumValues()
     class function UnRegisterCustomSerializer(Info: PRttiInfo): TRttiJson;
@@ -10300,19 +10308,14 @@ begin
   result := TComponentClass(Rtti.ValueClass).Create(nil);
 end;
 
-function _New_ObjectWithCustomCreate(Rtti: TRttiCustom): pointer;
+function _New_ObjectWithProps(Rtti: TRttiCustom): pointer;
 begin
-  result := TObjectWithCustomCreateClass(Rtti.ValueClass).Create;
+  result := TObjectWithPropsClass(Rtti.ValueClass).Create;
 end;
 
 function _New_SynObjectList(Rtti: TRttiCustom): pointer;
 begin
   result := TSynObjectListClass(Rtti.ValueClass).Create({ownobjects=}true);
-end;
-
-function _New_SynLocked(Rtti: TRttiCustom): pointer;
-begin
-  result := TSynLockedClass(Rtti.ValueClass).Create;
 end;
 
 function _New_InterfacedCollection(Rtti: TRttiCustom): pointer;
@@ -10378,9 +10381,9 @@ var
   C: TClass;
   n: integer;
 begin
-  // set Name and Flags from Props[]
+  // 1. set TRttiCustom properties, e.g. Name and Flags from Props[]
   inherited SetParserType(aParser, aParserComplex);
-  // set comparison functions
+  // 2. set comparison functions depending on the actual type
   fCompare[true]  := RTTI_COMPARE[true][Kind];  // generic comparison
   fCompare[false] := RTTI_COMPARE[false][Kind];
   if rcfHasRttiOrd in fCache.Flags then
@@ -10428,7 +10431,7 @@ begin
     fCompare[true] := @_BC_Default;
     fCompare[false] := @_BC_Default;
   end;
-  // set class serialization and initialization
+  // 3. set JSON serialization depending on the actual type
   if aParser = ptClass then
   begin
     // default JSON serialization of published props
@@ -10447,10 +10450,13 @@ begin
         fNewInstance := @_New_InterfacedObjectWithCustomCreate
       else if C = TPersistentWithCustomCreate then
         fNewInstance := @_New_PersistentWithCustomCreate
+      else if C = TObjectWithProps then
+        // e.g. TSynLocked
+        fNewInstance := @_New_ObjectWithProps
       else if C = TObjectWithCustomCreate then
       begin
         // e.g. TSynPersistent, TOrm or TObjectWithID
-        fNewInstance := @_New_ObjectWithCustomCreate;
+        fNewInstance := @_New_ObjectWithProps; // inherit from TObjectWithProps
         // allow any kind of customization for TObjectWithCustomCreate children
         n := Props.Count;
         TObjectWithCustomCreateRttiCustomSetParser(
@@ -10464,8 +10470,6 @@ begin
         fJsonSave := @_JS_TSynObjectList;
         fJsonLoad := @_JL_TSynObjectList;
       end
-      else if C = TSynLocked then
-        fNewInstance := @_New_SynLocked
       else if C = TComponent then
         fNewInstance := @_New_Component
       else if C = TInterfacedCollection then
@@ -10980,7 +10984,6 @@ begin
   end;
 end;
 
-
 procedure TRttiJson.RawSaveJson(Data: pointer; const Ctxt: TJsonSaveContext);
 begin
   TRttiJsonSave(fJsonSave)(Data, Ctxt);
@@ -11005,6 +11008,27 @@ begin
   result.fJsonReader := TMethod(Reader);
   if result.Kind <> rkDynArray then // Reader/Writer are for items, not array
     result.SetParserType(result.Parser, result.ParserComplex);
+end;
+
+class function TRttiJson.RegisterCustomSerializers(Info: PRttiInfo;
+  Reader: TRttiJsonLoad; Writer: TRttiJsonSave): TRttiJson;
+begin
+  result := Rtti.RegisterType(Info) as TRttiJson;
+  result.fJsonLoad := @Reader;
+  result.fJsonSave := @Writer;
+end;
+
+class procedure TRttiJson.RegisterCustomSerializers(
+  const InfoReaderWriterTrios: array of pointer);
+var
+  i, n: PtrUInt;
+begin
+  n := length(InfoReaderWriterTrios);
+  if (n <> 0) and
+     (n mod 3 = 0) then
+    for i := 0 to (n div 3) - 1 do
+      RegisterCustomSerializers(InfoReaderWriterTrios[i * 3],
+        InfoReaderWriterTrios[i * 3 + 1], InfoReaderWriterTrios[i * 3 + 2]);
 end;
 
 class function TRttiJson.RegisterCustomSerializerClass(ObjectClass: TClass;
@@ -11074,7 +11098,7 @@ end;
 class procedure TRttiJson.RegisterCustomEnumValues(
   const EnumSetTextTrios: array of pointer);
 var
-  i, n: PtrInt;
+  i, n: PtrUInt;
 begin
   n := length(EnumSetTextTrios);
   if (n <> 0) and

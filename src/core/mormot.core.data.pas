@@ -1160,7 +1160,7 @@ type
   TOnDynArraySortCompare = function(const A, B): integer of object;
 
   /// defined here as forward definition of the TRawUtf8Interning final class
-  TRawUtf8InterningAbstract = class(TSynPersistent);
+  TRawUtf8InterningAbstract = class(TObjectWithProps);
 
 const
   /// redirect to the proper SortDynArrayAnsiString/SortDynArrayAnsiStringI
@@ -2621,9 +2621,10 @@ type
   public
     /// initialize the RawUtf8 slot (and its Safe mutex)
     procedure Init;
-    /// returns the interned RawUtf8 value
-    procedure Unique(var aResult: RawUtf8; const aText: RawUtf8;
-      aTextHash: cardinal);
+    /// computes one interned RawUtf8 value
+    // - returns true if aText was added to the list, or false if was existing
+    function Unique(var aResult: RawUtf8; const aText: RawUtf8;
+      aTextHash: cardinal): boolean;
     /// returns the interned RawUtf8 value
     // - only allocates new aResult string if needed
     procedure UniqueFromBuffer(var aResult: RawUtf8;
@@ -2679,7 +2680,8 @@ type
     // - if aText occurs for the first time, add it to the internal string pool
     // - if aText does exist in the internal string pool, return the shared
     // instance (with its reference counter increased), to reduce memory usage
-    procedure Unique(var aResult: RawUtf8; const aText: RawUtf8); overload;
+    // - returns true if aText was added to the list, or false if was existing
+    function Unique(var aResult: RawUtf8; const aText: RawUtf8): boolean; overload;
     /// return a RawUtf8 variable stored within this class from a text buffer
     // - if aText occurs for the first time, add it to the internal string pool
     // - if aText does exist in the internal string pool, return the shared
@@ -4628,30 +4630,26 @@ begin
   fHash.Init;
 end;
 
-procedure TRawUtf8InterningSlot.Unique(var aResult: RawUtf8;
-  const aText: RawUtf8; aTextHash: cardinal);
+function TRawUtf8InterningSlot.Unique(var aResult: RawUtf8;
+  const aText: RawUtf8; aTextHash: cardinal): boolean;
 var
   i: PtrInt;
-  added: boolean;
 begin
   fSafe.ReadLock; // a TRWLightLock is faster here than an upgradable TRWLock
   i := fHash.Values.Hasher.FindOrNewComp(aTextHash, @aText);
   if i >= 0 then
   begin
-    aResult := fHash.Value[i]; // return unified string instance
+    aResult := fHash.Value[i]; // return the interned value
     fSafe.ReadUnLock;
+    result := false;
     exit;
   end;
   fSafe.ReadUnLock;
   fSafe.WriteLock; // need to be added within the write lock
-  i := fHash.Values.FindHashedForAdding(aText, added, aTextHash);
-  if added then
-  begin
+  i := fHash.Values.FindHashedForAdding(aText, {added=}result, aTextHash);
+  if result then // was not added in a background thread
     fHash.Value[i] := aText; // copy new value to the pool
-    aResult := aText;
-  end
-  else
-    aResult := fHash.Value[i]; // was added in a background thread
+  aResult := fHash.Value[i]; // return the interned value
   fSafe.WriteUnLock;
 end;
 
@@ -4669,13 +4667,15 @@ begin
     exit;
   end;
   c := aText[aTextLen];
-  aText[aTextLen] := #0; // input buffer may not be #0 terminated
+  if c <> #0 then // write only if needed - avoid GPF from constant string
+    aText[aTextLen] := #0; // input buffer may not be #0 terminated
   i := fHash.Values.Hasher.FindOrNewComp(aTextHash, @aText, @SortDynArrayPUtf8Char);
   if i >= 0 then
   begin
-    aResult := fHash.Value[i]; // return unified string instance
+    aResult := fHash.Value[i]; // return the interned value
     fSafe.ReadUnLock;
-    aText[aTextLen] := c;
+    if c <> #0 then
+      aText[aTextLen] := c;
     exit;
   end;
   fSafe.ReadUnLock;
@@ -4686,9 +4686,10 @@ begin
   PDynArrayHasher(@fHash.Values.Hasher)^.fCompare := bak;
   if added then
     FastSetString(fHash.Value[i], aText, aTextLen); // new value to the pool
-  aResult := fHash.Value[i];
+  aResult := fHash.Value[i]; // return the interned value
   fSafe.WriteUnLock;
-  aText[aTextLen] := c;
+  if c <> #0 then
+    aText[aTextLen] := c;
 end;
 
 procedure TRawUtf8InterningSlot.UniqueFromBuffer(var aResult: RawUtf8;
@@ -4841,10 +4842,11 @@ begin
       inc(result, fPool[i].Count);
 end;
 
-procedure TRawUtf8Interning.Unique(var aResult: RawUtf8; const aText: RawUtf8);
+function TRawUtf8Interning.Unique(var aResult: RawUtf8; const aText: RawUtf8): boolean;
 var
   hash: cardinal;
 begin
+  result := false; // not added
   if aText = '' then
     aResult := ''
   else if self = nil then
@@ -4853,7 +4855,7 @@ begin
   begin
     // inlined fPool[].Values.HashElement
     hash := InterningHasher(HashSeed, pointer(aText), length(aText));
-    fPool[hash and fPoolLast].Unique(aResult, aText, hash);
+    result := fPool[hash and fPoolLast].Unique(aResult, aText, hash); // maybe added
   end;
 end;
 
@@ -7408,7 +7410,7 @@ end;
 function TDynArray.Delete(aIndex: PtrInt): boolean;
 var
   n: PtrInt;
-  s, len: PtrUInt;
+  siz, tomove: PtrUInt;
   P: PAnsiChar;
   wassorted: boolean;
 begin
@@ -7421,19 +7423,19 @@ begin
   if PDACnt(PAnsiChar(fValue^) - _DACNT)^ > 1 then
     InternalSetLength(n, n); // unique
   dec(n);
-  s := fInfo.Cache.ItemSize;
-  P := PAnsiChar(fValue^) + PtrUInt(aIndex) * s;
+  siz := fInfo.Cache.ItemSize;
+  P := PAnsiChar(fValue^) + PtrUInt(aIndex) * siz;
   if (fInfo.ArrayRtti <> nil) and
      not fNoFinalize then
     fInfo.ArrayRtti.ValueFinalize(P); // also for T*ObjArray
-  len := n - aIndex;
-  if len <> 0 then
+  tomove := n - aIndex;
+  if tomove <> 0 then
   begin
-    len := len * s;
-    MoveFast(P[s], P[0], len);
-    inc(P, len);
+    tomove := tomove * siz;
+    MoveFast(P[siz], P[0], tomove);
+    inc(P, tomove);
   end;
-  FillCharFast(P^, s, 0);
+  FillCharFast(P^, siz, 0);
   wassorted := fSorted;
   SetCount(n); // won't reallocate
   fSorted := wassorted; // deletion won't change the order

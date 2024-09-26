@@ -5443,7 +5443,7 @@ begin
   end;
   if fSettings.Format <> prev then
     err := Parse(fSettings.Format);
-  if err <> '' then
+  if {%H-}err <> '' then
     EHttpLogger.RaiseUtf8('%.SetSettings Format: % in [%]',
       [self, err, fSettings.Format]);
 end;
@@ -6994,7 +6994,7 @@ var
   tmp: array[0..4095] of AnsiChar; // first 4KB should be enough (with metadata)
   unc: array[0..6143] of AnsiChar; // partially decompressed content
 begin
-  FastRecordClear(@Info, TypeInfo(THttpMetricsHeader));
+  RecordZero(@Info, TypeInfo(THttpMetricsHeader));
   result := false;
   // read (and decompress if needed) the first file chunk
   f := FileOpen(FileName, fmOpenReadShared);

@@ -85,6 +85,11 @@ type
 
 implementation
 
+type
+   TMyEnum = (eNone, e1, e2);
+const
+  MYENUM2TXT: array[TMyEnum] of RawUtf8 = ('', 'one', 'and 2');
+
 const
   // some reference from https://github.com/OAI/OpenAPI-Specification
   OpenApiRef: array[0..1] of RawUtf8 = (
@@ -99,6 +104,10 @@ var
   pets: TRawUtf8DynArray;
   oa: TOpenApiParser;
 begin
+  CheckEqual(FindCustomEnum(MYENUM2TXT, 'and 2'), 2);
+  CheckEqual(FindCustomEnum(MYENUM2TXT, 'one'), 1);
+  CheckEqual(FindCustomEnum(MYENUM2TXT, ''), 0);
+  CheckEqual(FindCustomEnum(MYENUM2TXT, 'and 3'), 0);
   for i := 1 to high(RESERVED_KEYWORDS) do
     CheckUtf8(StrComp(pointer(RESERVED_KEYWORDS[i - 1]),
       pointer(RESERVED_KEYWORDS[i])) < 0, RESERVED_KEYWORDS[i]);
@@ -135,13 +144,15 @@ begin
   for i := 0 to high(pets) do
     if pets[i] <> '' then
     begin
-      oa := TOpenApiParser.Create;
+      oa := TOpenApiParser.Create(FormatUtf8('Pets%', [i + 1]));
       try
         oa.ParseJson(pets[i]);
-        ud := FormatUtf8('pets%.dto.pas', [i + 1]);
-        uc := FormatUtf8('pets%.client.pas', [i + 1]);
-        //ConsoleWrite(oa.GetDtosUnit(ud));
-        //ConsoleWrite(oa.GetClientUnit(uc, 'TPets', ud));
+        ud := oa.GenerateDtoUnit;
+        Check(ud <> '', 'DTO');
+        uc := oa.GenerateClientUnit;
+        Check(uc <> '', 'CLIENT');
+        //ConsoleWrite(ud);
+        //ConsoleWrite(uc);
       finally
         oa.Free;
       end;
@@ -662,14 +673,26 @@ var
   withntp: boolean;
   guid: TGuid;
   i, j, k: PtrInt;
-  dns, clients: TRawUtf8DynArray;
+  dns, clients, a: TRawUtf8DynArray;
+  le: TLdapError;
+  rl: TLdapResultList;
+  r: TLdapResult;
+  at: TLdapAttributeType;
+  ats: TLdapAttributeTypes;
+  sat: TSamAccountType;
+  gt: TGroupType;
+  gts: TGroupTypes;
+  ua: TUserAccountControl;
+  uas: TUserAccountControls;
+  sf: TSystemFlag;
+  sfs: TSystemFlags;
   l: TLdapClientSettings;
   one: TLdapClient;
+  res: TLdapResult;
   utc1, utc2: TDateTime;
   ntp, usr, pwd, ku, main, txt: RawUtf8;
   hasinternet: boolean;
 begin
-  CheckEqual(1 shl ord(uacPartialSecretsRodc), $04000000, 'uacHigh');
   // validate NTP/SNTP client using NTP_DEFAULT_SERVER = time.google.com
   if not Executable.Command.Get('ntp', ntp) then
     ntp := NTP_DEFAULT_SERVER;
@@ -735,6 +758,21 @@ begin
     'OU=d..zaf(fds )da\,z \"\"((''\\/ df\3D\3Dez,OU=test_wapt,OU=computers,' +
     'OU=tranquilit,DC=ad,DC=tranquil,DC=it'),
     'ad.tranquil.it/tranquilit/computers/test_wapt/d\.\.zaf(fds )da,z ""((''\\\/ df==ez');
+  CheckEqual(DNToCN('cn=foo, ou=bar'), '/bar/foo');
+  CheckEqual(NormalizeDN('cn=foo, ou = bar'), 'CN=foo,OU=bar');
+  // validate LDAP error recognition
+  Check(RawLdapError(-1) = leUnknown);
+  Check(RawLdapError(LDAP_RES_TOO_LATE) = leUnknown);
+  Check(RawLdapError(10000) = leUnknown);
+  Check(RawLdapError(LDAP_RES_AUTHORIZATION_DENIED) = leAuthorizationDenied);
+  for le := low(le) to high(le) do
+  begin
+    Check(LDAP_ERROR_TEXT[le] <> '');
+    if le <> leUnknown then
+      CheckUtf8(RawLdapError(LDAP_RES_CODE[le]) = le, LDAP_ERROR_TEXT[le]);
+  end;
+  CheckEqual(LDAP_ERROR_TEXT[leUnknown], 'Unknown');
+  CheckEqual(LDAP_ERROR_TEXT[leCompareTrue], 'Compare true');
   // validate LDAP escape/unescape
   for c := 0 to 200 do
   begin
@@ -760,6 +798,117 @@ begin
   Check(not LdapSafe('abc)'));
   Check(not LdapSafe('*'));
   Check(not LdapSafe('()'));
+  // validate LDAP attributes definitions
+  for at := low(at) to high(at) do
+  begin
+    CheckEqual(ToText(at), AttrTypeName[at]);
+    CheckUtf8(AttributeNameType(AttrTypeName[at]) = at, ToText(at));
+    ats := [at];
+    a := ToText(ats);
+    if at = low(at) then
+      Check(a = nil)
+    else
+    begin
+      CheckEqual(length(a), 1);
+      CheckEqual(a[0], ToText(at));
+    end;
+  end;
+  for i := low(AttrTypeNameAlt) to high(AttrTypeNameAlt) do
+    CheckUtf8(AttributeNameType(AttrTypeNameAlt[i]) = AttrTypeAltType[i],
+      AttrTypeNameAlt[i]);
+  ats := [];
+  Check(ToText(ats) = nil);
+  a := ToText([atOrganizationUnitName, atObjectClass, atCommonName]);
+  CheckEqual(RawUtf8ArrayToCsv(a), 'objectClass,cn,ou');
+  // validate LDAP attributes values and high-level recognition
+  for sat := low(sat) to high(sat) do
+  begin
+    c := SamAccountTypeValue(sat);
+    Check((c = 0) = (sat = satUnknown));
+    Check(SamAccountTypeFromText(UInt32ToUtf8(c)) = sat);
+  end;
+  for gt := low(gt) to high(gt) do
+  begin
+    gts := [gt];
+    Check(GroupTypesFromInteger(GroupTypesValue(gts)) = gts);
+  end;
+  gts := [];
+  Check(GroupTypesValue(gts) = 0);
+  for gt := low(gt) to high(gt) do
+  begin
+    include(gts, gt);
+    Check(GroupTypesFromInteger(GroupTypesValue(gts)) = gts);
+  end;
+  for ua := low(ua) to high(ua) do
+  begin
+    uas := [ua];
+    Check(UserAccountControlsFromInteger(UserAccountControlsValue(uas)) = uas);
+  end;
+  uas := [];
+  Check(UserAccountControlsValue(uas) = 0);
+  for ua := low(ua) to high(ua) do
+  begin
+    include(uas, ua);
+    Check(UserAccountControlsFromInteger(UserAccountControlsValue(uas)) = uas);
+  end;
+  for sf := low(sf) to high(sf) do
+  begin
+    sfs := [sf];
+    Check(SystemFlagsFromInteger(SystemFlagsValue(sfs)) = sfs);
+  end;
+  sfs := [];
+  Check(SystemFlagsValue(sfs) = 0);
+  for sf := low(sf) to high(sf) do
+  begin
+    include(sfs, sf);
+    Check(SystemFlagsFromInteger(SystemFlagsValue(sfs)) = sfs);
+  end;
+  // validate LDAP resultset and LDIF content
+  rl := TLdapResultList.Create;
+  try
+    CheckEqual(rl.Dump({noTime=}true), 'results: 0'#13#10);
+    CheckEqual(rl.ExportToLdifContent,
+      'version: 1'#$0A'# total number of entries: 0'#$0A);
+    CheckEqual(rl.Count, 0);
+    CheckEqual(rl.GetJson, '{}');
+    r := rl.Add;
+    r.ObjectName := 'cn=foo, ou=bar';
+    CheckEqual(r.ObjectName, 'CN=foo,OU=bar', 'normalized');
+    CheckEqual(r.Attributes.Count, 0);
+    v := 'John E Doxx';
+    PWord(PAnsiChar(UniqueRawUtf8(v)) + 9)^ := $a9c3; // UTF-8 'e'acute (Delphi)
+    r.Attributes[atObjectClass] := 'person';
+    CheckEqual(r.Attributes.Count, 1);
+    r.Attributes.AddPairs(['cn', 'John Doe',
+                           'cn', v,
+                           'sn', 'Doe']);
+    CheckEqual(r.Attributes.Count, 3);
+    CheckHash(rl.GetJson([]), $8AAB69D2);
+    CheckHash(rl.GetJson([roRawValues]), $8AAB69D2);
+    CheckHash(rl.GetJson([roNoDCAtRoot]), $8AAB69D2);
+    CheckHash(rl.GetJson([roNoObjectName]), $6A4853FA);
+    CheckHash(rl.GetJson([roCanonicalNameAtRoot]), $20AF5125);
+    CheckHash(rl.GetJson([roObjectNameAtRoot]), $92FE1BFD);
+    CheckHash(rl.GetJson([roCommonNameAtRoot]), $047EED2F);
+    CheckHash(rl.GetJson([roObjectNameWithoutDCAtRoot, roNoObjectName]), $F41233F2);
+    CheckHash(rl.GetJson([roWithCanonicalName]), $C4BA2ED3);
+    CheckHash(rl.GetJson([roNoObjectName, roWithCanonicalName]), $0BCFC3BC);
+    CheckHash(rl.Dump({noTime=}true), $DF59A0A9, 'hashDump');
+    CheckHash(rl.ExportToLdifContent, $4A97B4B2, 'hashLdif');
+    r.Attributes.Delete(atCommonName);
+    CheckEqual(r.Attributes.Count, 2);
+    v := rl.GetJson([roNoObjectName]);
+    CheckEqual(v, '{"bar":{"foo":{"objectClass":"person","sn":"Doe"}}}');
+    r.ObjectName := 'cn=foo, ou=bar, dc=toto, dc=it';
+    //writeln(rl.GetJson([roNoDCAtRoot, roNoObjectName]));
+    CheckHash(rl.GetJson([]), $DF03674D);
+    CheckHash(rl.GetJson([roRawValues]), $DF03674D);
+    CheckHash(rl.GetJson([roNoDCAtRoot]), $DB4EF1DC);
+    CheckEqual(rl.GetJson([roNoObjectName, roNoDCAtRoot]), v);
+    CheckHash(rl.ExportToLdifContent, $31A4283C, 'hashLdif');
+  finally
+    rl.Free;
+  end;
   // validate LDAP settings
   l := TLdapClientSettings.Create;
   try
@@ -881,25 +1030,28 @@ begin
               end;
             Check(one.NetbiosDN <> '', 'NetbiosDN');
             Check(one.ConfigDN <> '', 'ConfigDN');
-            Check(one.Search(one.WellKnownObjects.Users, {typesonly=}false,
+            Check(one.Search(one.WellKnownObjects[lkoUsers], {typesonly=}false,
                   '(cn=users)', ['*']), 'Search');
             Check(one.SearchResult.Count <> 0, 'SeachResult');
             AddConsole('%% = % search=%', [one.Settings.TargetHost, txt,
               one.NetbiosDN, one.SearchResult.Count]);
             for k := 0 to one.SearchResult.Count - 1 do
-              with one.SearchResult.Items[k] do
-              begin
-                sid := '';
-                if CopyObjectSid(sid) then
-                  Check(sid <> '');
-                FillZero(guid);
-                Check(CopyObjectGUID(guid), 'objectGUID');
-                Check(not IsNullGuid(guid));
-                Check(IdemPropNameU(Attributes.Get('cn'), 'users'), 'cn');
-                Check(Attributes.Get('name') <> '', 'name');
-                Check(Attributes.Get('distinguishedName') <> '', 'distinguishedName');
-              end;
-              //writeln(one.SearchResult.Dump);
+            begin
+              res := one.SearchResult.Items[k];
+              Check(res.ObjectName <> '', 'objectName');
+              Check(res[atDistinguishedName] <> '', 'distinguishedName');
+              sid := '';
+              if res.CopyObjectSid(sid) then
+                Check(sid <> '');
+              FillZero(guid);
+              Check(res.CopyObjectGUID(guid), 'objectGUID');
+              Check(not IsNullGuid(guid));
+              CheckEqual(res.CanonicalName, DNToCN(res.ObjectName));
+              Check(IdemPropNameU(res.Attributes[atCommonName], 'users'), 'cn');
+              Check(res.Attributes.GetByName('name') <> '', 'name');
+              Check(res.Attributes.SystemFlags <> [], 'sf');
+            end;
+            //writeln(one.SearchResult.Dump);
           except
             on E: Exception do
               Check(false, E.Message);

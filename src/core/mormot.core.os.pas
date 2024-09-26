@@ -11,16 +11,16 @@ unit mormot.core.os;
   - Gather Operating System Information
   - Operating System Specific Types (e.g. TWinRegistry)
   - Unicode, Time, File, Console, Library process
-  - Cross-Platform Charset and CodePage Support
   - Per Class Properties O(1) Lookup via vmtAutoTable Slot (e.g. for RTTI cache)
   - TSynLocker/TSynLocked and Low-Level Threading Features
   - Unix Daemon and Windows Service Support
 
-   Aim of this unit is to centralize most used OS-specific API calls, like a
-  SysUtils unit on steroids, to avoid $ifdef/$endif in "uses" clauses.
-   In practice, no "Windows", nor "Linux/Posix" reference should be needed in
-  regular units, once mormot.core.os is included. :)
-   This unit only refers to mormot.core.base so can be used almost stand-alone.
+  Aim of this unit is to centralize most used OS-specific API calls, like a
+    SysUtils unit on steroids, to avoid $ifdef/$endif in "uses" clauses.
+    See mormot.core.os.mac and mormot.core.os.security units for completion.
+  In practice, no "Windows", nor "Linux/Posix" reference should be needed in
+    regular units, once mormot.core.os is included. :)
+  This unit only refers to mormot.core.base so can be used almost stand-alone.
 
   *****************************************************************************
 }
@@ -93,6 +93,39 @@ const
   fmCreateOrRewrite: array[{rewrite=}boolean] of cardinal = (
     fmCreateShared,
     fmOpenWriteShared);
+
+type
+  /// the available HTTP methods transmitted between client and server
+  // - remote ORM supports non-standard mLOCK/mUNLOCK/mABORT/mSTATE verbs
+  // - not all IANA verbs are available, because our TRestRouter will only
+  // support mGET .. mOPTIONS verbs anyway
+  // - for basic CRUD operations, we consider Create=mPOST, Read=mGET,
+  // Update=mPUT and Delete=mDELETE - even if it is not fully RESTful
+  TUriMethod = (
+    mNone,
+    mGET,
+    mPOST,
+    mPUT,
+    mDELETE,
+    mHEAD,
+    mBEGIN,
+    mEND,
+    mABORT,
+    mLOCK,
+    mUNLOCK,
+    mSTATE,
+    mPATCH,
+    mOPTIONS);
+
+  /// set of available HTTP methods transmitted between client and server
+  TUriMethods = set of TUriMethod;
+
+/// convert a string HTTP verb into its TUriMethod enumerate
+// - conversion is case-insensitive
+function ToMethod(const method: RawUtf8): TUriMethod;
+
+/// convert a TUriMethod enumerate to its #0 terminated uppercase text
+function ToText(m: TUriMethod): PUtf8Char; overload;
 
 const
   /// void HTTP Status Code (not a standard value, for internal use only)
@@ -202,7 +235,6 @@ function StatusCodeIsSuccess(Code: integer): boolean;
 /// check the supplied HTTP header to not contain more than one EOL
 // - to avoid unexpected HTTP body injection, e.g. from unsafe business code
 function IsInvalidHttpHeader(head: PUtf8Char; headlen: PtrInt): boolean;
-
 
 const
   /// HTTP header name for the content type, as defined in the corresponding RFC
@@ -349,200 +381,6 @@ var
   // avoid a memory allocation each time it is assigned to a variable
   BOOL_UTF8: array[boolean] of RawUtf8;
 
-
-type
-  /// Security IDentifier (SID) Authority, encoded as 48-bit binary
-  TSidAuth = array[0..5] of byte;
-  PSidAuth = ^TSidAuth;
-
-  /// Security IDentifier (SID) binary format, as retrieved e.g. by Windows API
-  // - this definition is not detailed on oldest Delphi, and not available on
-  // POSIX, whereas it makes sense to also have it, e.g. for server process
-  TSid = packed record
-     Revision: byte;
-     SubAuthorityCount: byte;
-     IdentifierAuthority: TSidAuth;
-     SubAuthority: array[byte] of cardinal;
-  end;
-  PSid = ^TSid;
-  PSids = array of PSid;
-
-  /// define a list of well-known Security IDentifier (SID) groups
-  // - for instance, wksBuiltinAdministrators is set for local administrators
-  // - warning: does not exactly match winnt.h WELL_KNOWN_SID_TYPE enumeration
-  TWellKnownSid = (
-    wksNull,
-    wksWorld,
-    wksLocal,
-    wksConsoleLogon,
-    wksCreatorOwner,
-    wksCreatorGroup,
-    wksCreatorOwnerServer,
-    wksCreatorGroupServer,
-    wksIntegrityUntrusted,
-    wksIntegrityLow,
-    wksIntegrityMedium,
-    wksIntegrityMediumPlus,
-    wksIntegrityHigh,
-    wksIntegritySystem,
-    wksIntegrityProtectedProcess,
-    wksIntegritySecureProcess,
-    wksAuthenticationAuthorityAsserted,
-    wksAuthenticationServiceAsserted,
-    wksAuthenticationFreshKeyAuth,
-    wksAuthenticationKeyTrust,
-    wksAuthenticationKeyPropertyMfa,
-    wksAuthenticationKeyPropertyAttestation,
-    wksNtAuthority,
-    wksDialup,
-    wksNetwork,
-    wksBatch,
-    wksInteractive,
-    wksService,
-    wksAnonymous,
-    wksProxy,
-    wksEnterpriseControllers,
-    wksSelf,
-    wksAuthenticatedUser,
-    wksRestrictedCode,
-    wksTerminalServer,
-    wksRemoteLogonId,
-    wksThisOrganisation,
-    wksIisUser,
-    wksLocalSystem,
-    wksLocalService,
-    wksNetworkService,
-    wksLocalAccount,
-    wksLocalAccountAndAdministrator,
-    wksBuiltinDomain,
-    wksBuiltinAdministrators,
-    wksBuiltinUsers,
-    wksBuiltinGuests,
-    wksBuiltinPowerUsers,
-    wksBuiltinAccountOperators,
-    wksBuiltinSystemOperators,
-    wksBuiltinPrintOperators,
-    wksBuiltinBackupOperators,
-    wksBuiltinReplicator,
-    wksBuiltinRasServers,
-    wksBuiltinPreWindows2000CompatibleAccess,
-    wksBuiltinRemoteDesktopUsers,
-    wksBuiltinNetworkConfigurationOperators,
-    wksBuiltinIncomingForestTrustBuilders,
-    wksBuiltinPerfMonitoringUsers,
-    wksBuiltinPerfLoggingUsers,
-    wksBuiltinAuthorizationAccess,
-    wksBuiltinTerminalServerLicenseServers,
-    wksBuiltinDcomUsers,
-    wksBuiltinIUsers,
-    wksBuiltinCryptoOperators,
-    wksBuiltinUnknown,
-    wksBuiltinCacheablePrincipalsGroups,
-    wksBuiltinNonCacheablePrincipalsGroups,
-    wksBuiltinEventLogReadersGroup,
-    wksBuiltinCertSvcDComAccessGroup,
-    wksBuiltinRdsRemoteAccessServers,
-    wksBuiltinRdsEndpointServers,
-    wksBuiltinRdsManagementServers,
-    wksBuiltinHyperVAdmins,
-    wksBuiltinAccessControlAssistanceOperators,
-    wksBuiltinRemoteManagementUsers,
-    wksBuiltinDefaultSystemManagedGroup,
-    wksBuiltinStorageReplicaAdmins,
-    wksBuiltinDeviceOwners,
-    wksCapabilityInternetClient,
-    wksCapabilityInternetClientServer,
-    wksCapabilityPrivateNetworkClientServer,
-    wksCapabilityPicturesLibrary,
-    wksCapabilityVideosLibrary,
-    wksCapabilityMusicLibrary,
-    wksCapabilityDocumentsLibrary,
-    wksCapabilityEnterpriseAuthentication,
-    wksCapabilitySharedUserCertificates,
-    wksCapabilityRemovableStorage,
-    wksCapabilityAppointments,
-    wksCapabilityContacts,
-    wksBuiltinAnyPackage,
-    wksBuiltinAnyRestrictedPackage,
-    wksNtlmAuthentication,
-    wksSChannelAuthentication,
-    wksDigestAuthentication);
-
-  /// define a set of well-known SID
-  TWellKnownSids = set of TWellKnownSid;
-
-  /// custom binary buffer type used as convenient Windows SID storage
-  RawSid = type RawByteString;
-
-  /// a dynamic array of binary SID storage buffers
-  RawSidDynArray = array of RawSid;
-
-
-/// a wrapper around MemCmp() on two Security IDentifier binary buffers
-// - will first compare by length, then by content
-function SidCompare(a, b: PSid): integer;
-
-/// compute the actual binary length of a Security IDentifier buffer, in bytes
-function SidLength(sid: PSid): PtrInt;
-  {$ifdef HASINLINE} inline; {$endif}
-
-/// allocate a RawSid instance from a PSid raw handler
-procedure ToRawSid(sid: PSid; out result: RawSid);
-
-/// check if a RawSid binary buffer has the expected length of a valid SID
-function IsValidRawSid(const sid: RawSid): boolean;
-
-/// search within SID dynamic array for a given SID
-function HasSid(const sids: PSids; sid: PSid): boolean;
-
-/// search within SID dynamic array for a given dynamic array of SID buffers
-function HasAnySid(const sids: PSids; const sid: RawSidDynArray): boolean;
-
-/// append a SID buffer pointer to a dynamic array of SID buffers
-procedure AddRawSid(var sids: RawSidDynArray; sid: PSid);
-
-/// convert a Security IDentifier as text, following the standard representation
-procedure SidToTextShort(sid: PSid; var result: shortstring);
-
-/// convert a Security IDentifier as text, following the standard representation
-function SidToText(sid: PSid): RawUtf8;
-
-/// convert several Security IDentifier as text dynamic array
-function SidsToText(sids: PSids): TRawUtf8DynArray;
-
-/// convert a Security IDentifier as text, following the standard representation
-function RawSidToText(const sid: RawSid): RawUtf8;
-
-/// parse a Security IDentifier text, following the standard representation
-// - won't support hexadecimal IdentifierAuthority, i.e. S-1-0x######-....
-function TextToSid(P: PUtf8Char; out sid: TSid): boolean;
-
-/// parse a Security IDentifier text, following the standard representation
-function TextToRawSid(const text: RawUtf8): RawSid; overload;
-  {$ifdef HASINLINE} inline; {$endif}
-
-/// parse a Security IDentifier text, following the standard representation
-function TextToRawSid(const text: RawUtf8; out sid: RawSid): boolean; overload;
-
-/// returns a Security IDentifier of a well-known SID as binary
-// - is using an internal cache for the returned RawSid instances
-function KnownRawSid(wks: TWellKnownSid): RawSid;
-
-/// returns a Security IDentifier of a well-known SID as standard text
-// - e.g. wksBuiltinAdministrators as 'S-1-5-32-544'
-function KnownSidToText(wks: TWellKnownSid): PShortString;
-
-/// recognize most well-known SID from a Security IDentifier binary buffer
-// - returns wksNull if the supplied buffer was not recognized
-function SidToKnown(sid: PSid): TWellKnownSid; overload;
-
-/// recognize most well-known SID from a Security IDentifier standard text
-// - returns wksNull if the supplied text was not recognized
-function SidToKnown(const text: RawUtf8): TWellKnownSid; overload;
-
-/// recognize some well-known SIDs from the supplied SID dynamic array
-function SidToKnownGroups(const sids: PSids): TWellKnownSids;
-
 const // some time conversion constants with Milli/Micro/NanoSec resolution
   SecsPerHour  = SecsPerMin * MinsPerHour; // missing in oldest Delphi
   SecsPerDay   = SecsPerMin * MinsPerDay;
@@ -639,7 +477,8 @@ type
     wEleven,
     wEleven_64,
     wServer2019_64,
-    wServer2022_64);
+    wServer2022_64,
+    wServer2025_64);
 
   /// the running Operating System, encoded as a 32-bit integer
   TOperatingSystemVersion = packed record
@@ -656,7 +495,7 @@ type
 const
   /// the recognized MacOS versions, as plain text
   // - indexed from OSVersion32.utsrelease[2] kernel revision
-  MACOS_NAME: array[8 .. 24] of RawUtf8 = (
+  MACOS_NAME: array[8 .. 25] of RawUtf8 = (
     '10.4 Tiger',
     '10.5 Leopard',
     '10.6 Snow Leopard',
@@ -673,7 +512,8 @@ const
     '12 Monterey',
     '13 Ventura',
     '14 Sonoma',
-    '15 Glow'); // use known internal codename for upcoming version
+    '15 Sequoia',
+    '16 Next');
 
   /// the recognized Windows versions, as plain text
   // - defined even outside OSWINDOWS to allow process e.g. from monitoring tools
@@ -707,7 +547,8 @@ const
     '11',
     '11 64bit',
     'Server 2019 64bit',
-    'Server 2022 64bit');
+    'Server 2022 64bit',
+    'Server 2025 64bit');
 
   /// the recognized Windows versions which are 32-bit
   WINDOWS_32 = [
@@ -1037,6 +878,8 @@ type
     actCortexA720,
     actCortexX4,
     actNeoverseV3,
+    actCortextX925,
+    actCortextA725,
     actNeoverseN3);
   /// a set of recognized ARM/AARCH64 CPU types
   TArmCpuTypes = set of TArmCpuType;
@@ -1085,27 +928,7 @@ const
   // - e.g. 'Delphi 10.3 Rio', 'Delphi 2010' or 'Free Pascal 3.3.1'
   COMPILER_VERSION: RawUtf8 =
   {$ifdef FPC}
-    'Free Pascal'
-    {$ifdef VER2_6_4} + ' 2.6.4'{$endif}
-    {$ifdef VER3_0}   + ' 3.0'
-      {$ifdef VER3_0_4}   + '.4' {$else}
-        {$ifdef VER3_0_2} + '.2' {$endif}
-      {$endif VER3_0_4}
-    {$endif VER3_0}
-    {$ifdef VER3_1}   + ' 3.1'
-       {$ifdef VER3_1_1} + '.1' {$endif}
-    {$endif VER3_1}
-    {$ifdef VER3_2}   + ' 3.2'
-      {$ifdef VER3_2_4}     + '.4' {$else}
-        {$ifdef VER3_2_3}   + '.3' {$else}
-          {$ifdef VER3_2_2} + '.2' {$endif}
-        {$endif VER3_2_3}
-      {$endif VER3_2_4}
-    {$endif VER3_2}
-    {$ifdef VER3_3}   + ' 3.3'
-       {$ifdef VER3_3_1} + '.1' {$endif}
-    {$endif VER3_3}
-    {$ifdef VER3_4}   + ' 3.4'  {$endif}
+    'Free Pascal ' + {$I %FPCVERSION%} // FPC makes it simple
   {$else}
     'Delphi'
     {$if     defined(VER140)} + ' 6'
@@ -1136,8 +959,9 @@ const
       {$if declared(RTLVersion111)} + '.1' {$ifend} {$ifend} {$ifend}
                               + ' Alexandria'
     {$elseif defined(VER360)} + ' 12'
+      {$if declared(RTLVersion123)} + '.3' {$else}
       {$if declared(RTLVersion122)} + '.2' {$else}
-      {$if declared(RTLVersion121)} + '.1' {$ifend} {$ifend}
+      {$if declared(RTLVersion121)} + '.1' {$ifend} {$ifend} {$ifend}
                               + ' Athens'
     {$elseif defined(VER370)} + ' 13 Next'
     {$ifend}
@@ -1234,8 +1058,6 @@ var
   // - equals TMemoryInfo.memtotal as retrieved from GetMemoryInfo() at startup
   SystemMemorySize: PtrUInt;
 
-{$M+} // to have existing RTTI for published properties
-
 type
   /// used to retrieve version information from any EXE
   // - under Linux, all version numbers are set to 0 by default, unless
@@ -1244,7 +1066,7 @@ type
   // - for the main executable, do not create once instance of this class, but
   // call GetExecutableVersion / SetExecutableVersion and access the Executable
   // global variable
-  TFileVersion = class
+  TFileVersion = class(TObjectWithProps)
   protected
     fDetailed: string;
     fFileName: TFileName;
@@ -1293,7 +1115,7 @@ type
     // GetExecutableVersion / SetExecutableVersion and access the Executable
     // global variable
     constructor Create(const aFileName: TFileName; aMajor: integer = 0;
-      aMinor: integer = 0; aRelease: integer = 0; aBuild: integer = 0);
+      aMinor: integer = 0; aRelease: integer = 0; aBuild: integer = 0); reintroduce;
     /// open and extract file information from the executable FileName
     // - note that resource extraction is not available on POSIX, unless the
     // FPCUSEVERSIONINFO conditional has been specified in the project options
@@ -1333,12 +1155,14 @@ type
       read fBuildDateTime write fBuildDateTime;
   end;
 
-{$M-}
-
 /// quickly parse the TFileVersion.UserAgent content
 // - identify e.g. 'myprogram/3.1.0.2W' or 'myprogram/3.1.0.2W32' text
 function UserAgentParse(const UserAgent: RawUtf8;
   out ProgramName, ProgramVersion: RawUtf8; out OS: TOperatingSystem): boolean;
+
+/// detect any & character, and extract it as part of the result array
+// - e.g. UnAmp('alter&nate') returns ['n', 'alternate']
+function UnAmp(const name: RawUtf8): TRawUtf8DynArray;
 
 type
   /// the command line switches supported by TExecutableCommandLine
@@ -1365,7 +1189,7 @@ type
     fDescArg: TRawUtf8DynArray;
     fCaseSensitiveNames: boolean;
     fSwitch: array[{long=}boolean] of RawUtf8;
-    fLineFeed, fExeDescription: RawUtf8;
+    fLineFeed, fExeDescription, fUnknown: RawUtf8;
     procedure Describe(const v: array of RawUtf8;
       k: TExecutableCommandLineKind; d, def: RawUtf8; argindex: integer);
     function Find(const v: array of RawUtf8;
@@ -1373,33 +1197,58 @@ type
       const def: RawUtf8 = ''; f: PtrInt = 0): PtrInt;
   public
     /// mark and describe an "arg" value by 0-based index in Args[]
+    // - if true, you can access the value from Args[index]
     function Arg(index: integer; const description: RawUtf8 = '';
       optional: boolean = true): boolean; overload;
+    /// mark and describe an "arg" value by 0-based index in Args[]
+    // - if existing, returns the value from Args[index] - otherwise returns ''
+    function ArgU(index: integer; const description: RawUtf8 = '';
+      optional: boolean = true): RawUtf8;
     /// mark and describe a string/TFileName "arg" value by 0-based index in Args[]
+    // - if existing, returns Args[index] as string - otherwise returns ''
     function ArgString(index: integer; const description: RawUtf8 = '';
       optional: boolean = true): string;
+    /// mark and describe an existing TFileName "arg" value by 0-based index in Args[]
+    // - if set, will fail in DetectUnknown if the file (or the folder) does not
+    // exist, or returns Args[index] file/folder name as string
+    function ArgFile(index: integer; const description: RawUtf8 = '';
+      optional: boolean = true; isFolder: boolean = false): TFileName;
+    /// will fail in DetectUnknown if the file or folder name does not exist
+    // - also calls and return ExpandFileName() on the supplied file or folder name
+    function CheckFileName(const name: TFileName; isFolder: boolean = false): TFileName;
     /// mark and describe an "arg" value in Args[]
+    // - e.g. returns true if the name appears in Args[]
     function Arg(const name: RawUtf8;
       const description: RawUtf8 = ''): boolean; overload;
     /// mark and describe or or several "arg" value(s) in Args[]
+    // - e.g. returns true if any of the name(s) appears in Args[]
     function Arg(const name: array of RawUtf8;
       const description: RawUtf8 = ''): boolean; overload;
-    /// search for "-optionname" switches in Options[]
+    /// search for a -xxxx switch in Options[]
+    // - returns true if '-name' or '--name' or '/name' do appear
+    // - if name contains a & character, will also register the following char,
+    // e.g. Option('&concise') is the same as Option(['c', 'concise'])
     function Option(const name: RawUtf8;
       const description: RawUtf8 = ''): boolean; overload;
-    /// search for "-optionname" switches in Options[]
+    /// search for one or severl -xxxx switches in Options[]
+    // - returns true if any '-name' or '--name' or '/name' do appear
     function Option(const name: array of RawUtf8;
       const description: RawUtf8 = ''): boolean; overload;
     /// search for "-parametername" and return its RawUtf8 "parametervalue"
+    // - returns true if '-name' or '--name' or '/name' do appear with a value
+    // - if name contains a & character, will also register the following char,
+    // e.g. Get('&concise') is the same as Get(['c', 'concise'])
     function Get(const name: RawUtf8; out value: RawUtf8;
       const description: RawUtf8 = ''; const default: RawUtf8 = ''): boolean; overload;
     /// search for "-parametername" and return its RawUtf8 "parametervalue"
+    // - returns true if any '-name' or '--name' or '/name' do appear with a value
     function Get(const name: array of RawUtf8; out value: RawUtf8;
       const description: RawUtf8 = ''; const default: RawUtf8 = ''): boolean; overload;
     /// search for "-parametername" and return all RawUtf8 "parametervalue" occurrences
     function Get(const name: array of RawUtf8; out value: TRawUtf8DynArray;
       const description: RawUtf8 = ''): boolean; overload;
     /// search for "-parametername" and return its plain string "parametervalue"
+    // - if name contains a & character, will also register the following char
     function Get(const name: RawUtf8; out value: string;
       const description: RawUtf8 = ''; const default: string = ''): boolean; overload;
     /// search for "-parametername" and return all string "parametervalue" occurrences
@@ -1409,15 +1258,18 @@ type
     function Get(const name: array of RawUtf8; out value: string;
       const description: RawUtf8 = ''; const default: string = ''): boolean; overload;
     /// search for "-parametername" and return all string "parametervalue" occurrences
+    // - if name contains a & character, will also register the following char
     function Get(const name: RawUtf8; out value: TStringDynArray;
       const description: RawUtf8 = ''): boolean; overload;
     /// search for "-parametername" and return its integer "parametervalue"
+    // - if name contains a & character, will also register the following char
     function Get(const name: RawUtf8; out value: integer;
       const description: RawUtf8 = ''; default: integer = maxInt): boolean; overload;
     /// search for "-parametername" and return its integer "parametervalue"
     function Get(const name: array of RawUtf8; out value: integer;
       const description: RawUtf8 = ''; default: integer = maxInt): boolean; overload;
     /// search for "-parametername" and return its integer "parametervalue"
+    // - if name contains a & character, will also register the following char
     function Get(const name: RawUtf8; min, max: integer; out value: integer;
       const description: RawUtf8 = ''; default: integer = maxInt): boolean; overload;
     /// search for "-parametername" and return its integer "parametervalue"
@@ -1425,19 +1277,26 @@ type
       out value: integer; const description: RawUtf8 = '';
       default: integer = -1): boolean; overload;
     /// search for "-parametername" parameter in Names[]
+    // - if name contains a & character, will also search the following char
     function Has(const name: RawUtf8): boolean; overload;
     /// search for "-parametername" parameter in Names[]
     function Has(const name: array of RawUtf8): boolean; overload;
     /// search for "-parametername" and return '' or its RawUtf8 "parametervalue"
+    // - if name contains a & character, will also register the following char
     function Param(const name: RawUtf8; const description: RawUtf8 = '';
       const default: RawUtf8 = ''): RawUtf8; overload;
     /// search for "-parametername" and return '' or its string "parametervalue"
-    function ParamS(const name: array of RawUtf8; const description: RawUtf8 = '';
-      const default: string = ''): string;
+    // - if name contains a & character, will also register the following char
+    function ParamS(const name: RawUtf8; const description: RawUtf8 = '';
+      const default: string = ''): string; overload;
     /// search for "-parametername" and return '' or its RawUtf8 "parametervalue"
     function Param(const name: array of RawUtf8; const description: RawUtf8 = '';
       const default: RawUtf8 = ''): RawUtf8; overload;
+    /// search for "-parametername" and return '' or its string "parametervalue"
+    function ParamS(const name: array of RawUtf8; const description: RawUtf8 = '';
+      const default: string = ''): string; overload;
     /// search for "-parametername" and return its integer "parametervalue" or default
+    // - if name contains a & character, will also register the following char
     function Param(const name: RawUtf8; default: integer;
       const description: RawUtf8 = ''): integer; overload;
     /// search for "-parametername" and return its integer "parametervalue" or default
@@ -1448,10 +1307,10 @@ type
     // - the parameter <name> would be extracted from any #word in the
     // description text,
     // - for instance:
-    // ! with Executable.Command do
+    // ! with Executable.Command do // you may better use a local variable
     // ! begin
     // !   ExeDescription := 'An executable to test mORMot Execute.Command';
-    // !   verbose := Option(['v', 'verbose'], 'generate verbose output');
+    // !   verbose := Option('&verbose', 'generate verbose output');
     // !   Get(['t', 'threads'], threads, '#number of threads to run', 5);
     // !   ConsoleWrite(FullDescription);
     // ! end;
@@ -1595,7 +1454,7 @@ procedure SetExecutableVersion(aMajor, aMinor, aRelease, aBuild: integer); overl
 procedure SetExecutableVersion(const aVersionText: RawUtf8); overload;
 
 /// return a function/method location according to the supplied code address
-// - returns the address as hexadecimal by default, e.g. '004cb765'
+// - returns the address as hexadecimal by default, e.g. '4cb765'
 // - if mormot.core.log.pas is defined in the project, will redirect to
 // TDebugFile.FindLocationShort() method using .map/.dbg/.mab information, and
 // return filename, symbol name and line number (if any) as plain text, e.g.
@@ -1613,7 +1472,6 @@ var
   // - this unit will include a simple parser of /sys/class/net/* for Linux only
   // - as used e.g. by GetComputerUuid() fallback if SMBIOS is not available
   GetSystemMacAddress: function: TRawUtf8DynArray;
-
 
 type
   /// identify an operating system folder for GetSystemPath()
@@ -1708,6 +1566,14 @@ function GetSystemStoreAsPem(
 // - an internal cache is refreshed every 4 minutes unless FlushCache is set
 function GetOneSystemStoreAsPem(CertStore: TSystemCertificateStore;
   FlushCache: boolean = false; now: cardinal = 0): RawUtf8;
+
+var
+  /// low-level function used by StuffExeCertificate() in mormot.misc.pecoff.pas
+  // - properly implemented by mormot.crypt.openssl.pas, but mormot.misc.pecoff
+  // has its own stand-alone version using a pre-generated fixed certificate
+  // - warning: the Marker should have no 0 byte within
+  CreateDummyCertificate: function(const Stuff, CertName: RawUtf8;
+    Marker: cardinal): RawByteString;
 
 type
   /// the raw SMBIOS information as filled by GetRawSmbios
@@ -1954,7 +1820,7 @@ type
   /// define which WinAPI token is to be retrieved
   // - define the execution context, i.e. if the token is used for the current
   // process or the current thread
-  // - used e.g. by TSynWindowsPrivileges or CurrentSid()
+  // - used e.g. by TSynWindowsPrivileges or mormot.core.os.security
   TWinTokenType = (
     wttProcess,
     wttThread);
@@ -2046,21 +1912,6 @@ type
   PWinProcessInfo = ^TWinProcessInfo;
   TWinProcessInfoDynArray = array of TWinProcessInfo;
 
-  /// the SID types, as recognized by LookupSid()
-  TSidType = (
-    stUndefined,
-    stTypeUser,
-    stTypeGroup,
-    stTypeDomain,
-    stTypeAlias,
-    stTypeWellKnownGroup,
-    stTypeDeletedAccount,
-    stTypeInvalid,
-    stTypeUnknown,
-    stTypeComputer,
-    stTypeLabel,
-    stTypeLogonSession);
-
 
 function ToText(p: TWinSystemPrivilege): PShortString; overload;
 
@@ -2074,70 +1925,14 @@ function RawTokenOpen(wtt: TWinTokenType; access: cardinal): THandle;
 function RawTokenGetInfo(tok: THandle; tic: TTokenInformationClass;
   var buf: TSynTempBuffer): cardinal;
 
-/// return the SID of a given token, nil if none found
-// - the returned PSid is located within buf temporary buffer
-// - so caller should call buf.Done once this PSid value is not needed any more
-function RawTokenSid(tok: THandle; var buf: TSynTempBuffer): PSid;
+/// retrieve low-level process information, from the Windows API
+// - will set the needed wspDebug / SE_DEBUG_NAME priviledge during the call
+procedure GetProcessInfo(aPid: cardinal; out aInfo: TWinProcessInfo); overload;
 
-/// return the group SIDs of a given token, nil if none found
-// - the returned PSid is located within buf temporary buffer
-// - so caller should call buf.Done once this PSid value is not needed any more
-function RawTokenGroups(tok: THandle; var buf: TSynTempBuffer): PSids;
-
-/// return the group SIDs of a given token as text dynamic array
-function TokenGroupsText(tok: THandle): TRawUtf8DynArray;
-
-/// check if a group SID is part of a given token
-function TokenHasGroup(tok: THandle; sid: PSid): boolean;
-
-/// check if any group SID is part of a given token
-function TokenHasAnyGroup(tok: THandle; const sid: RawSidDynArray): boolean;
-
-/// return the SID of the current user, from process or thread, as text
-// - e.g. 'S-1-5-21-823746769-1624905683-418753922-1000'
-// - optionally returning the name and domain via LookupSid()
-function CurrentSid(wtt: TWinTokenType = wttProcess;
-  name: PRawUtf8 = nil; domain: PRawUtf8 = nil): RawUtf8; overload;
-
-/// return the SID of the current user, from process or thread, as raw binary
-procedure CurrentRawSid(out sid: RawSid; wtt: TWinTokenType = wttProcess;
-  name: PRawUtf8 = nil; domain: PRawUtf8 = nil); overload;
-
-/// return the SID of the current user groups, from process or thread, as text
-function CurrentGroupsSid(wtt: TWinTokenType = wttProcess): TRawUtf8DynArray;
-
-/// recognize the well-known SIDs from the current user, from process or thread
-// - for instance, for an user with administrator rights on Windows, returns
-// $ [wksWorld, wksLocal, wksConsoleLogon, wksIntegrityHigh, wksInteractive,
-// $  wksAuthenticatedUser, wksThisOrganisation, wksBuiltinAdministrators,
-// $  wksBuiltinUsers, wksNtlmAuthentication]
-function CurrentKnownGroups(wtt: TWinTokenType = wttProcess): TWellKnownSids;
-
-/// fast check if the current user, from process or thread, has a well-known group SID
-// - e.g. CurrentUserHasGroup(wksLocalSystem) returns true for LOCAL_SYSTEM user
-function CurrentUserHasGroup(wks: TWellKnownSid;
-  wtt: TWinTokenType = wttProcess): boolean; overload;
-
-/// fast check if the current user, from process or thread, has a given group SID
-function CurrentUserHasGroup(const sid: RawUtf8;
-  wtt: TWinTokenType = wttProcess): boolean; overload;
-
-/// fast check if the current user, from process or thread, has a given group SID
-function CurrentUserHasGroup(sid: PSid;
-  wtt: TWinTokenType = wttProcess): boolean; overload;
-
-/// fast check if the current user, from process or thread, has any given group SID
-function CurrentUserHasAnyGroup(const sid: RawSidDynArray;
-  wtt: TWinTokenType = wttProcess): boolean;
-
-/// fast check if the current user, from process or thread, match a group by name
-// - calls LookupSid() on each group SID of this user, and filter with name/domain
-function CurrentUserHasGroup(const name, domain, server: RawUtf8;
-  wtt: TWinTokenType = wttProcess): boolean; overload;
-
-/// just a wrapper around CurrentUserHasGroup(wksBuiltinAdministrators)
-function CurrentUserIsAdmin: boolean;
-  {$ifdef HASINLINE} inline; {$endif}
+/// retrieve low-level process(es) information, from the Windows API
+// - will set the needed wspDebug / SE_DEBUG_NAME priviledge during the call
+procedure GetProcessInfo(const aPidList: TCardinalDynArray;
+  out aInfo: TWinProcessInfoDynArray); overload;
 
 /// rough detection of 'c:\windows' and 'c:\program files' folders
 function IsSystemFolder(const Folder: TFileName): boolean;
@@ -2155,30 +1950,6 @@ function IsUacVirtualFolder(const Folder: TFileName): boolean;
 // UAC virtualization is disabled and this function returns false
 function IsUacVirtualizationEnabled: boolean;
   {$ifdef CPU64} inline; {$endif}
-
-/// retrieve the name and domain of a given SID
-// - returns stUndefined if the SID could not be resolved by LookupAccountSid()
-function LookupSid(sid: PSid; out name, domain: RawUtf8;
-  const server: RawUtf8 = ''): TSidType; overload;
-
-/// retrieve the name and domain of a given SID, encoded from text
-// - returns stUndefined if the SID could not be resolved by LookupAccountSid()
-function LookupSid(const sid: RawUtf8; out name, domain: RawUtf8;
-  const server: RawUtf8 = ''): TSidType; overload;
-
-/// retrieve the name and domain of a given Token
-function LookupToken(tok: THandle; out name, domain: RawUtf8;
-  const server: RawUtf8 = ''): boolean; overload;
-
-/// retrieve the 'domain\name' combined value of a given Token
-function LookupToken(tok: THandle; const server: RawUtf8 = ''): RawUtf8; overload;
-
-/// retrieve low-level process information, from the Windows API
-procedure GetProcessInfo(aPid: cardinal; out aInfo: TWinProcessInfo); overload;
-
-/// retrieve low-level process(es) information, from the Windows API
-procedure GetProcessInfo(const aPidList: TCardinalDynArray;
-  out aInfo: TWinProcessInfoDynArray); overload;
 
 /// quickly retrieve a Text value from Registry
 // - could be used if TWinRegistry is not needed, e.g. for a single value
@@ -2215,7 +1986,8 @@ function GetTimeZoneInformation(var info: TTimeZoneInformation): DWORD;
 /// allow to change the current system time zone on Windows
 // - don't use this low-level function but the high-level mormot.core.search
 // TSynTimeZone.ChangeOperatingSystemTimeZone method
-// - will use the proper API before and after Vista, if needed
+// - will set the needed wspSystemTime / SE_SYSTEMTIME_NAME priviledge
+// - will select the proper API before and after Vista, if needed
 // - raise EOSException on failure
 procedure SetSystemTimeZone(const info: TDynamicTimeZoneInformation);
 
@@ -2404,17 +2176,18 @@ type
     // - since Windows Vista with Service Pack 1 (SP1), an AES counter-mode
     // based PRNG specified in NIST Special Publication 800-90 is used
     GenRandom: function(hProv: HCRYPTPROV; dwLen: DWORD; pbBuffer: pointer): BOOL; stdcall;
-    /// sign a message (not resolved yet - in crypt32.dll)
-    SignMessage: function(var pSignPara: CRYPT_SIGN_MESSAGE_PARA;
-      fDetachedSignature: BOOL; cToBeSigned: DWORD; rgpbToBeSigned: pointer;
-      var rgcbToBeSigned: DWORD; pbSignedBlob: pointer; var pcbSignedBlob: DWORD): BOOL; stdcall;
-    /// verify a signed message (not resolved yet - in crypt32.dll)
-    VerifyMessageSignature: function(var pVerifyPara: CRYPT_VERIFY_MESSAGE_PARA;
-      dwSignerIndex: DWORD; pbSignedBlob: PByte; cbSignedBlob: DWORD;
-      pbDecoded: PByte; pcbDecoded: LPDWORD; ppSignerCert: PPCCERT_CONTEXT): BOOL; stdcall;
+    /// converts a security descriptor to a string format
+    ConvertSecurityDescriptorToStringSecurityDescriptorA: function(
+      SecurityDescriptor: PSECURITY_DESCRIPTOR; RequestedStringSDRevision: DWORD;
+      SecurityInformation: DWORD; var StringSecurityDescriptor: PAnsiChar;
+      StringSecurityDescriptorLen: LPDWORD): BOOL; stdcall;
+
     /// try to load the CryptoApi on this system
     function Available: boolean;
       {$ifdef HASINLINE}inline;{$endif}
+    /// wrapper around ConvertSecurityDescriptorToStringSecurityDescriptorA()
+    // - see also SecurityDescriptorToText() function in mormot.core.os.security
+    function SecurityDescriptorToText(sd: pointer; out text: RawUtf8): boolean;
   end;
 
 const
@@ -3156,6 +2929,7 @@ function Unicode_WideToAnsi(
 
 /// conversion of some UTF-16 buffer into a temporary Ansi ShortString
 // - used when mormot.core.unicode is an overkill, e.g. TCrtSocket.SockSend()
+// - calls IsAnsiCompatibleW() first to quickly handle any ASCII-7 output
 procedure Unicode_WideToShort(
   W: PWideChar; LW, CodePage: PtrInt; var res: ShortString);
 
@@ -4130,12 +3904,6 @@ function GetFileNameFromUrl(const Uri: RawUtf8): TFileName;
 
 {$else}
 
-/// internal function to avoid linking mormot.core.buffers.pas
-function PosixParseHex32(p: PAnsiChar): integer;
-
-/// internal function to avoid linking mormot.core.buffers.pas
-procedure ParseHex(p: PAnsiChar; b: PByte; n: integer);
-
 /// internal function just wrapping fppoll(POLLIN or POLLPRI)
 function WaitReadPending(fd, timeout: integer): boolean;
 
@@ -4163,6 +3931,15 @@ function PosixFileNames(const Folder: TFileName; Recursive: boolean;
 /// internal function to avoid linking mormot.core.buffers.pas
 // - will output the value as one number with one decimal and KB/MB/GB/TB suffix
 function _oskb(Size: QWord): shortstring;
+
+var
+  /// decode a '3F2504E0-4F89-11D3-9A0C-0305E82C3301' text into a TGuid
+  // - this unit defaults to the RTL, but mormot.core.text.pas will override it
+  ShortToUuid: function(const text: ShortString; out uuid: TGuid): boolean;
+
+  /// append a TGuid into lower-cased '3f2504e0-4f89-11d3-9a0c-0305e82c3301' text
+  // - this unit defaults to the RTL, but mormot.core.text.pas will override it
+  AppendShortUuid: procedure(const u: TGuid; var s: ShortString);
 
 /// direct conversion of a UTF-8 encoded string into a console OEM-encoded string
 // - under Windows, will use the CP_OEM encoding
@@ -4239,42 +4016,6 @@ procedure PatchCodePtrUInt(Code: PPtrUInt; Value: PtrUInt;
 /// low-level i386/x86_64 asm routine patch and redirection
 procedure RedirectCode(Func, RedirectFunc: pointer);
 {$endif CPUINTEL}
-
-
-{ ************** Cross-Platform Charset and CodePage Support }
-
-{$ifdef OSPOSIX}
-const
-  ANSI_CHARSET = 0;
-  DEFAULT_CHARSET = 1;
-  SYMBOL_CHARSET = 2;
-  SHIFTJIS_CHARSET = $80;
-  HANGEUL_CHARSET = 129;
-  GB2312_CHARSET = 134;
-  CHINESEBIG5_CHARSET = 136;
-  OEM_CHARSET = 255;
-  JOHAB_CHARSET = 130;
-  HEBREW_CHARSET = 177;
-  ARABIC_CHARSET = 178;
-  GREEK_CHARSET = 161;
-  TURKISH_CHARSET = 162;
-  VIETNAMESE_CHARSET = 163;
-  THAI_CHARSET = 222;
-  EASTEUROPE_CHARSET = 238;
-  RUSSIAN_CHARSET = 204;
-  BALTIC_CHARSET = 186;
-{$else}
-{$ifdef FPC} // a missing declaration
-const
-  VIETNAMESE_CHARSET = 163;
-{$endif FPC}
-{$endif OSPOSIX}
-
-/// convert a char set to a code page
-function CharSetToCodePage(CharSet: integer): cardinal;
-
-/// convert a code page to a char set
-function CodePageToCharSet(CodePage: cardinal): integer;
 
 
 { **************** TSynLocker/TSynLocked and Low-Level Threading Features }
@@ -4661,9 +4402,9 @@ type
     // - defined in protected section for better inlining and to fix a Delphi
     // compiler bug about warning a missing Windows unit in the uses classes
     procedure RWLock(context: TRWLockContext);
-      {$ifdef HASINLINE} inline; {$endif}
+      {$ifdef HASSAFEINLINE} inline; {$endif}
     procedure RWUnLock(context: TRWLockContext);
-      {$ifdef HASINLINE} inline; {$endif}
+      {$ifdef HASSAFEINLINE} inline; {$endif}
   public
     /// internal padding data, also used to store up to 7 variant values
     // - this memory buffer will ensure no CPU cache line mixup occurs
@@ -4869,13 +4610,13 @@ type
   // - only limitation is that we don't know if WaitFor is signaled or timeout,
   // but this is not a real problem in practice since most code don't need this
   // information or has already its own flag in its implementation logic
-  TSynEvent = class
+  TSynEvent = class(TObjectWithProps)
   protected
     fHandle: pointer; // Windows THandle or FPC PRTLEvent
     fFD: integer;     // for eventfd()
   public
     /// initialize an instance of cross-platform event
-    constructor Create;
+    constructor Create; override;
     /// finalize this instance of cross-platform event
     destructor Destroy; override;
     /// ignore any pending events, so that WaitFor will be set on next SetEvent
@@ -4906,18 +4647,16 @@ type
 function NewSynLocker: PSynLocker;
 
 type
-  {$M+}
-
   /// a persistent-agnostic alternative to TSynPersistentLock
   // - can be used as base class when custom JSON persistence is not needed
   // - consider a TRWLock field as a lighter multi read / exclusive write option
-  TSynLocked = class
+  TSynLocked = class(TObjectWithProps)
   protected
     fSafe: PSynLocker; // TSynLocker would increase inherited fields offset
   public
     /// initialize the instance, and its associated lock
     // - is defined as virtual, just like TObjectWithCustomCreate/TSynPersistent
-    constructor Create; virtual;
+    constructor Create; override;
     /// finalize the instance, and its associated lock
     destructor Destroy; override;
     /// access to the associated instance critical section
@@ -4925,11 +4664,6 @@ type
     property Safe: PSynLocker
       read fSafe;
   end;
-
-  {$M-}
-
-  /// meta-class definition of the TSynLocked hierarchy
-  TSynLockedClass = class of TSynLocked;
 
   /// a thread-safe Pierre L'Ecuyer software random generator
   // - just wrap TLecuyer with a TLighLock
@@ -5452,9 +5186,7 @@ type
       const Dependencies: RawUtf8 = '');
   end;
 
-  {$M+}
   TService = class;
-  {$M-}
 
   /// callback procedure for Windows Service Controller
   TServiceControlHandler = procedure(CtrlCode: cardinal); stdcall;
@@ -5467,7 +5199,7 @@ type
 
   /// abstract class to let an executable implement a Windows Service
   // - do not use this class directly, but TServiceSingle
-  TService = class
+  TService = class(TObjectWithProps)
   protected
     fServiceName: RawUtf8;
     fDisplayName: RawUtf8;
@@ -5757,7 +5489,7 @@ const
   PARSCOMMAND_POSIX = {$ifdef OSWINDOWS} false {$else} true {$endif};
 
 /// low-level parsing of a RunCommand() execution command
-// - parse and fills argv^[0..argc^-1] with corresponding arguments, after
+// - parse and fill argv^[0..argc^-1] with corresponding arguments, after
 // un-escaping and un-quoting if applicable, using temp^ to store the content
 // - if argv=nil, do only the parsing, not the argument extraction - could be
 // used for fast validation of the command line syntax
@@ -5898,6 +5630,47 @@ implementation
 { ****************** Some Cross-System Type and Constant Definitions }
 
 const
+  // sorted by occurrence for in-order O(n) search via IntegerScanIndex()
+  METHODNAME: array[TUriMethod] of PUtf8Char = (
+    'GET',
+    'POST',
+    'PUT',
+    'DELETE',
+    'HEAD',
+    'BEGIN',
+    'END',
+    'ABORT',
+    'LOCK',
+    'UNLOCK',
+    'STATE',
+    'PATCH',
+    'OPTIONS',
+    '');
+var
+  // quick O(n) search of the first 4 characters within L1 cache (56 bytes)
+  METHODNAME32: array[TUriMethod] of cardinal;
+
+function ToMethod(const method: RawUtf8): TUriMethod;
+begin
+  case length(method) of
+    3 .. 7:
+      result := TUriMethod(IntegerScanIndex(@METHODNAME32, length(METHODNAME32) - 1,
+        (PCardinal(method)^) and $dfdfdfdf) + 1);
+  else
+    result := mNone;
+  end;
+end;
+
+function ToText(m: TUriMethod): PUtf8Char;
+begin
+  dec(m); // METHODNAME[] has no mNone entry
+  if cardinal(m) < cardinal(ord(high(METHODNAME))) then
+    result := METHODNAME[m]
+  else
+    result := nil;
+end;
+
+const
   // StatusCodeToReason() StatusCodeToText() table to avoid memory allocations
   // - roughly sorted by actual usage order for WordScanIndex()
   HTTP_REASON: array[0..44] of RawUtf8 = (
@@ -6025,7 +5798,7 @@ begin
     Code := 999; // ensure stay in TShort47
   result[0] := #0;
   AppendShortCardinal(Code, result);
-  AppendShortChar(' ', result);
+  AppendShortChar(' ', @result);
   AppendShortAnsi7String(StatusCodeToText(Code)^, result);
 end;
 
@@ -6076,413 +5849,48 @@ begin
   result[ord(result[0])] := 'B';
 end;
 
-function SidLength(sid: PSid): PtrInt;
+{$ifdef ISDELPHI} // missing convenient RTL function in Delphi
+function TryStringToGUID(const s: string; var uuid: TGuid): boolean;
 begin
-  if sid = nil then
-    result := 0
-  else
-    result := integer(sid^.SubAuthorityCount) shl 2 + 8;
+  try
+    uuid := StringToGUID(s);
+    result := true;
+  except
+    result := false;
+  end;
+end;
+{$endif ISDELPHI}
+
+function _ShortToUuid(const text: ShortString; out uuid: TGuid): boolean;
+begin
+  result := (text[0] = #36) and
+            TryStringToGUID('{' + string(text) + '}', uuid); // RTL
 end;
 
-function SidCompare(a, b: PSid): integer;
+procedure _AppendShortUuid(const u: TGuid; var s: ShortString);
+begin
+  AppendShortAnsi7String(AnsiString(LowerCase(copy(GUIDToString(u), 2, 36))), s);
+end;
+
+function TextToUuid(const text: RawUtf8; out uuid: TGuid): boolean;
 var
-  l: PtrInt;
+  tmp: string[36];
 begin
-  l := SidLength(a);
-  result := l - SidLength(b);
-  if result = 0 then
-    result := MemCmp(pointer(a), pointer(b), l);
-end;
-
-procedure ToRawSid(sid: PSid; out result: RawSid);
-begin
-  if sid <> nil then
-    FastSetRawByteString(RawByteString(result), sid, SidLength(sid));
-end;
-
-procedure SidToTextShort(sid: PSid; var result: shortstring);
-var
-  a: PSidAuth;
-  i: PtrInt;
-begin // faster than ConvertSidToStringSidA(), and cross-platform
-  if (sid = nil ) or
-     (sid^.Revision <> 1) then
-  begin
-    result[0] := #0; // invalid SID
+  result := false;
+  if length(text) <> 36 then
     exit;
-  end;
-  a := @sid^.IdentifierAuthority;
-  if (a^[0] <> 0) or
-     (a^[1] <> 0) then
-  begin
-    result := 'S-1-0x';
-    for i := 0 to 5 do
-      AppendShortByteHex(a^[i], result)
-  end
-  else
-  begin
-    result := 'S-1-';
-    AppendShortCardinal(bswap32(PCardinal(@a^[2])^), result);
-  end;
-  for i := 0 to integer(sid^.SubAuthorityCount) - 1 do
-  begin
-    AppendShortChar('-', result);
-    AppendShortCardinal(sid^.SubAuthority[i], result);
-  end;
+  tmp[0] := #36;
+  MoveFast(pointer(text)^, tmp[1], 36);
+  result := ShortToUuid(tmp, uuid); // may call mormot.core.text
 end;
 
-function SidToText(sid: PSid): RawUtf8;
+procedure UuidToText(const u: TGuid; var result: RawUtf8); // seldom used
 var
-  tmp: shortstring;
+  tmp: ShortString;
 begin
-  SidToTextShort(sid, tmp);
+  tmp[0] := #0;
+  AppendShortUuid(u, tmp); // may call mormot.core.text
   FastSetString(result, @tmp[1], ord(tmp[0]));
-end;
-
-function SidsToText(sids: PSids): TRawUtf8DynArray;
-var
-  i: PtrInt;
-begin
-  result := nil;
-  SetLength(result, length(sids));
-  for i := 0 to length(sids) - 1 do
-    result[i] := SidToText(sids[i]);
-end;
-
-function IsValidRawSid(const sid: RawSid): boolean;
-var
-  l: PtrInt;
-begin
-  l := length(sid);
-  result := (l >= SizeOf(TSidAuth) + 2) and
-            (SidLength(pointer(sid)) = l)
-end;
-
-function HasSid(const sids: PSids; sid: PSid): boolean;
-var
-  i: PtrInt;
-begin
-  result := true;
-  if sid <> nil then
-    for i := 0 to length(sids) - 1 do
-      if SidCompare(sid, sids[i]) = 0 then
-        exit;
-  result := false;
-end;
-
-function HasAnySid(const sids: PSids; const sid: RawSidDynArray): boolean;
-var
-  i: PtrInt;
-begin
-  result := true;
-  for i := 0 to length(sid) - 1 do
-    if HasSid(sids, pointer(sid[i])) then
-      exit;
-  result := false;
-end;
-
-procedure AddRawSid(var sids: RawSidDynArray; sid: PSid);
-var
-  n: PtrInt;
-begin
-  if sid = nil then
-    exit;
-  n := length(sids);
-  SetLength(sids, n + 1);
-  ToRawSid(sid, sids[n]);
-end;
-
-function RawSidToText(const sid: RawSid): RawUtf8;
-begin
-  if IsValidRawSid(sid) then
-    result := SidToText(pointer(sid))
-  else
-    result := '';
-end;
-
-// GetNextCardinal() on POSIX does not ignore trailing '-'
-function GetNextUInt32(var P: PUtf8Char): cardinal;
-var
-  c: cardinal;
-begin
-  result := 0;
-  if P = nil then
-    exit;
-  repeat
-    c := ord(P^) - 48;
-    if c > 9 then
-      break
-    else
-      result := result * 10 + c;
-    inc(P);
-  until false;
-  while P^ in ['.', '-', ' '] do
-    inc(P);
-end;
-
-function TextToSid(P: PUtf8Char; out sid: TSid): boolean;
-begin
-  result := false;
-  if (P = nil) or
-     (PCardinal(P)^ <>
-        ord('S') + ord('-') shl 8 + ord('1') shl 16 + ord('-') shl 24) then
-    exit;
-  inc(P, 4);
-  if not (P^ in ['1'..'9']) then
-    exit;
-  PInt64(@sid)^ := 1;
-  PCardinal(@sid.IdentifierAuthority[2])^ := bswap32(GetNextUInt32(P));
-  while P^ in ['0'..'9'] do
-  begin
-    sid.SubAuthority[sid.SubAuthorityCount] := GetNextUInt32(P);
-    inc(sid.SubAuthorityCount);
-    if sid.SubAuthorityCount = 0 then
-      exit; // avoid any overflow
-  end;
-  result := P^ = #0
-end;
-
-function TextToRawSid(const text: RawUtf8): RawSid;
-begin
-  TextToRawSid(text, result);
-end;
-
-function TextToRawSid(const text: RawUtf8; out sid: RawSid): boolean;
-var
-  tmp: TSid; // maximum size possible on stack (1032 bytes)
-begin
-  result := TextToSid(pointer(text), tmp);
-  if result then
-    ToRawSid(@tmp, sid)
-end;
-
-var
-  KNOWN_SID_SAFE: TLightLock; // lighter than GlobalLock/GlobalUnLock
-  KNOWN_SID: array[TWellKnownSid] of RawSid;
-  KNOWN_SID_TEXT: array[TWellKnownSid] of string[15];
-const
-  INTEGRITY_SID: array[0..7] of word = ( // S-1-16-x known values
-    0, 4096, 8192, 8448, 12288, 16384, 20480, 28672);
-
-procedure ComputeKnownSid(wks: TWellKnownSid);
-var
-  sid: TSid;
-begin
-  PInt64(@sid)^ := $0101; // sid.Revision=1, sid.SubAuthorityCount=1
-  if wks <= wksLocal then
-  begin // S-1-1-0
-    sid.IdentifierAuthority[5] := ord(wks);
-    sid.SubAuthority[0] := 0;
-  end
-  else if wks = wksConsoleLogon then
-  begin // S-1-2-1
-    sid.IdentifierAuthority[5] := 2;
-    sid.SubAuthority[0] := 1;
-  end
-  else if wks <= wksCreatorGroupServer then
-  begin // S-1-3-0
-    sid.IdentifierAuthority[5] := 3;
-    sid.SubAuthority[0] := ord(wks) - ord(wksCreatorOwner);
-  end
-  else if wks <= wksIntegritySecureProcess then
-  begin
-    sid.IdentifierAuthority[5] := 16; // S-1-16-x
-    sid.SubAuthority[0] := INTEGRITY_SID[ord(wks) - ord(wksIntegrityUntrusted)];
-  end
-  else if wks <= wksAuthenticationKeyPropertyAttestation then
-  begin // S-1-18-1
-    sid.IdentifierAuthority[5] := 18;
-    sid.SubAuthority[0] := ord(wks) - (ord(wksAuthenticationAuthorityAsserted) - 1)
-  end
-  else
-  begin // S-1-5-x
-    sid.IdentifierAuthority[5] := 5;
-    if wks = wksNtAuthority then
-      sid.SubAuthorityCount := 0
-    else if wks <= wksInteractive then
-      sid.SubAuthority[0] := ord(wks) - ord(wksNtAuthority)
-    else if wks <= wksThisOrganisation then
-      sid.SubAuthority[0] := ord(wks) - (ord(wksNtAuthority) - 1)
-    else if wks <= wksNetworkService then
-      sid.SubAuthority[0] := ord(wks) - (ord(wksNtAuthority) - 2)
-    else if wks <= wksLocalAccountAndAdministrator then //  S-1-5-113
-      sid.SubAuthority[0] := ord(wks) - (ord(wksLocalAccount) - 113)
-    else
-    begin
-      sid.SubAuthority[0] := 32;
-      if wks <> wksBuiltinDomain then
-      begin
-        sid.SubAuthorityCount := 2;
-        if wks <= wksBuiltinDcomUsers then
-          sid.SubAuthority[1] := ord(wks) - (ord(wksBuiltinAdministrators) - 544)
-        else if wks <= wksBuiltinDeviceOwners then // S-1-5-32-583
-          sid.SubAuthority[1] := ord(wks) - (ord(wksBuiltinIUsers) - 568)
-        else if wks <= wksCapabilityContacts then
-        begin // S-1-15-3-1
-          sid.IdentifierAuthority[5] := 15;
-          sid.SubAuthority[0] := 3;
-          sid.SubAuthority[1] := ord(wks) - (ord(wksCapabilityInternetClient) - 1)
-        end
-        else if wks <= wksBuiltinAnyRestrictedPackage then
-        begin // S-1-15-2-1
-          sid.IdentifierAuthority[5] := 15;
-          sid.SubAuthority[0] := 2;
-          sid.SubAuthority[1] := ord(wks) - (ord(wksBuiltinAnyPackage) - 1)
-        end
-        else if wks <= wksDigestAuthentication then
-        begin
-          sid.SubAuthority[0] := 64;
-          case wks of
-            wksNtlmAuthentication:
-              sid.SubAuthority[1] := 10; // S-1-5-64-10
-            wksSChannelAuthentication:
-              sid.SubAuthority[1] := 14;
-            wksDigestAuthentication:
-              sid.SubAuthority[1] := 21;
-          end;
-        end;
-      end;
-    end;
-  end;
-  KNOWN_SID_SAFE.Lock;
-  if KNOWN_SID[wks] = '' then
-  begin
-    SidToTextShort(@sid, KNOWN_SID_TEXT[wks]);
-    ToRawSid(@sid, KNOWN_SID[wks]); // to be set last
-  end;
-  KNOWN_SID_SAFE.UnLock;
-end;
-
-function KnownRawSid(wks: TWellKnownSid): RawSid;
-begin
-  if (wks <> wksNull) and
-     (KNOWN_SID[wks] = '') then
-    ComputeKnownSid(wks);
-  result := KNOWN_SID[wks];
-end;
-
-function KnownSidToText(wks: TWellKnownSid): PShortString;
-begin
-  if (wks <> wksNull) and
-     (KNOWN_SID[wks] = '') then
-    ComputeKnownSid(wks);
-  result := @KNOWN_SID_TEXT[wks];
-end;
-
-// https://learn.microsoft.com/en-us/windows/win32/secauthz/well-known-sids
-// https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-dtyp/81d92bba-d22b-4a8c-908a-554ab29148ab
-
-function SidToKnown(sid: PSid): TWellKnownSid;
-var
-  c: integer;
-begin
-  result := wksNull; // not recognized
-  if (sid = nil) or
-     (sid.Revision <> 1) or
-     (PCardinal(@sid.IdentifierAuthority)^ <> 0) or
-     (sid.IdentifierAuthority[4] <> 0) then
-    exit;
-  case sid.SubAuthorityCount of // very fast O(1) SID binary recognition
-    0:
-      if sid.IdentifierAuthority[5] = 5 then
-        result := wksNtAuthority; // S-1-5
-    1:
-      begin
-        c := sid.SubAuthority[0];
-        case sid.IdentifierAuthority[5] of
-          1:
-            if c = 0 then
-              result := wksWorld; // S-1-1-0
-          2:
-            if c in [0 .. 1] then // S-1-2-x
-              result := TWellKnownSid(ord(wksLocal) + c);
-          3:
-            if c in [0 .. 3] then // S-1-3-x
-              result := TWellKnownSid(ord(wksCreatorOwner) + c);
-          5:
-            case c of // S-1-5-x
-              1 .. 4:
-                result := TWellKnownSid((ord(wksDialup) - 1) + c);
-              6 .. 15:
-                result := TWellKnownSid((ord(wksService) - 6) + c);
-              17 .. 20:
-                result := TWellKnownSid((ord(wksIisUser) - 17) + c);
-              32:
-                result := wksBuiltinDomain;
-              113 .. 114:
-                result := TWellKnownSid(integer(ord(wksLocalAccount) - 113) + c);
-            end;
-          16:
-            begin // S-1-16-x
-              c := WordScanIndex(@INTEGRITY_SID, length(INTEGRITY_SID), c);
-              if c >= 0 then
-                result := TWellKnownSid(ord(wksIntegrityUntrusted) + c);
-            end;
-          18:
-            if c in [1 .. 6] then // S-1-18-x
-              result :=
-                TWellKnownSid((ord(wksAuthenticationAuthorityAsserted) - 1) + c);
-        end;
-      end;
-    2:
-      begin
-        c := sid.SubAuthority[1];
-        case sid.IdentifierAuthority[5] of
-          5:
-            case sid.SubAuthority[0] of
-              32: // S-1-5-32-544
-                case c of
-                  544 .. 562:
-                    result := TWellKnownSid(ord(wksBuiltinAdministrators) + c - 544);
-                  568 .. 583:
-                    result := TWellKnownSid(ord(wksBuiltinIUsers) + c - 568);
-                end;
-              64: // S-1-5-64-10
-                case c of
-                  10:
-                    result := wksNtlmAuthentication;
-                  14:
-                    result := wksSChannelAuthentication;
-                  21:
-                    result := wksDigestAuthentication;
-                end;
-            end;
-          15:
-            case sid.SubAuthority[0] of
-              2:
-                if c in [1 .. 2] then // S-1-15-2-x
-                  result := TWellKnownSid(ord(pred(wksBuiltinAnyPackage)) + c);
-              3:
-                if c in [1 .. 12] then // S-1-15-3-x
-                  result := TWellKnownSid(ord(pred(wksCapabilityInternetClient)) + c);
-            end;
-        end;
-      end;
-  end;
-end;
-
-function SidToKnown(const text: RawUtf8): TWellKnownSid;
-var
-  sid: TSid;
-begin
-  if TextToSid(pointer(text), sid) then
-    result := SidToKnown(@sid)
-  else
-    result := wksNull;
-end;
-
-function SidToKnownGroups(const sids: PSids): TWellKnownSids;
-var
-  k: TWellKnownSid;
-  i: PtrInt;
-begin
-  result := [];
-  for i := 0 to length(sids) - 1 do
-  begin
-    k := SidToKnown(sids[i]);
-    if k <> wksNull then
-      include(result, k);
-  end;
 end;
 
 
@@ -6626,6 +6034,8 @@ const
     $0d81,  // actCortexA720
     $0d82,  // actCortexX4
     $0d84,  // actNeoverseV3
+    $0d85,  // actCortextX925
+    $0d87,  // actCortextA725
     $0d8e); // actNeoverseN3
 
   ARMCPU_IMPL: array[TArmCpuImplementer] of byte = (
@@ -6664,7 +6074,9 @@ const
      'Neoverse-V1', 'Cortex-A78', 'Cortex-A78AE', 'Cortex-X1', 'Cortex-510',
      'Cortex-710', 'Cortex-X2', 'Neoverse-N2', 'Neoverse-E1', 'Cortex-A78C',
      'Cortex-X1C', 'Cortex-A715', 'Cortex-X3', 'Neoverse-V2', 'Cortex-A520',
-     'Cortex-A720', 'Cortex-X4', 'Neoverse-V3', 'Neoverse-N3');
+     'Cortex-A720', 'Cortex-X4', 'Neoverse-V3', 'Cortex-X925', 'Cortex-A725',
+     'Neoverse-N3');
+
   ARMCPU_IMPL_TXT: array[TArmCpuImplementer] of string[18] = (
       '',
       'ARM', 'Broadcom', 'Cavium', 'DEC', 'FUJITSU', 'HiSilicon', 'Infineon',
@@ -6737,74 +6149,6 @@ end;
 {$endif CPUINTEL}
 
 
-
-{ ************** Cross-Platform Charset and CodePage Support }
-
-function CharSetToCodePage(CharSet: integer): cardinal;
-begin
-  case CharSet of
-    SHIFTJIS_CHARSET:
-      result := 932;
-    HANGEUL_CHARSET:
-      result := 949;
-    GB2312_CHARSET:
-      result := 936;
-    HEBREW_CHARSET:
-      result := 1255;
-    ARABIC_CHARSET:
-      result := 1256;
-    GREEK_CHARSET:
-      result := 1253;
-    TURKISH_CHARSET:
-      result := 1254;
-    VIETNAMESE_CHARSET:
-      result := 1258;
-    THAI_CHARSET:
-      result := 874;
-    EASTEUROPE_CHARSET:
-      result := 1250;
-    RUSSIAN_CHARSET:
-      result := 1251;
-    BALTIC_CHARSET:
-      result := 1257;
-  else
-    result := CP_WINANSI; // default ANSI_CHARSET = iso-8859-1 = windows-1252
-  end;
-end;
-
-function CodePageToCharSet(CodePage: cardinal): integer;
-begin
-  case CodePage of
-    932:
-      result := SHIFTJIS_CHARSET;
-    949:
-      result := HANGEUL_CHARSET;
-    936:
-      result := GB2312_CHARSET;
-    1255:
-      result := HEBREW_CHARSET;
-    1256:
-      result := ARABIC_CHARSET;
-    1253:
-      result := GREEK_CHARSET;
-    1254:
-      result := TURKISH_CHARSET;
-    1258:
-      result := VIETNAMESE_CHARSET;
-    874:
-      result := THAI_CHARSET;
-    1250:
-      result := EASTEUROPE_CHARSET;
-    1251:
-      result := RUSSIAN_CHARSET;
-    1257:
-      result := BALTIC_CHARSET;
-  else
-    result := ANSI_CHARSET; // default is iso-8859-1 = windows-1252
-  end;
-end;
-
-
 { ****************** Unicode, Time, File, Console, Library process }
 
 procedure InitializeCriticalSectionIfNeededAndEnter(var cs: TRTLCriticalSection);
@@ -6846,10 +6190,11 @@ var
 begin
   if LW <= 0 then
     res[0] := #0
-  else if (LW <= 255) and
-          IsAnsiCompatibleW(W, LW) then
+  else if IsAnsiCompatibleW(W, LW) then
   begin
-    // fast handling of pure English content
+    // fast handling of pure ASCII-7 content (very common case)
+    if LW > 255 then
+      LW := 255;
     res[0] := AnsiChar(LW);
     i := 1;
     repeat
@@ -6878,7 +6223,7 @@ begin
   DecodeDate(DateTime, yy, mm, dd);
   DecodeTime(DateTime, h, m, s, ms);
   if (yy < 1980) or
-     (yy > 2099) then
+     (yy > 2099) then // hard limit is 2108, but WinAPI up to 2099/12/31
     result := 0
   else
     result := (s shr 1) or (m shl 5) or (h shl 11) or
@@ -6890,11 +6235,11 @@ var
   date, time: TDateTime;
 begin
   with PLongRec(@WinTime)^ do
-  if TryEncodeDate(Hi shr 9 + 1980, Hi shr 5 and 15, Hi and 31, date) and
-     TryEncodeTime(Lo shr 11, Lo shr 5 and 63, Lo and 31 shl 1, 0, time) then
-    result := date + time
-  else
-    result := 0;
+    if TryEncodeDate(Hi shr 9 + 1980, Hi shr 5 and 15, Hi and 31, date) and
+       TryEncodeTime(Lo shr 11, Lo shr 5 and 63, Lo and 31 shl 1, 0, time) then
+      result := date + time
+    else
+      result := 0;
 end;
 
 const
@@ -8465,13 +7810,18 @@ end;
 
 procedure SetExecutableVersion(const aVersionText: RawUtf8);
 var
-  p: PUtf8Char;
-  i: integer;
+  p: PAnsiChar;
+  i: PtrInt;
+  tmp: RawUtf8;
   ver: array[0 .. 3] of integer;
 begin
-  p := pointer(aVersionText);
+  FastSetString(tmp, pointer(aVersionText), length(aVersionText));
+  p := pointer(tmp);
+  for i := 0 to length(tmp) - 1 do
+    if p[i] = '.' then
+      p[i] := ' '; // as expected by GetNextItem
   for i := 0 to 3 do
-    ver[i] := GetNextUInt32(p);
+    ver[i] := GetCardinal(pointer(GetNextItem(p)));
   SetExecutableVersion(ver[0], ver[1], ver[2], ver[3]);
 end;
 
@@ -8722,12 +8072,45 @@ begin
   Describe([], clkArg, description, '', index + 1);
 end;
 
+function TExecutableCommandLine.ArgU(index: integer; const description: RawUtf8;
+  optional: boolean): RawUtf8;
+begin
+  result := '';
+  if Arg(index, description, optional) then
+    result := Args[index];
+end;
+
 function TExecutableCommandLine.ArgString(index: integer;
   const description: RawUtf8; optional: boolean): string;
 begin
   result := '';
   if Arg(index, description, optional) then
-    result := string(Args[0]);
+    result := string(Args[index]);
+end;
+
+function TExecutableCommandLine.ArgFile(index: integer;
+  const description: RawUtf8; optional, isFolder: boolean): TFileName;
+begin
+  result := ArgString(index, description, optional);
+  if result <> '' then
+    result := CheckFileName(result, isFolder);
+end;
+
+const
+  FD: array[boolean] of string[7] = ('File', 'Folder');
+
+function TExecutableCommandLine.CheckFileName(const name: TFileName;
+  isFolder: boolean): TFileName;
+begin
+  result := ExpandFileName(name);
+  if isFolder then
+  begin
+    if DirectoryExists(result) then
+      exit;
+  end
+  else if FileExists(result) then
+    exit;
+  _fmt('%s%s %s does not exist%s', [fUnknown, FD[isFolder], result, fLineFeed], fUnknown);
 end;
 
 function TExecutableCommandLine.Arg(const name, description: RawUtf8): boolean;
@@ -8741,9 +8124,23 @@ begin
   result := Find(name, clkArg, description) >= 0;
 end;
 
+function UnAmp(const name: RawUtf8): TRawUtf8DynArray;
+var
+  i: PtrInt;
+begin
+  i := PosExChar('&', name);
+  SetLength(result, ord(i <> 0) + 1);
+  result[0] := name;
+  if i = 0 then
+    exit;
+  delete(result[0], i, 1);
+  result[1] := result[0]; // &# char first
+  result[0] := copy(name, i + 1, 1);
+end;
+
 function TExecutableCommandLine.Option(const name, description: RawUtf8): boolean;
 begin
-  result := Find([name], clkOption, description) >= 0;
+  result := Find(UnAmp(name), clkOption, description) >= 0
 end;
 
 function TExecutableCommandLine.Option(const name: array of RawUtf8;
@@ -8755,7 +8152,7 @@ end;
 function TExecutableCommandLine.Get(const name: RawUtf8; out value: RawUtf8;
   const description, default: RawUtf8): boolean;
 begin
-  result := Get([name], value, description, default);
+  result := Get(UnAmp(name), value, description, default);
 end;
 
 procedure AddRawUtf8(var Values: TRawUtf8DynArray; const Value: RawUtf8);
@@ -8811,7 +8208,7 @@ end;
 function TExecutableCommandLine.Get(const name: RawUtf8; out value: string;
   const description: RawUtf8; const default: string): boolean;
 begin
-  result := Get([name], value, description, default);
+  result := Get(UnAmp(name), value, description, default);
 end;
 
 function TExecutableCommandLine.Get(const name: array of RawUtf8;
@@ -8829,7 +8226,7 @@ end;
 function TExecutableCommandLine.Get(const name: RawUtf8;
   out value: TStringDynarray; const description: RawUtf8): boolean;
 begin
-  result := Get([name], value, description);
+  result := Get(UnAmp(name), value, description);
 end;
 
 function TExecutableCommandLine.Get(const name: array of RawUtf8;
@@ -8847,7 +8244,7 @@ end;
 function TExecutableCommandLine.Get(const name: RawUtf8;
   out value: integer; const description: RawUtf8; default: integer): boolean;
 begin
-  result := Get([name], value, description, default);
+  result := Get(UnAmp(name), value, description, default);
 end;
 
 function defI(default: integer): RawUtf8;
@@ -8877,7 +8274,7 @@ end;
 function TExecutableCommandLine.Get(const name: RawUtf8; min, max: integer;
   out value: integer; const description: RawUtf8; default: integer): boolean;
 begin
-  result := Get([name], min, max, value, description, default);
+  result := Get(UnAmp(name), min, max, value, description, default);
 end;
 
 function TExecutableCommandLine.Get(const name: array of RawUtf8;
@@ -8891,7 +8288,7 @@ end;
 
 function TExecutableCommandLine.Has(const name: RawUtf8): boolean;
 begin
-  result := Find([name], clkParam) >= 0;
+  result := Find(UnAmp(name), clkParam) >= 0;
 end;
 
 function TExecutableCommandLine.Has(const name: array of RawUtf8): boolean;
@@ -8902,7 +8299,7 @@ end;
 function TExecutableCommandLine.Param(
   const name, description, default: RawUtf8): RawUtf8;
 begin
-  Get([name], result, description, default);
+  Get(UnAmp(name), result, description, default);
 end;
 
 function TExecutableCommandLine.Param(const name: array of RawUtf8;
@@ -8920,7 +8317,13 @@ end;
 function TExecutableCommandLine.Param(const name: RawUtf8;
   default: integer; const description: RawUtf8): integer;
 begin
-  Get([name], result, description, default);
+  Get(UnAmp(name), result, description, default);
+end;
+
+function TExecutableCommandLine.ParamS(const name: RawUtf8;
+  const description: RawUtf8; const default: string): string;
+begin
+  Get(UnAmp(name), result, description, default);
 end;
 
 function TExecutableCommandLine.Param(const name: array of RawUtf8;
@@ -8972,7 +8375,7 @@ var
   clk: TExecutableCommandLineKind;
   i: PtrInt;
 begin
-  result := '';
+  result := fUnknown;
   for clk := low(fRetrieved) to high(fRetrieved) do
     for i := 0 to length(fRetrieved[clk]) - 1 do
       if not fRetrieved[clk][i] then
@@ -9128,12 +8531,9 @@ begin
 end;
 
 function _GetExecutableLocation(aAddress: pointer): ShortString;
-var
-  i: PtrInt;
 begin // return the address as hexadecimal - hexstr() is not available on Delphi
   result[0] := #0;
-  for i := SizeOf(aAddress) - 1 downto 0 do
-    AppendShortByteHex(PByteArray(aAddress)[i], result);
+  AppendShortIntHex(PtrUInt(aAddress), result);
 end; // mormot.core.log.pas will properly decode debug info - and handle .mab
 
 var
@@ -9397,18 +8797,6 @@ begin
   result := _Smbios[info];
 end;
 
-{$ifdef ISDELPHI} // missing convenient RTL function in Delphi
-function TryStringToGUID(const s: string; var uuid: TGuid): boolean;
-begin
-  try
-    uuid := StringToGUID(s);
-    result := true;
-  except
-    result := false;
-  end;
-end;
-{$endif ISDELPHI}
-
 procedure GetComputerUuid(out uuid: TGuid; disable: TGetComputerUuid);
 var
   n, i: PtrInt;
@@ -9431,7 +8819,7 @@ begin
     ComputeGetSmbios; // maybe from local SMB_CACHE file for non-root
   if not (gcuSmbios in disable) and
      (_Smbios[sbiUuid] <> '') and
-     TryStringToGUID('{' + string(_Smbios[sbiUuid]) + '}', uuid) then
+     TextToUuid(_Smbios[sbiUuid], uuid) then
     exit;
   // did we already compute (and persist) this UUID?
   if disable = [] then // we persist a fully-qualified UUID only
@@ -9501,7 +8889,7 @@ begin
       exit;
   end;
   GetComputerUuid(u, disable);
-  result := RawUtf8(LowerCase(copy(GUIDToString(u), 2, 36)));
+  UuidToText(u, result);
   if disable <> [] then
     exit; // cache fully-qualified UUID only
   GlobalLock;
@@ -9535,7 +8923,7 @@ begin
     uid.D2 := swap(uid.D2);
     uid.D3 := swap(uid.D3);
   end;
-  dest := RawUtf8(UpperCase(copy(GUIDToString(uid), 2, 36)));
+  UuidToText(uid, dest);
 end;
 
 function DecodeSmbios(var raw: TRawSmbiosInfo; out info: TSmbiosBasicInfos): PtrInt;
@@ -11042,6 +10430,8 @@ end;
 
 
 procedure InitializeUnit;
+var
+  m: TUriMethod;
 begin
   {$ifdef ISFPC27}
   SetMultiByteConversionCodePage(CP_UTF8);
@@ -11061,9 +10451,13 @@ begin
   NULL_STR_VAR := 'null';
   BOOL_UTF8[false] := 'false';
   BOOL_UTF8[true]  := 'true';
+  for m := low(METHODNAME32) to pred(high(METHODNAME32)) do
+    METHODNAME32[m] := PCardinal(METHODNAME[m])^;
   // minimal stubs which will be properly implemented in mormot.core.log.pas
   GetExecutableLocation := _GetExecutableLocation;
   SetThreadName := _SetThreadName;
+  ShortToUuid := _ShortToUuid;
+  AppendShortUuid := _AppendShortUuid;
 end;
 
 procedure FinalizeUnit;
