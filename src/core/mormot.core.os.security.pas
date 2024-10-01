@@ -10,6 +10,7 @@ unit mormot.core.os.security;
   - Security IDentifier (SID) Definitions
   - Security Descriptor Self-Relative Binary Structures
   - Access Control List (DACL/SACL) Definitions
+  - Conditional ACE Expressions SDDL and Binary Support
   - Security Descriptor Definition Language (SDDL)
   - TSecurityDescriptor Wrapper Object
   - Windows API Specific Security Types and Functions
@@ -22,9 +23,8 @@ unit mormot.core.os.security;
 
   *****************************************************************************
 
-    TODO: - proper ACE conditional expression binary + SDDL support: 2.4.4.17.1
-          - resources attributes
-    at https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-dtyp
+  MS-DTYP: https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-dtyp
+  TODO: resources attributes - see [MS-DTYP] 2.4.10.1
 }
 
 interface
@@ -32,6 +32,9 @@ interface
 {$I ..\mormot.defines.inc}
 
 uses
+  {$ifdef OSWINDOWS}
+  Windows, // for Windows API Specific Security Types and Functions below
+  {$endif OSWINDOWS}
   sysutils,
   classes,
   mormot.core.base,
@@ -61,6 +64,7 @@ type
   /// Security IDentifier (SID) binary format, as retrieved e.g. by Windows API
   // - this definition is not detailed on oldest Delphi, and not available on
   // POSIX, whereas it makes sense to also have it, e.g. for server process
+  // - its maximum used length is 1032 bytes
   // - see [MS-DTYP] 2.4.2 SID
   TSid = packed record
     Revision: byte;
@@ -95,8 +99,12 @@ function HasAnySid(const sids: PSids; const sid: RawSidDynArray): boolean;
 /// append a SID buffer pointer to a dynamic array of SID buffers
 procedure AddRawSid(var sids: RawSidDynArray; sid: PSid);
 
+/// append a SID as text, following the standard representation
+procedure SidAppendShort(sid: PSid; var s: ShortString);
+
 /// convert a Security IDentifier as text, following the standard representation
 procedure SidToTextShort(sid: PSid; var result: ShortString);
+  {$ifdef HASINLINE}inline;{$endif}
 
 /// convert a Security IDentifier as text, following the standard representation
 function SidToText(sid: PSid): RawUtf8; overload;
@@ -124,6 +132,10 @@ function TextToRawSid(const text: RawUtf8): RawSid; overload;
 /// parse a Security IDentifier text, following the standard representation
 function TextToRawSid(const text: RawUtf8; out sid: RawSid): boolean; overload;
 
+/// quickly check if a SID is in 'S-1-5-21-xx-xx-xx-RID' domain form
+function SidIsDomain(s: PSid): boolean;
+  {$ifdef HASINLINE} inline; {$endif}
+
 /// decode a domain SID text into a generic binary RID value
 // - returns true if Domain is '', or is in its 'S-1-5-21-xx-xx-xx' domain form
 // - will also accepts any 'S-1-5-21-xx-xx-xx-yyy' form, e.g. the current user SID
@@ -133,9 +145,10 @@ function TextToRawSid(const text: RawUtf8; out sid: RawSid): boolean; overload;
 function TryDomainTextToSid(const Domain: RawUtf8; out Dom: RawSid): boolean;
 
 /// quickly check if two binary SID buffers domain do overlap
-// - one of the values should be a domain SID in S-1-5-21-xx-xx-xx-RID layout,
-// typically from TryDomainTextToSid() output
-function SidSameDomain(a, b: PSid): boolean;
+// - sid should be a RID in S-1-5-21-xx-xx-xx-RID layout
+// - dom should be a domain SID in S-1-5-21-xx-xx-xx[-RID] layout, typically
+// from TryDomainTextToSid() output
+function SidSameDomain(sid, dom: PSid): boolean;
   {$ifdef HASINLINE} inline; {$endif}
 
 
@@ -152,16 +165,17 @@ type
     wksCreatorGroup,                              // S-1-3-1       CG
     wksCreatorOwnerServer,                        // S-1-3-2
     wksCreatorGroupServer,                        // S-1-3-3
+    wksCreatorOwnerRights,                        // S-1-3-4       OW
     wksIntegrityUntrusted,                        // S-1-16-0
-    wksIntegrityLow,                              // S-1-16-4096
-    wksIntegrityMedium,                           // S-1-16-8192
-    wksIntegrityMediumPlus,                       // S-1-16-8448
-    wksIntegrityHigh,                             // S-1-16-12288
-    wksIntegritySystem,                           // S-1-16-16384
+    wksIntegrityLow,                              // S-1-16-4096   LW
+    wksIntegrityMedium,                           // S-1-16-8192   ME
+    wksIntegrityMediumPlus,                       // S-1-16-8448   MP
+    wksIntegrityHigh,                             // S-1-16-12288  HI
+    wksIntegritySystem,                           // S-1-16-16384  SI
     wksIntegrityProtectedProcess,                 // S-1-16-20480
     wksIntegritySecureProcess,                    // S-1-16-28672
     wksAuthenticationAuthorityAsserted,           // S-1-18-1
-    wksAuthenticationServiceAsserted,             // S-1-18-2
+    wksAuthenticationServiceAsserted,             // S-1-18-2      SS
     wksAuthenticationFreshKeyAuth,                // S-1-18-3
     wksAuthenticationKeyTrust,                    // S-1-18-4
     wksAuthenticationKeyPropertyMfa,              // S-1-18-5
@@ -174,7 +188,7 @@ type
     wksService,                                   // S-1-5-6       SU
     wksAnonymous,                                 // S-1-5-7       AN
     wksProxy,                                     // S-1-5-8
-    wksEnterpriseControllers,                     // S-1-5-9
+    wksEnterpriseControllers,                     // S-1-5-9       ED
     wksSelf,                                      // S-1-5-10      PS
     wksAuthenticatedUser,                         // S-1-5-11      AU
     wksRestrictedCode,                            // S-1-5-12      RC
@@ -183,8 +197,8 @@ type
     wksThisOrganisation,                          // S-1-5-15
     wksIisUser,                                   // S-1-5-17
     wksLocalSystem,                               // S-1-5-18      SY
-    wksLocalService,                              // S-1-5-19
-    wksNetworkService,                            // S-1-5-20
+    wksLocalService,                              // S-1-5-19      LS
+    wksNetworkService,                            // S-1-5-20      NS
     wksLocalAccount,                              // S-1-5-113
     wksLocalAccountAndAdministrator,              // S-1-5-114
     wksBuiltinDomain,                             // S-1-5-32
@@ -197,7 +211,7 @@ type
     wksBuiltinPrintOperators,                     // S-1-5-32-550  PO
     wksBuiltinBackupOperators,                    // S-1-5-32-551  BO
     wksBuiltinReplicator,                         // S-1-5-32-552  RE
-    wksBuiltinRasServers,                         // S-1-5-32-553  RS
+    wksBuiltinRasServers,                         // S-1-5-32-553
     wksBuiltinPreWindows2000CompatibleAccess,     // S-1-5-32-554  RU
     wksBuiltinRemoteDesktopUsers,                 // S-1-5-32-555  RD
     wksBuiltinNetworkConfigurationOperators,      // S-1-5-32-556  NO
@@ -216,14 +230,15 @@ type
     wksBuiltinCertSvcDComAccessGroup,             // S-1-5-32-574  CD
     wksBuiltinRdsRemoteAccessServers,             // S-1-5-32-575  RA
     wksBuiltinRdsEndpointServers,                 // S-1-5-32-576  ES
-    wksBuiltinRdsManagementServers,               // S-1-5-32-577
+    wksBuiltinRdsManagementServers,               // S-1-5-32-577  MS
     wksBuiltinHyperVAdmins,                       // S-1-5-32-578  HA
     wksBuiltinAccessControlAssistanceOperators,   // S-1-5-32-579  AA
-    wksBuiltinRemoteManagementUsers,              // S-1-5-32-580
+    wksBuiltinRemoteManagementUsers,              // S-1-5-32-580  RM
     wksBuiltinDefaultSystemManagedGroup,          // S-1-5-32-581
     wksBuiltinStorageReplicaAdmins,               // S-1-5-32-582
     wksBuiltinDeviceOwners,                       // S-1-5-32-583
     wksBuiltinWriteRestrictedCode,                // S-1-5-33      WR
+    wksBuiltinUserModeDriver,                     // S-1-5-84-0-0-0-0-0 UD
     wksCapabilityInternetClient,                  // S-1-15-3-1
     wksCapabilityInternetClientServer,            // S-1-15-3-2
     wksCapabilityPrivateNetworkClientServer,      // S-1-15-3-3
@@ -236,7 +251,7 @@ type
     wksCapabilityRemovableStorage,                // S-1-15-3-10
     wksCapabilityAppointments,                    // S-1-15-3-11
     wksCapabilityContacts,                        // S-1-15-3-12
-    wksBuiltinAnyPackage,                         // S-1-15-2-1
+    wksBuiltinAnyPackage,                         // S-1-15-2-1    AC
     wksBuiltinAnyRestrictedPackage,               // S-1-15-2-2
     wksNtlmAuthentication,                        // S-1-5-64-10
     wksSChannelAuthentication,                    // S-1-5-64-14
@@ -265,11 +280,8 @@ type
     wkrGroupProtectedUsers,          // DOMAIN_GROUP_RID_PROTECTED_USERS AP
     wkrGroupKeyAdmins,               // DOMAIN_GROUP_RID_KEY_ADMINS  KA
     wkrGroupEntrepriseKeyAdmins,     // DOMAIN_GROUP_RID_ENTERPRISE_KEY_ADMINS EK
-    wkrSecurityMandatoryLow,         // SECURITY_MANDATORY_LOW_RID    LW
-    wkrSecurityMandatoryMedium,      // SECURITY_MANDATORY_MEDIUM_RID ME
-    wkrSecurityMandatoryMediumPlus,  // SECURITY_MANDATORY_MEDIUM_PLUS_RID MP
-    wkrSecurityMandatoryHigh,        // SECURITY_MANDATORY_HIGH_RID   HI
-    wkrSecurityMandatorySystem);     // SECURITY_MANDATORY_SYSTEM_RID SI
+    wrkGroupRasServers,              // DOMAIN_ALIAS_RID_RAS_SERVERS RS
+    wrkUserModeHwOperator);          // DOMAIN_ALIAS_RID_USER_MODE_HARDWARE_OPERATORS HO
 
   /// define a set of well-known RID
   TWellKnownRids = set of TWellKnownRid;
@@ -281,6 +293,9 @@ function KnownRawSid(wks: TWellKnownSid): RawSid; overload;
 
 /// returns a Security IDentifier of a well-known SID as binary
 procedure KnownRawSid(wks: TWellKnownSid; var sid: RawSid); overload;
+
+/// returns a Security IDentifier of a well-known SID as static binary buffer
+procedure KnownRawSid(wks: TWellKnownSid; var sid: TSid); overload;
 
 /// returns a Security IDentifier of a well-known SID as standard text
 // - e.g. wksBuiltinAdministrators as 'S-1-5-32-544'
@@ -308,34 +323,35 @@ function KnownSidToText(wkr: TWellKnownRid; const Domain: RawUtf8): RawUtf8; ove
 
 /// compute a binary SID from a decoded binary Domain and a well-known RID
 // - more efficient than KnownRawSid() overload and KnownSidToText()
-procedure KnownRidSid(wkr: TWellKnownRid; dom: PSid; var result: RawSid);
+procedure KnownRidSid(wkr: TWellKnownRid; dom: PSid; var result: RawSid); overload;
+
+/// compute a static binary SID from a decoded binary Domain and a well-known RID
+procedure KnownRidSid(wkr: TWellKnownRid; dom: PSid; var result: TSid); overload;
 
 const
   /// the S-1-5-21-xx-xx-xx-RID trailer value of each known RID
   WKR_RID: array[TWellKnownRid] of word = (
-    $1f2,    // wkrGroupReadOnly
-    $1f4,    // wkrUserAdmin
-    $1f5,    // wkrUserGuest
-    $1f6,    // wkrServiceKrbtgt
-    $200,    // wkrGroupAdmins
-    $201,    // wkrGroupUsers
-    $202,    // wkrGroupGuests
-    $203,    // wkrGroupComputers
-    $204,    // wkrGroupControllers
-    $205,    // wkrGroupCertAdmins
-    $206,    // wkrGroupSchemaAdmins
-    $207,    // wkrGroupEntrepriseAdmins
-    $208,    // wkrGroupPolicyAdmins
-    $209,    // wkrGroupReadOnlyControllers
-    $20a,    // wkrGroupCloneableControllers
-    $20d,    // wkrGroupProtectedUsers
-    $20e,    // wkrGroupKeyAdmins
-    $20f,    // wkrGroupEntrepriseKeyAdmins
-    $1000,   // wkrSecurityMandatoryLow
-    $2000,   // wkrSecurityMandatoryMedium
-    $2100,   // wkrSecurityMandatoryMediumPlus
-    $3000,   // wkrSecurityMandatoryHigh
-    $4000);  // wkrSecurityMandatorySystem
+    $1f2,    // RO wkrGroupReadOnly
+    $1f4,    // LA wkrUserAdmin
+    $1f5,    // LG wkrUserGuest
+    $1f6,    //    wkrServiceKrbtgt
+    $200,    // DA wkrGroupAdmins
+    $201,    // DU wkrGroupUsers
+    $202,    // DG wkrGroupGuests
+    $203,    // DC wkrGroupComputers
+    $204,    // DD wkrGroupControllers
+    $205,    // CA wkrGroupCertAdmins
+    $206,    // SA wkrGroupSchemaAdmins
+    $207,    // EA wkrGroupEntrepriseAdmins
+    $208,    // PA wkrGroupPolicyAdmins
+    $209,    //    wkrGroupReadOnlyControllers
+    $20a,    // CN wkrGroupCloneableControllers
+    $20d,    // AP wkrGroupProtectedUsers
+    $20e,    // KA wkrGroupKeyAdmins
+    $20f,    // EK wkrGroupEntrepriseKeyAdmins
+    $229,    // RS wrkGroupRasServers
+    $248);   // HO wrkUserModeHwOperator
+  WKR_RID_MAX = $248;
 
 
 { ****************** Security Descriptor Self-Relative Binary Structures }
@@ -367,7 +383,7 @@ type
   // - see [MS-DTYP] 2.4.6 SECURITY_DESCRIPTOR
   TRawSD = packed record
     Revision: byte;
-    Sbz1: byte;
+    Sbz1: byte;      // always DWORD-aligned
     Control: TSecControls;
     Owner: cardinal; // not pointers, but self-relative position
     Group: cardinal;
@@ -383,7 +399,7 @@ type
     Sbz1: byte;
     AclSize: word; // including TRawAcl header + all ACEs
     AceCount: word;
-    Sbz2: word;
+    Sbz2: word;    // always DWORD-aligned
   end;
   PRawAcl = ^TRawAcl;
 
@@ -494,245 +510,6 @@ type
     sarKeyWrite,            // KW
     sarKeyExecute);         // KE
 
-  /// binary conditional ACE token types
-  // - as sctLiteral, sctRelationalOperator, sctLogicalOperator and sctAttribute
-  // - see [MS-DTYP] 2.4.4.17.4 and following
-  TSecConditionalToken = (
-    sctPadding              = $00,
-    sctInt8                 = $01,
-    sctInt16                = $02,
-    sctInt32                = $03,
-    sctInt64                = $04,
-    sctUnicode              = $10,
-    sctOctetString          = $18,
-    sctComposite            = $50,
-    sctSid                  = $51,
-    sctEqual                = $80,
-    sctNotEqual             = $81,
-    sctLessThan             = $82,
-    sctLessThanOrEqual      = $83,
-    sctGreaterThan          = $84,
-    sctGreaterThanOrEqual   = $85,
-    sctContains             = $86,
-    sctExists               = $87,
-    sctAnyOf                = $88,
-    sctMemberOf             = $89,
-    sctDeviceMemberOf       = $8a,
-    sctMemberOfAny          = $8b,
-    sctDeviceMemberOfAny    = $8c,
-    sctNotExists            = $8d,
-    sctNotContains          = $8e,
-    sctNotAnyOf             = $8f,
-    sctNotMemberOf          = $90,
-    sctNotDeviceMemberOf    = $91,
-    sctNotMemberOfAny       = $92,
-    sctNotDeviceMemberOfAny = $93,
-    sctAnd                  = $a0,
-    sctOr                   = $a1,
-    sctNot                  = $a2,
-    sctLocalAttribute       = $f8,
-    sctUserAttribute        = $f9,
-    sctResourceAttribute    = $fa,
-    sctDeviceAttribute      = $fb);
-
-  /// binary conditional ACE integer base indicator for SDDL/display purposes
-  // - see [MS-DTYP] 2.4.4.17.5 Literal Tokens
-  TSecConditionalBase = (
-    scbUndefined   = 0,
-    scbOctal       = 1,
-    scbDecimal     = 2,
-    scbHexadecimal = 3);
-
-  /// binary conditional ACE integer sign indicator for SDDL/display purposes
-  // - see [MS-DTYP] 2.4.4.17.5 Literal Tokens
-  TSecConditionalSign = (
-    scsUndefined = 0,
-    scsPositive  = 1,
-    scsNegative  = 2,
-    scsNone      = 3);
-
-const
-  /// literal integer ACE token types
-  // - see [MS-DTYP] 2.4.4.17.5 Literal Tokens
-  sctInt = [
-    sctInt8 .. sctInt64];
-
-  /// literal ACE token types
-  // - see [MS-DTYP] 2.4.4.17.5 Literal Tokens
-  sctLiteral =
-    sctInt + [
-      sctUnicode,
-      sctOctetString,
-      sctComposite,
-      sctSid];
-
-  /// unary relational operator ACE token types
-  // - operand type must be either a SID literal, or a composite, each of
-  // whose elements is a SID literal
-  // - see [MS-DTYP] 2.4.4.17.6 Relational Operator Tokens
-  sctUnaryOperator = [
-    sctMemberOf .. sctDeviceMemberOfAny,
-    sctNotMemberOf .. sctNotDeviceMemberOfAny];
-
-  /// binary relational operator ACE token types
-  // - expects two operands, left-hand-side (LHS - in simple or @Prefixed form)
-  // and right-hand-side (RHS - in @Prefixed form or literal)
-  // - see [MS-DTYP] 2.4.4.17.6 Relational Operator Tokens
-  sctBinaryOperator = [
-    sctEqual .. sctContains,
-    sctAnyOf,
-    sctNotContains,
-    sctNotAnyOf];
-
-  /// relational operator ACE token types
-  // - see [MS-DTYP] 2.4.4.17.6 Relational Operator Tokens
-  sctRelationalOperator = sctUnaryOperator + sctBinaryOperator;
-
-  /// unary logical operator ACE token types
-  // - see [MS-DTYP] 2.4.4.17.7 Logical Operator Tokens
-  sctUnaryLogicalOperator = [
-    sctExists,
-    sctNotExists,
-    sctNot];
-
-  /// binary logical operator ACE token types
-  // - see [MS-DTYP] 2.4.4.17.7 Logical Operator Tokens
-  sctBinaryLogicalOperator = [
-    sctAnd,
-    sctOr];
-
-  /// logical operator ACE token types
-  // - operand type must be conditional expressions and/or expression terms:
-  // a sctLiteral operand would return an error
-  // - see [MS-DTYP] 2.4.4.17.7 Logical Operator Tokens
-  sctLogicalOperator = sctUnaryLogicalOperator + sctBinaryLogicalOperator;
-
-  /// attribute ACE token types
-  // - attributes can be associated with local environments, users, resources,
-  // or devices
-  // - see [MS-DTYP] 2.4.4.17.8 Attribute Tokens
-  sctAttribute = [
-    sctLocalAttribute,
-    sctUserAttribute,
-    sctResourceAttribute,
-    sctDeviceAttribute];
-
-  /// operands ACE token types
-  sctOperand = sctLiteral + sctAttribute;
-
-  /// single-operand ACE token types
-  sctUnary = sctUnaryOperator + sctUnaryLogicalOperator;
-
-  /// dual-operand ACE token types
-  sctBinary = sctBinaryOperator + sctBinaryLogicalOperator;
-
-  /// maximum depth of the TAceTree resolution
-  // - should be <= 255 to match the TAceTreeNode index fields as byte
-  // - 192 nodes seems fair enough for realistic ACE conditional expressions
-  MAX_TREE_NODE = 191;
-
-  /// maximum length, in bytes, of a TAceTree input binary or SDDL text
-  // - absolute maximum is below 64KB (in TRawAce.AceSize)
-  // - 8KB of conditional expression is consistent with the MAX_TREE_NODE limit
-  MAX_TREE_BYTES = 8 shl 10;
-
-type
-  /// internal type used for TRawAceLiteral.Int
-  TRawAceLiteralInt = packed record
-    Value: Int64;
-    Sign: TSecConditionalSign;
-    Base: TSecConditionalBase;
-  end;
-
-  /// token binary serialization for satConditional ACE literals and attributes
-  // - the TSecAce.Opaque binary field starts with 'artx' ACE_CONDITION_SIGNATURE
-  // and a series of entries, describing an expression tree in reverse Polish order
-  // - only literals and attributes do appear here, because operands appear
-  // before the operator in reverse Polish order, so are already on the stack
-  // - see [MS-DTYP] 2.4.4.17.4 Conditional ACE Binary Formats
-  TRawAceLiteral = packed record
-    case Token: TSecConditionalToken of
-      sctInt8,
-      sctInt16,
-      sctInt32,
-      sctInt64: (
-        Int: TRawAceLiteralInt);
-      sctUnicode,
-      sctLocalAttribute,
-      sctUserAttribute,
-      sctResourceAttribute,
-      sctDeviceAttribute: (
-        UnicodeBytes: cardinal;
-        Unicode: array[byte] of WideChar);
-      sctOctetString: (
-        OctetBytes: cardinal;
-        Octet: array[byte] of byte);
-      sctComposite: (
-        CompositeBytes: cardinal;
-        Composite: array[byte] of byte);
-      sctSid: (
-        SidBytes: cardinal;
-        Sid: TSid);
-  end;
-  PRawAceLiteral = ^TRawAceLiteral;
-
-  /// define one node in the TAceTree.Stack
-  // - here pointers are just 8-bit indexes to the main TAceTree.Tokens[]
-  TAceTreeNode = packed record
-    /// position of this node in the input binary or text
-    Position: word;
-    /// index of the left or single operand
-    Left: byte;
-    /// index of the right operand
-    Right: byte;
-  end;
-  /// points to one node in the TAceTree.Stack
-  PAceTreeNode = ^TAceTreeNode;
-
-  /// store a processing tree of a conditional ACE
-  // - used for conversion between binary and SDDL formats, or execution
-  // - can easily be allocated on stack for efficient process
-  TAceTree = record
-  private
-    function AddBinaryNode(position, left, right: cardinal): boolean;
-    function AddTextNode(position, len: cardinal; tok: TSecConditionalToken): boolean;
-    procedure BinaryNodeText(index: byte; var u: RawUtf8);
-    function TextParseNode(var p: PUtf8Char; out tok: TSecConditionalToken): integer;
-    function TextParse(var p: PUtf8Char; out tok: TSecConditionalToken): integer;
-  public
-    /// the associated input storage
-    // - typically maps an TSecAce.Opaque buffer or a RawUtf8 SDDL text
-    Storage: PUtf8Char;
-    /// number of bytes in Storage
-    StorageSize: cardinal;
-    /// number of TAceTreeNode stored in Tokens[] and Stack[]
-    Count: byte;
-    /// set after FromBinary(), or after FromText()
-    StorageForm: (isNone, isBinary, isText);
-    /// stores the actual tree of this conditional expression
-    Stack: array[0 .. MAX_TREE_NODE] of TAceTreeNode;
-    /// the recognized token after FromText SDDL parsing
-    TextToken: array[0 .. MAX_TREE_NODE] of TSecConditionalToken;
-    /// the recognized operand length after FromText SDDL parsing
-    TextLen: array[0 .. MAX_TREE_NODE] of byte;
-    /// initialize the Storage with some binary or SDDL text input
-    // - caller should then call FromBinary or FromSddl
-    function Init(const Input: RawByteString): boolean;
-    /// fill Stack[] nodes from a binary conditional ACE
-    // - this process is very fast, and requires no memory allocation
-    function FromBinary: boolean;
-    /// save the internal Stack[] nodes into a binary conditional ACE
-    function ToBinary: RawByteString;
-    /// fill Stack[] nodes from a SDDL conditional ACE text
-    function FromText: boolean;
-    /// compute the SDDL conditional ACE text of the stored Stack[]
-    // - use a simple recursive algorithm, with temporary RawUtf8 allocations
-    function ToText: RawUtf8;
-  end;
-
-/// compute the length in bytes of an ACE token binary entry
-function AceTokenLength(v: PRawAceLiteral): PtrUInt;
-
 const
   /// 'artx' prefix to identify a conditional ACE binary buffer
   // - see [MS-DTYP] 2.4.4.17.4 Conditional ACE Binary Formats
@@ -841,6 +618,30 @@ type
     sasDacl,
     sasSacl);
 
+  /// result of TSecurityDescriptor.FromText and other SDDL parsing methods
+  TAceTextParse = (
+    atpSuccess,
+    atpInvalidOwner,
+    atpInvalidGroup,
+    atpInvalidType,
+    atpInvalidFlags,
+    atpInvalidMask,
+    atpInvalidUuid,
+    atpNoExpression,
+    atpTooManyExpressions,
+    atpTooManyParenthesis,
+    atpMissingParenthesis,
+    atpMissingFinal,
+    atpTooBigExpression,
+    atpMissingExpression,
+    atpUnexpectedToken,
+    atpInvalidExpression,
+    atpInvalidComposite,
+    atpInvalidUnicode,
+    atpInvalidSid,
+    atpInvalidOctet,
+    atpInvalidContent);
+
   {$A-} // both TSecAce and TSecurityDescriptor should be packed for JSON serialization
 
   /// define one discretionary/system access entry (ACE)
@@ -866,7 +667,7 @@ type
     // - e.g. is a conditional expression binary for satConditional ACEs like
     // '(@User.Project Any_of @Resource.Project)', or for satResourceAttribute
     // is a CLAIM_SECURITY_ATTRIBUTE_RELATIVE_V1 struct
-    // - may end with up to 3 zero bytes, for DWORD ACE binary alignment
+    // - may end with up to 3 zero bytes, for binary DWORD alignment
     Opaque: RawByteString;
     /// the associated Object Type GUID (satObject only)
     ObjectType: TGuid;
@@ -879,9 +680,9 @@ type
     /// append this entry as SDDL text into an existing buffer
     // - could also generate SDDL RID placeholders, if dom binary is supplied,
     // e.g. S-1-5-21-xx-xx-xx-512 (wkrGroupAdmins) into 'DA'
-    procedure AppendAsText(var s: ShortString; dom: PSid);
+    procedure AppendAsText(var s: ShortString; var sddl: RawUtf8; dom: PSid);
     /// decode a SDDL ACE textual representation into this (cleared) entry
-    function FromText(var p: PUtf8Char; dom: PSid): boolean;
+    function FromText(var p: PUtf8Char; dom: PSid): TAceTextParse;
     /// encode this entry into a self-relative binary buffer
     // - returns the output length in bytes
     // - if dest is nil, will compute the length but won't write anything
@@ -903,8 +704,8 @@ type
     function MaskText(const maskSddl: RawUtf8): boolean; overload;
     /// get the ACE conditional expression, as stored in Opaque binary
     function ConditionalExpression: RawUtf8; overload;
-    /// parse a ACE conditional expression, and assign it to Opaque binary
-    function ConditionalExpression(const condExp: RawUtf8): boolean; overload;
+    /// parse a ACE conditional expression, and assign it to the Opaque binary
+    function ConditionalExpression(const condExp: RawUtf8): TAceTextParse; overload;
   end;
 
   /// pointer to one ACE of the TSecurityDescriptor ACL
@@ -914,6 +715,8 @@ type
   // - as stored in TSecurityDescriptor Dacl[] Sacl[] access control lists (ACL)
   TSecAcl = array of TSecAce;
   PSecAcl = ^TSecAcl;
+
+  {$A+}
 
 const
   /// the ACE which have just a Mask and SID in their definition
@@ -967,13 +770,323 @@ const
     safFailedAccess];
 
 
+{ ******************* Conditional ACE Expressions SDDL and Binary Support }
+
+type
+  /// token types for the conditional ACE binary storage
+  // - the conditional ACE is stored as a binary tree of value/operator nodes
+  // - mainly as sctLiteral, sctAttribute or sctOperator tokens
+  // - tokens >= sctInternalFinal are never serialized, but used internally
+  // during SddlNextOperand() SDDL text parsing
+  // - see [MS-DTYP] 2.4.4.17.4 and following
+  TSecConditionalToken = (
+    sctPadding              = $00,
+    sctInt8                 = $01,
+    sctInt16                = $02,
+    sctInt32                = $03,
+    sctInt64                = $04,
+    sctUnicode              = $10,
+    sctOctetString          = $18,
+    sctComposite            = $50,
+    sctSid                  = $51,
+    sctEqual                = $80,
+    sctNotEqual             = $81,
+    sctLessThan             = $82,
+    sctLessThanOrEqual      = $83,
+    sctGreaterThan          = $84,
+    sctGreaterThanOrEqual   = $85,
+    sctContains             = $86,
+    sctExists               = $87,
+    sctAnyOf                = $88,
+    sctMemberOf             = $89,
+    sctDeviceMemberOf       = $8a,
+    sctMemberOfAny          = $8b,
+    sctDeviceMemberOfAny    = $8c,
+    sctNotExists            = $8d,
+    sctNotContains          = $8e,
+    sctNotAnyOf             = $8f,
+    sctNotMemberOf          = $90,
+    sctNotDeviceMemberOf    = $91,
+    sctNotMemberOfAny       = $92,
+    sctNotDeviceMemberOfAny = $93,
+    sctAnd                  = $a0,
+    sctOr                   = $a1,
+    sctNot                  = $a2,
+    sctLocalAttribute       = $f8,
+    sctUserAttribute        = $f9,
+    sctResourceAttribute    = $fa,
+    sctDeviceAttribute      = $fb,
+    // internal tokens - never serialized into binary
+    sctInternalFinal        = $fc,
+    sctInternalParenthOpen  = $fe,
+    sctInternalParenthClose = $ff);
+  PSecConditionalToken = ^TSecConditionalToken;
+
+  /// binary conditional ACE integer base indicator for SDDL/display purposes
+  // - see [MS-DTYP] 2.4.4.17.5 Literal Tokens
+  TSecConditionalBase = (
+    scbUndefined   = 0,
+    scbOctal       = 1,
+    scbDecimal     = 2,
+    scbHexadecimal = 3);
+
+  /// binary conditional ACE integer sign indicator for SDDL/display purposes
+  // - see [MS-DTYP] 2.4.4.17.5 Literal Tokens
+  TSecConditionalSign = (
+    scsUndefined = 0,
+    scsPositive  = 1,
+    scsNegative  = 2,
+    scsNone      = 3);
+
+const
+  /// literal integer ACE token types
+  // - see [MS-DTYP] 2.4.4.17.5 Literal Tokens
+  sctInt = [
+    sctInt8 .. sctInt64];
+
+  /// literal ACE token types
+  // - see [MS-DTYP] 2.4.4.17.5 Literal Tokens
+  sctLiteral =
+    sctInt + [
+      sctUnicode,
+      sctOctetString,
+      sctComposite,
+      sctSid];
+
+  /// unary relational operator ACE token types
+  // - operand type must be either a SID literal, or a composite, each of
+  // whose elements is a SID literal
+  // - see [MS-DTYP] 2.4.4.17.6 Relational Operator Tokens
+  sctUnaryOperator = [
+    sctMemberOf .. sctDeviceMemberOfAny,
+    sctNotMemberOf .. sctNotDeviceMemberOfAny];
+
+  /// binary relational operator ACE token types
+  // - expects two operands, left-hand-side (LHS - in simple or @Prefixed form)
+  // and right-hand-side (RHS - in @Prefixed form or literal)
+  // - see [MS-DTYP] 2.4.4.17.6 Relational Operator Tokens
+  sctBinaryOperator = [
+    sctEqual .. sctContains,
+    sctAnyOf,
+    sctNotContains,
+    sctNotAnyOf];
+
+  /// relational operator ACE token types
+  // - see [MS-DTYP] 2.4.4.17.6 Relational Operator Tokens
+  sctRelationalOperator = sctUnaryOperator + sctBinaryOperator;
+
+  /// unary logical operator ACE token types
+  // - see [MS-DTYP] 2.4.4.17.7 Logical Operator Tokens
+  sctUnaryLogicalOperator = [
+    sctExists,
+    sctNotExists,
+    sctNot];
+
+  /// binary logical operator ACE token types
+  // - see [MS-DTYP] 2.4.4.17.7 Logical Operator Tokens
+  sctBinaryLogicalOperator = [
+    sctAnd,
+    sctOr];
+
+  /// logical operator ACE token types
+  // - operand type must be conditional expressions and/or expression terms:
+  // a sctLiteral operand would return an error
+  // - see [MS-DTYP] 2.4.4.17.7 Logical Operator Tokens
+  sctLogicalOperator = sctUnaryLogicalOperator + sctBinaryLogicalOperator;
+
+  /// attribute ACE token types
+  // - attributes can be associated with local environments, users, resources,
+  // or devices
+  // - see [MS-DTYP] 2.4.4.17.8 Attribute Tokens
+  sctAttribute = [
+    sctLocalAttribute,
+    sctUserAttribute,
+    sctResourceAttribute,
+    sctDeviceAttribute];
+
+  /// operands ACE token types
+  sctOperand = sctLiteral + sctAttribute;
+
+  /// single-operand ACE token types
+  sctUnary = sctUnaryOperator + sctUnaryLogicalOperator;
+
+  /// dual-operand ACE token types
+  sctBinary = sctBinaryOperator + sctBinaryLogicalOperator;
+
+  /// operator ACE tokens
+  sctOperator = sctUnary + sctBinary;
+
+  /// maximum depth of the TAceBinaryTree/TAceTextTree resolution
+  // - should be <= 255 to match the nodes index fields as byte
+  // - 192 nodes seems fair enough for realistic ACE conditional expressions
+  MAX_TREE_NODE = 191;
+
+  /// maximum length, in bytes, of a TAceBinaryTree/TAceTextTree binary/text input
+  // - absolute maximum is below 64KB (in TRawAce.AceSize)
+  // - 8KB of conditional expression is consistent with the MAX_TREE_NODE limit
+  MAX_TREE_BYTES = 8 shl 10;
+
+type
+  /// internal type used for TRawAceLiteral.Int
+  TRawAceLiteralInt = packed record
+    /// the actual value is always stored as 64-bit little-endian
+    Value: Int64;
+    /// can customize the sign when serialized as SDDL text
+    Sign: TSecConditionalSign;
+    /// can customize the base when serialized as SDDL text
+    Base: TSecConditionalBase;
+  end;
+
+  /// token binary serialization for satConditional ACE literals and attributes
+  // - the TSecAce.Opaque binary field starts with 'artx' ACE_CONDITION_SIGNATURE
+  // and a series of entries, describing an expression tree in reverse Polish order
+  // - only literals and attributes do appear here, because operands appear
+  // before the operator in reverse Polish order, so are already on the stack
+  // - see [MS-DTYP] 2.4.4.17.4 Conditional ACE Binary Formats
+  TRawAceLiteral = packed record
+    case Token: TSecConditionalToken of
+      sctInt8,
+      sctInt16,
+      sctInt32,
+      sctInt64: (
+        Int: TRawAceLiteralInt);
+      sctUnicode,
+      sctLocalAttribute,
+      sctUserAttribute,
+      sctResourceAttribute,
+      sctDeviceAttribute: (
+        UnicodeBytes: cardinal;
+        Unicode: array[byte] of WideChar);
+      sctOctetString: (
+        OctetBytes: cardinal;
+        Octet: array[byte] of byte);
+      sctComposite: (
+        CompositeBytes: cardinal;
+        Composite: array[byte] of byte);
+      sctSid: (
+        SidBytes: cardinal;
+        Sid: TSid);
+  end;
+  PRawAceLiteral = ^TRawAceLiteral;
+
+  /// define one node in the TAceBinaryTree.Nodes
+  // - here pointers are just 8-bit indexes to the main TAceBinaryTree.Nodes[]
+  TAceBinaryTreeNode = packed record
+    /// position of this node in the input binary or text
+    Position: word;
+    /// index of the left or single operand
+    Left: byte;
+    /// index of the right operand
+    Right: byte;
+  end;
+  /// points to one node in the TAceBinaryTree.Nodes
+  PAceBinaryTreeNode = ^TAceBinaryTreeNode;
+
+  /// store a processing tree of a conditional ACE in binary format
+  // - used for conversion from binary to SDDL text format, or execution
+  // - can easily be allocated on stack for efficient process
+  {$ifdef USERECORDWITHMETHODS}
+  TAceBinaryTree = record
+  {$else}
+  TAceBinaryTree = object
+  {$endif USERECORDWITHMETHODS}
+  private
+    function AddNode(position, left, right: cardinal): boolean;
+    procedure GetNodeText(index: byte; var u: RawUtf8);
+  public
+    /// the associated input storage, typically mapping an TSecAce.Opaque buffer
+    Storage: PUtf8Char;
+    /// number of bytes in Storage
+    StorageSize: cardinal;
+    /// number of TAceTreeNode stored in Tokens[] and Stack[]
+    Count: byte;
+    /// stores the actual tree of this conditional expression
+    Nodes: array[0 .. MAX_TREE_NODE] of TAceBinaryTreeNode;
+    /// fill Nodes[] tree from a binary conditional ACE
+    // - this process is very fast, and requires no memory allocation
+    function FromBinary(const Input: RawByteString): boolean;
+    /// save the internal Stack[] nodes into a binary conditional ACE
+    function ToBinary: RawByteString;
+    /// compute the SDDL conditional ACE text of the stored Stack[]
+    // - use a simple recursive algorithm, with temporary RawUtf8 allocations
+    function ToText: RawUtf8;
+  end;
+
+  /// define one node in the TAceTextTree.Nodes
+  // - here pointers are just 8-bit indexes to the main TAceTextTree.Nodes[]
+  TAceTextTreeNode = packed record
+    /// position of this node in the input binary or text
+    Position: word;
+    /// actual recognized token
+    Token: TSecConditionalToken;
+    /// index of the left or single operand
+    Left: byte;
+    /// index of the right operand
+    Right: byte;
+    /// number of UTF-8 bytes parsed at Position
+    Length: byte;
+  end;
+
+  /// store a processing tree of a conditional ACE in binary format
+  // - used for conversion from SDDL text to binary format, or execution
+  // - can easily be allocated on stack for efficient process
+  {$ifdef USERECORDWITHMETHODS}
+  TAceTextTree = record
+  {$else}
+  TAceTextTree = object
+  {$endif USERECORDWITHMETHODS}
+  private
+    TextCurrent: PUtf8Char;
+    TokenCurrent: TSecConditionalToken;
+    Root: byte;
+    ParentCount: byte;
+    function AddNode(position, len: cardinal): integer;
+    function ParseNextToken: integer;
+    function ParseExpr: integer;
+    function AppendBinary(var bin: TSynTempBuffer; node: integer): boolean;
+    function RawAppendBinary(var bin: TSynTempBuffer;
+      const node: TAceTextTreeNode): boolean;
+  public
+    /// the associated SDDL text input storage
+    Storage: PUtf8Char;
+    /// number of bytes in Storage
+    StorageSize: cardinal;
+    /// number of TAceTreeNode stored in Tokens[] and Stack[]
+    Count: byte;
+    /// actual status after FromText() or ToBinary processing
+    Error: TAceTextParse;
+    /// stores the actual tree of this conditional expression
+    Nodes: array[0 .. MAX_TREE_NODE] of TAceTextTreeNode;
+    /// fill Nodes[] tree from a SDDL text conditional ACE
+    // - not all input will be parsed during this initial step: only the
+    // global parsing is done, not detailed Unicode or composite parsing
+    function FromText(const Input: RawUtf8): TAceTextParse; overload;
+    /// fill Nodes[] tree from a SDDL text conditional ACE
+    // - Storage/StorageSize should have been set before calling
+    function FromText: TAceTextParse; overload;
+    /// save the internal Stack[] nodes into a SDDL text conditional ACE
+    function ToText: RawUtf8;
+    /// compute the binary conditional ACE of the stored Stack[]
+    // - will also parse the nested Unicode or composite expressions from the
+    // SDDL input, so this method could also set Error and return ''
+    // - no temporary memory allocation is done during this process
+    function ToBinary: RawByteString;
+  end;
+
+/// compute the length in bytes of an ACE token binary entry
+function AceTokenLength(v: PRawAceLiteral): PtrUInt;
+
+
 { ****************** Security Descriptor Definition Language (SDDL) }
 
 /// parse a SID from its SDDL text form into its binary buffer
 // - recognize TWellKnownSid SDDL identifiers, e.g. 'WD' into S-1-1-0 (wksWorld)
 // - with optional TWellKnownRid recognition if dom binary is supplied, e.g.
 // 'DA' identifier into S-1-5-21-xx-xx-xx-512 (wkrGroupAdmins)
-function SddlNextSid(var p: PUtf8Char; var sid: RawSid; dom: PSid): boolean;
+function SddlNextSid(var p: PUtf8Char; var sid: RawSid; dom: PSid): boolean; overload;
+
+/// parse a SID from its SDDL text form into its static binary buffer
+function SddlNextSid(var p: PUtf8Char; out sid: TSid; dom: PSid): boolean; overload;
 
 /// append a binary SID as SDDL text form
 // - recognize TWellKnownSid into SDDL text, e.g. S-1-1-0 (wksWorld) into 'WD'
@@ -988,7 +1101,8 @@ function SddlNextMask(var p: PUtf8Char; var mask: TSecAccessMask): boolean;
 procedure SddlAppendMask(var s: ShortString; mask: TSecAccessMask);
 
 /// parse a TSecAce.Opaque value from its SDDL text
-function SddlNextOpaque(var p: PUtf8Char; var ace: TSecAce): boolean;
+// - use a TAceTextTree for the SDDL parsing
+function SddlNextOpaque(var p: PUtf8Char; var ace: TSecAce): TAceTextParse;
 
 /// append a binary ACE literal or attribute as SDDL text form
 // - see [MS-DTYP] 2.5.1.2.2 @Prefixed Attribute Name Form and
@@ -1009,17 +1123,20 @@ procedure SddlUnaryToText(tok: TSecConditionalToken; var l, u: RawUtf8);
 procedure SddlBinaryToText(tok: TSecConditionalToken; var l, r, u: RawUtf8);
 
 /// append a TSecAce.Opaque value as SDDL text form
-procedure SddlAppendOpaque(var s: ShortString; const ace: TSecAce);
+// - use a TAceBinaryTree for the binary to SDDL processing
+procedure SddlAppendOpaque(var s: RawUtf8; const ace: TSecAce);
 
 /// parse the next conditional ACE token from its SDDL text
 // - see [MS-DTYP] 2.5.1.1 SDDL Syntax
+// - identify some internal "fake" tokens >= sctInternalFinal
 function SddlNextOperand(var p: PUtf8Char): TSecConditionalToken;
 
 
 // defined for unit tests only
 function KnownSidToSddl(wks: TWellKnownSid): RawUtf8;
 function KnownRidToSddl(wkr: TWellKnownRid): RawUtf8;
-
+function SddlToKnownSid(const sddl: RawUtf8; out wks: TWellKnownSid): boolean;
+function SddlToKnownRid(const sddl: RawUtf8; out wkr: TWellKnownRid): boolean;
 
 const
   { SDDL standard identifiers using string[3] for efficient 32-bit alignment }
@@ -1114,6 +1231,7 @@ const
    '@Resource.',  // sctResourceAttribute
    '@Device.');   // sctDeviceAttribute
 
+  /// lookup of sctOperator tokens, for SDDL_OPER_TXT[] and SDDL_OPER_INDEX[]
   SDDL_OPER: array[1 .. 23] of TSecConditionalToken = (
     sctEqual,
     sctNotEqual,
@@ -1139,8 +1257,8 @@ const
     sctOr,
     sctNot);
 
-  /// define how a sctOperand is stored as SDDL
-  // - used e.g. with SDDL_OPER_TXT[SDDL_OPER_INDEX[v^.Token]]
+  /// define how a sctOperator is stored as SDDL
+  // - used e.g. as SDDL_OPER_TXT[SDDL_OPER_INDEX[v^.Token]]
   // - see [MS-DTYPE] 2.4.4.17.6 and 2.4.4.17.7
   SDDL_OPER_TXT: array[0 .. high(SDDL_OPER)] of RawUtf8 = (
     '',
@@ -1168,6 +1286,154 @@ const
     ' || ',                     // sctOr
     '!');                       // sctNot
 
+  /// used during SDDL parsing to stop identifier names
+  SDDL_END_IDENT = [#0 .. ' ', '=', '!', '<', '>', '{', '(', ')'];
+
+  /// lookup table of SDDL identifiers over TWellKnownSid
+  SDDL_WKS: array[1..48] of TWellKnownSid = (
+    wksWorld,                                     // S-1-1-0       WD
+    wksCreatorOwner,                              // S-1-3-0       CO
+    wksCreatorGroup,                              // S-1-3-1       CG
+    wksCreatorOwnerRights,                        // S-1-3-4       OW
+    wksIntegrityLow,                              // S-1-16-4096   LW
+    wksIntegrityMedium,                           // S-1-16-8192   ME
+    wksIntegrityMediumPlus,                       // S-1-16-8448   MP
+    wksIntegrityHigh,                             // S-1-16-12288  HI
+    wksIntegritySystem,                           // S-1-16-16384  SI
+    wksAuthenticationServiceAsserted,             // S-1-18-2      SS
+    wksNetwork,                                   // S-1-5-2       NU
+    wksInteractive,                               // S-1-5-4       IU
+    wksService,                                   // S-1-5-6       SU
+    wksAnonymous,                                 // S-1-5-7       AN
+    wksEnterpriseControllers,                     // S-1-5-9       ED
+    wksSelf,                                      // S-1-5-10      PS
+    wksAuthenticatedUser,                         // S-1-5-11      AU
+    wksRestrictedCode,                            // S-1-5-12      RC
+    wksLocalSystem,                               // S-1-5-18      SY
+    wksLocalService,                              // S-1-5-19      LS
+    wksNetworkService,                            // S-1-5-20      NS
+    wksBuiltinAdministrators,                     // S-1-5-32-544  BA
+    wksBuiltinUsers,                              // S-1-5-32-545  BU
+    wksBuiltinGuests,                             // S-1-5-32-546  BG
+    wksBuiltinPowerUsers,                         // S-1-5-32-547  PU
+    wksBuiltinAccountOperators,                   // S-1-5-32-548  AO
+    wksBuiltinSystemOperators,                    // S-1-5-32-549  SO
+    wksBuiltinPrintOperators,                     // S-1-5-32-550  PO
+    wksBuiltinBackupOperators,                    // S-1-5-32-551  BO
+    wksBuiltinReplicator,                         // S-1-5-32-552  RE
+    wksBuiltinPreWindows2000CompatibleAccess,     // S-1-5-32-554  RU
+    wksBuiltinRemoteDesktopUsers,                 // S-1-5-32-555  RD
+    wksBuiltinNetworkConfigurationOperators,      // S-1-5-32-556  NO
+    wksBuiltinPerfMonitoringUsers,                // S-1-5-32-558  MU
+    wksBuiltinPerfLoggingUsers,                   // S-1-5-32-559  LU
+    wksBuiltinIUsers,                             // S-1-5-32-568  IS
+    wksBuiltinCryptoOperators,                    // S-1-5-32-569  CY
+    wksBuiltinEventLogReadersGroup,               // S-1-5-32-573  ER
+    wksBuiltinCertSvcDComAccessGroup,             // S-1-5-32-574  CD
+    wksBuiltinRdsRemoteAccessServers,             // S-1-5-32-575  RA
+    wksBuiltinRdsEndpointServers,                 // S-1-5-32-576  ES
+    wksBuiltinRdsManagementServers,               // S-1-5-32-577  MS
+    wksBuiltinHyperVAdmins,                       // S-1-5-32-578  HA
+    wksBuiltinAccessControlAssistanceOperators,   // S-1-5-32-579  AA
+    wksBuiltinRemoteManagementUsers,              // S-1-5-32-580  RM
+    wksBuiltinWriteRestrictedCode,                // S-1-5-33      WR
+    wksBuiltinUserModeDriver,                     // S-1-5-84-0-0-0-0-0 UD
+    wksBuiltinAnyPackage);                        // S-1-15-2-1    AC
+
+  /// lookup table of SDDL identifiers over TWellKnownRid
+  SDDL_WKR: array[1..18] of TWellKnownRid = (
+    wkrGroupReadOnly,                // RO
+    wkrUserAdmin,                    // LA
+    wkrUserGuest,                    // LG
+    wkrGroupAdmins,                  // DA
+    wkrGroupUsers,                   // DU
+    wkrGroupGuests,                  // DG
+    wkrGroupComputers,               // DC
+    wkrGroupControllers,             // DD
+    wkrGroupCertAdmins,              // CA
+    wkrGroupSchemaAdmins,            // SA
+    wkrGroupEntrepriseAdmins,        // EA
+    wkrGroupPolicyAdmins,            // PA
+    wkrGroupCloneableControllers,    // CN
+    wkrGroupProtectedUsers,          // AP
+    wkrGroupKeyAdmins,               // KA
+    wkrGroupEntrepriseKeyAdmins,     // EK
+    wrkGroupRasServers,              // RS
+    wrkUserModeHwOperator);          // HO
+
+{
+ Here is the current list of all SID known identifiers, matching the reference
+   from https://learn.microsoft.com/en-us/windows/win32/secauthz/sid-strings
+ (table generated by uncommenting a ConsoleWrite() in TTestCoreBase._SDDL tests)
+
+   AA = wksBuiltinAccessControlAssistanceOperators
+   AC = wksBuiltinAnyPackage
+   AN = wksAnonymous
+   AO = wksBuiltinAccountOperators
+   AP = wkrGroupProtectedUsers
+   AU = wksAuthenticatedUser
+   BA = wksBuiltinAdministrators
+   BG = wksBuiltinGuests
+   BO = wksBuiltinBackupOperators
+   BU = wksBuiltinUsers
+   CA = wkrGroupCertAdmins
+   CD = wksBuiltinCertSvcDComAccessGroup
+   CG = wksCreatorGroup
+   CN = wkrGroupCloneableControllers
+   CO = wksCreatorOwner
+   CY = wksBuiltinCryptoOperators
+   DA = wkrGroupAdmins
+   DC = wkrGroupComputers
+   DD = wkrGroupControllers
+   DG = wkrGroupGuests
+   DU = wkrGroupUsers
+   EA = wkrGroupEntrepriseAdmins
+   ED = wksEnterpriseControllers
+   EK = wkrGroupEntrepriseKeyAdmins
+   ER = wksBuiltinEventLogReadersGroup
+   ES = wksBuiltinRdsEndpointServers
+   HA = wksBuiltinHyperVAdmins
+   HI = wksIntegrityHigh
+   HO = wrkUserModeHwOperator
+   IS = wksBuiltinIUsers
+   IU = wksInteractive
+   KA = wkrGroupKeyAdmins
+   LA = wkrUserAdmin
+   LG = wkrUserGuest
+   LS = wksLocalService
+   LU = wksBuiltinPerfLoggingUsers
+   LW = wksIntegrityLow
+   ME = wksIntegrityMedium
+   MP = wksIntegrityMediumPlus
+   MS = wksBuiltinRdsManagementServers
+   MU = wksBuiltinPerfMonitoringUsers
+   NO = wksBuiltinNetworkConfigurationOperators
+   NS = wksNetworkService
+   NU = wksNetwork
+   OW = wksCreatorOwnerRights
+   PA = wkrGroupPolicyAdmins
+   PO = wksBuiltinPrintOperators
+   PS = wksSelf
+   PU = wksBuiltinPowerUsers
+   RA = wksBuiltinRdsRemoteAccessServers
+   RC = wksRestrictedCode
+   RD = wksBuiltinRemoteDesktopUsers
+   RE = wksBuiltinReplicator
+   RM = wksBuiltinRemoteManagementUsers
+   RO = wkrGroupReadOnly
+   RS = wrkGroupRasServers
+   RU = wksBuiltinPreWindows2000CompatibleAccess
+   SA = wkrGroupSchemaAdmins
+   SI = wksIntegritySystem
+   SO = wksBuiltinSystemOperators
+   SS = wksAuthenticationServiceAsserted
+   SU = wksService
+   SY = wksLocalSystem
+   UD = wksBuiltinUserModeDriver
+   WD = wksWorld
+   WR = wksBuiltinWriteRestrictedCode
+}
+
 var
   { globals filled during unit initialization from actual code constants }
 
@@ -1180,7 +1446,7 @@ var
   /// allow to quickly check if a TSecAccess has a SDDL identifier
   samWithSddl: TSecAccessMask;
 
-  /// O(1) lookup table used as SDDL_OPER_TXT[SDDL_OPER_INDEX[v^.Token]]
+  /// O(1) lookup table used e.g. as SDDL_OPER_TXT[SDDL_OPER_INDEX[v^.Token]]
   SDDL_OPER_INDEX: array[TSecConditionalToken] of byte;
 
 
@@ -1193,6 +1459,9 @@ type
   RawSecurityDescriptor = type RawByteString;
   PRawSecurityDescriptor = ^RawSecurityDescriptor;
 
+
+  {$A-} // both TSecAce and TSecurityDescriptor should be packed for JSON serialization
+
   /// high-level cross-platform support of one Windows Security Descriptor
   // - can be loaded and exported as self-relative binary or SDDL text
   // - JSON is supported via SecurityDescriptorToJson() and
@@ -1204,7 +1473,7 @@ type
   TSecurityDescriptor = object
   {$endif USERECORDWITHMETHODS}
   private
-    function NextAclFromText(var p: PUtf8Char; dom: PSid; scope: TSecAceScope): boolean;
+    function NextAclFromText(var p: PUtf8Char; dom: PSid; scope: TSecAceScope): TAceTextParse;
     procedure AclToText(var sddl: RawUtf8; dom: PSid; scope: TSecAceScope);
     function InternalAdd(scope: TSecAceScope; out acl: PSecAcl): PSecAce;
     function InternalAdded(scope: TSecAceScope; ace: PSecAce; acl: PSecAcl;
@@ -1234,10 +1503,10 @@ type
     // - could also recognize SDDL RID placeholders, with the specified
     // RidDomain in its 'S-1-5-21-xxxxxx-xxxxxxx-xxxxxx' text form
     function FromText(const SddlText: RawUtf8;
-      const RidDomain: RawUtf8 = ''): boolean; overload;
+      const RidDomain: RawUtf8 = ''): TAceTextParse; overload;
     /// decode a Security Descriptor from its SDDL textual representation
     function FromText(var p: PUtf8Char; dom: PSid = nil;
-      endchar: AnsiChar = #0): boolean; overload;
+      endchar: AnsiChar = #0): TAceTextParse; overload;
     /// encode this Security Descriptor into its SDDL textual representation
     // - could also generate SDDL RID placeholders, from the specified
     // RidDomain in its 'S-1-5-21-xxxxxx-xxxxxxx-xxxxxx' text form
@@ -1389,17 +1658,15 @@ function LookupToken(tok: THandle; const server: RawUtf8 = ''): RawUtf8; overloa
 
 implementation
 
-{$ifdef OSWINDOWS}
-uses
-  Windows; // for Windows API Specific Security Types and Functions below
-{$endif OSWINDOWS}
-
 
 { ****************** Security IDentifier (SID) Definitions }
 
 const
   SID_MINLEN = SizeOf(TSidAuth) + 2; // = 8
   SID_REV32 = ord('S') + ord('-') shl 8 + ord('1') shl 16 + ord('-') shl 24;
+  SID_DOM_MASKSID = $00000401; // SubAuthorityCount = 4
+  SID_DOM_MASKRID = $00000501; // SubAuthorityCount = 5
+  SID_DOM_MASKAUT = $05000000; // IdentifierAuthority
 
 function SidLength(sid: PSid): PtrInt;
 begin
@@ -1425,35 +1692,38 @@ begin
     FastSetRawByteString(RawByteString(result), sid, SidLength(sid));
 end;
 
-procedure SidToTextShort(sid: PSid; var result: ShortString);
+procedure SidAppendShort(sid: PSid; var s: ShortString);
 var
   a: PSidAuth;
   i: PtrInt;
 begin // faster than ConvertSidToStringSidA(), and cross-platform
   if (sid = nil ) or
-     (sid^.Revision <> 1) then
-  begin
-    result[0] := #0; // invalid SID
+     (sid^.Revision <> 1) then // invalid SID
     exit;
-  end;
   a := @sid^.IdentifierAuthority;
   if (a^[0] <> 0) or
      (a^[1] <> 0) then
   begin
-    result := 'S-1-0x'; // hexa 48-bit IdentifierAuthority, i.e. S-1-0x######-..
-    for i := 0 to 5 do
-      AppendShortByteHex(a^[i], result)
+    AppendShort('S-1-0x', s);
+    for i := 0 to 5 do // hexa 48-bit IdentifierAuthority, i.e. S-1-0x######-..
+      AppendShortByteHex(a^[i], s)
   end
   else
   begin
-    result := 'S-1-';
-    AppendShortCardinal(bswap32(PCardinal(@a^[2])^), result);
+    AppendShort('S-1-', s);
+    AppendShortCardinal(bswap32(PCardinal(@a^[2])^), s);
   end;
   for i := 0 to PtrInt(sid^.SubAuthorityCount) - 1 do
   begin
-    AppendShortChar('-', @result);
-    AppendShortCardinal(sid^.SubAuthority[i], result);
+    AppendShortChar('-', @s);
+    AppendShortCardinal(sid^.SubAuthority[i], s);
   end;
+end;
+
+procedure SidToTextShort(sid: PSid; var result: ShortString);
+begin
+  result[0] := #0;
+  SidAppendShort(sid, result);
 end;
 
 function SidToText(sid: PSid): RawUtf8;
@@ -1465,7 +1735,8 @@ procedure SidToText(sid: PSid; var text: RawUtf8);
 var
   tmp: ShortString;
 begin
-  SidToTextShort(sid, tmp);
+  tmp[0] := #0;
+  SidAppendShort(sid, tmp);
   FastSetString(text, @tmp[1], ord(tmp[0]));
 end;
 
@@ -1586,6 +1857,15 @@ begin
     ToRawSid(@tmp, sid);
 end;
 
+function SidIsDomain(s: PSid): boolean;
+begin
+  result := (s <> nil) and
+            ((PCardinal(s)^ = SID_DOM_MASKRID) or   // SubAuthorityCount in [4,5]
+             (PCardinal(s)^ = SID_DOM_MASKSID)) and // to allow domain or rid
+            (s^.SubAuthority[0] = 21) and
+            (PCardinalArray(s)[1] = SID_DOM_MASKAUT);
+end;
+
 function TryDomainTextToSid(const Domain: RawUtf8; out Dom: RawSid): boolean;
 var
   tmp: TSid;
@@ -1597,10 +1877,7 @@ begin
   p := pointer(Domain);
   result := TextToSid(p, tmp) and // expects S-1-5-21-xx-xx-xx[-rid]
             (p^ = #0) and
-            (tmp.SubAuthorityCount in [4, 5]) and // allow domain or rid
-            (tmp.SubAuthority[0] = 21) and
-            (PWord(@tmp.IdentifierAuthority)^ = 0) and
-            (PCardinal(@tmp.IdentifierAuthority[2])^ = $05000000);
+            SidIsDomain(@tmp);
   if not result then
     exit; // this Domain text is no valid domain SID
   tmp.SubAuthorityCount := 5; // reserve place for WKR_RID[wkr] trailer
@@ -1608,14 +1885,14 @@ begin
   ToRawSid(@tmp, Dom);        // output Dom as S-1-5-21-xx-xx-xx-RID
 end;
 
-function SidSameDomain(a, b: PSid): boolean;
-begin // both values are expected to be in a S-1-5-21-xx-xx-xx-RID layout
-  result := (PInt64Array(a)[0] = PInt64Array(b)[0]) and // rev+count+auth
-            (PInt64Array(a)[1] = PInt64Array(b)[1]) and // auth[0..1]
-            (PInt64Array(a)[2] = PInt64Array(b)[2]);    // auth[2..3]
-            // so auth[4] will contain any RID
+function SidSameDomain(sid, dom: PSid): boolean;
+begin
+  result := (PCardinal(sid)^ = SID_DOM_MASKRID) and          // rid
+            (PCardinalArray(sid)[1] = PCardinalArray(dom)[1]) and // S-1-5
+            (PInt64Array(sid)[1] = PInt64Array(dom)[1]) and // auth[0..1]
+            (PInt64Array(sid)[2] = PInt64Array(dom)[2]);    // auth[2..3]
+            // so sid.auth[4] will contain any RID
 end;
-
 
 var
   KNOWN_SID_SAFE: TLightLock; // lighter than GlobalLock/GlobalUnLock
@@ -1641,7 +1918,7 @@ begin
     sid.IdentifierAuthority[5] := 2;
     sid.SubAuthority[0] := 1;
   end
-  else if wks <= wksCreatorGroupServer then
+  else if wks <= wksCreatorOwnerRights then
   begin // S-1-3-0
     sid.IdentifierAuthority[5] := 3;
     sid.SubAuthority[0] := ord(wks) - ord(wksCreatorOwner);
@@ -1671,6 +1948,16 @@ begin
       sid.SubAuthority[0] := ord(wks) - (ord(wksLocalAccount) - 113)
     else if wks = wksBuiltinWriteRestrictedCode then
       sid.SubAuthority[0] := 33
+    else if wks = wksBuiltinUserModeDriver then // S-1-5-84-0-0-0-0-0
+    begin
+      sid.SubAuthorityCount := 6;
+      sid.SubAuthority[0] := 84;
+      sid.SubAuthority[1] := 0;
+      sid.SubAuthority[2] := 0;
+      sid.SubAuthority[3] := 0;
+      sid.SubAuthority[4] := 0;
+      sid.SubAuthority[5] := 0;
+    end
     else
     begin
       sid.SubAuthority[0] := 32;
@@ -1730,6 +2017,17 @@ begin
   sid := KNOWN_SID[wks];
 end;
 
+procedure KnownRawSid(wks: TWellKnownSid; var sid: TSid);
+var
+  s: PSid;
+begin
+  if (wks <> wksNull) and
+     (KNOWN_SID[wks] = '') then
+    ComputeKnownSid(wks);
+  s := pointer(KNOWN_SID[wks]);
+  MoveFast(s^, sid, SidLength(s));
+end;
+
 function KnownSidToText(wks: TWellKnownSid): PShortString;
 begin
   if (wks <> wksNull) and
@@ -1766,7 +2064,7 @@ begin
             if c in [0 .. 1] then // S-1-2-x
               result := TWellKnownSid(ord(wksLocal) + c);
           3:
-            if c in [0 .. 3] then // S-1-3-x
+            if c in [0 .. 4] then // S-1-3-x
               result := TWellKnownSid(ord(wksCreatorOwner) + c);
           5:
             case c of // S-1-5-x
@@ -1829,6 +2127,16 @@ begin
             end;
         end;
       end;
+    6:
+      case sid.SubAuthority[0] of
+        84:
+          if (sid.SubAuthority[1] = 0) and
+             (sid.SubAuthority[2] = 0) and
+             (sid.SubAuthority[3] = 0) and
+             (sid.SubAuthority[4] = 0) and
+             (sid.SubAuthority[5] = 0) then
+           result := wksBuiltinUserModeDriver; // S-1-5-84-0-0-0-0-0
+      end;
   end;
 end;
 
@@ -1869,10 +2177,17 @@ begin
     PSid(result)^.SubAuthority[4] := WKR_RID[wkr];
 end;
 
+procedure KnownRidSid(wkr: TWellKnownRid; dom: PSid; var result: TSid);
+begin
+  MoveFast(dom^, result, SID_MINLEN + 4 * 4); // copy domain fields
+  result.SubAuthorityCount := 5; // if dom was a pure domain SID, not a RID
+  result.SubAuthority[4] := WKR_RID[wkr]; // append the RID
+end;
+
 procedure KnownRidSid(wkr: TWellKnownRid; dom: PSid; var result: RawSid);
 begin
-  FastSetRawByteString(RawByteString(result), pointer(dom), SID_MINLEN + 5 * 4);
-  PSid(result)^.SubAuthority[4] := WKR_RID[wkr];
+  FastNewRawByteString(RawByteString(result), SID_MINLEN + 5 * 4);
+  KnownRidSid(wkr, dom, PSid(result)^);
 end;
 
 
@@ -1941,301 +2256,88 @@ begin
   hdr^.AclSize := result;
 end;
 
-function AceTokenLength(v: PRawAceLiteral): PtrUInt;
-begin
-  case v^.Token of
-    sctInt8,
-    sctInt16,
-    sctInt32,
-    sctInt64:
-      result := SizeOf(v^.Token) + SizeOf(v^.Int);
-    sctUnicode,     // need to append UnicodeBytes
-    sctLocalAttribute,
-    sctUserAttribute,
-    sctResourceAttribute,
-    sctDeviceAttribute,
-    sctOctetString, // OctetBytes     = UnicodeBytes
-    sctComposite,   // CompositeBytes = UnicodeBytes
-    sctSid:         // SidBytes       = UnicodeBytes
-      result := v^.UnicodeBytes + (SizeOf(v^.Token) + SizeOf(v^.UnicodeBytes));
-  else
-    result := SizeOf(v^.Token);
-  end;
-end;
-
-
-{ TAceTree }
-
-function TAceTree.Init(const Input: RawByteString): boolean;
-begin
-  Storage := pointer(Input);
-  StorageSize := length(Input);
-  Count := 0;
-  StorageForm := isNone;
-  result := (Storage <> nil) and
-            (StorageSize < MAX_TREE_BYTES);
-end;
-
-function TAceTree.AddBinaryNode(position, left, right: cardinal): boolean;
-var
-  n: PAceTreeNode;
-begin
-  result := (Count < high(Stack)) and
-            (position < StorageSize);
-  if not result then
-    exit;
-  n := @Stack[Count];
-  n^.Position := position;
-  n^.Left := left;
-  n^.Right := right;
-  inc(Count);
-end;
-
-function TAceTree.AddTextNode(position, len: cardinal;
-  tok: TSecConditionalToken): boolean;
-begin
-  result := AddBinaryNode(position, 255, 255);
-  if not result then
-    exit;
-  TextToken[Count - 1] := tok;
-  TextLen[Count - 1] := len;
-end;
-
-function TAceTree.FromBinary: boolean;
-var
-  v: PRawAceLiteral;
-  position, len, stCount: PtrUInt;
-  st: array[0 .. 31] of byte; // local stack of last few operands
-begin
-  result := false;
-  if (Storage = nil) or
-     (StorageSize and 3 <> 0) or // should be DWORD-aligned
-     (PCardinal(Storage)^ <> ACE_CONDITION_SIGNATURE) then
-    exit;
-  stCount := 0;
-  position := 4; // tokens start after 'artx' header
-  repeat
-    v := @Storage[position];
-    len := AceTokenLength(v);
-    if (position + len > StorageSize) or // overflow
-       (ord(v^.Token) > ord(high(v^.Token))) then // clearly invalid
-      exit;
-    if v^.Token <> sctPadding then
-    begin
-      // parse the next non-void operand or operation
-      if v^.Token in sctOperand then
-      begin
-        if not AddBinaryNode(position, 255, 255) then
-          exit;
-      end
-      else if v^.Token in sctUnary then
-      begin
-        if stCount < 1 then
-          exit;
-        dec(stCount); // unstack one operand
-        if not AddBinaryNode(position, st[stCount], 255) then
-          exit;
-      end
-      else if v^.Token in sctBinary then
-      begin
-        if stCount < 2 then
-          exit;
-        dec(stCount, 2); // unstack two operands
-        if not AddBinaryNode(position, st[stCount], st[stCount + 1]) then
-          exit;
-      end
-      else
-        exit; // invalid token
-      // stack this operand
-      if stCount > high(st) then
-        exit; // paranoid
-      st[stCount] := Count - 1;
-      inc(stCount);
-    end;
-    inc(position, len);
-  until position = StorageSize;
-  result := (Count > 0) and
-            (stCount = 1); // should end with no pending operand
-  if result then
-    StorageForm := isBinary;
-end;
-
-procedure TAceTree.BinaryNodeText(index: byte; var u: RawUtf8);
-var
-  n: PAceTreeNode;
-  v: PRawAceLiteral;
-  l, r: pointer; // store actual RawUtf8 variables
-begin
-  if index >= Count then
-  begin
-    FastAssignNew(u);
-    exit;
-  end;
-  n := @Stack[index];
-  l := nil;
-  r := nil;
-  if n^.Left < Count then
-    BinaryNodeText(n^.Left, RawUtf8(l));
-  if n^.Right < Count then
-    BinaryNodeText(n^.Right, RawUtf8(r));
-  v := @Storage[n^.Position];
-  if l <> nil then
-    if r <> nil then
-      SddlBinaryToText(v^.Token, RawUtf8(l), RawUtf8(r), u) // and release l+r
-    else
-      SddlUnaryToText(v^.Token, RawUtf8(l), u) // and release l
-  else
-    SddlOperandToText(v, u);
-end;
-
-function TAceTree.TextParseNode(var p: PUtf8Char;
-  out tok: TSecConditionalToken): integer;
-var
-  s: PUtf8Char;
-begin
-  result := -1;
-  while p^ = ' ' do
-    inc(p);
-  s := p;
-  tok := SddlNextOperand(p);
-  if (tok = sctPadding) or // error parsing
-     not AddTextNode(p - Storage, p - s, tok) then
-    exit;
-  result := Count - 1;
-end;
-
-function TAceTree.TextParse(var p: PUtf8Char;
-  out tok: TSecConditionalToken): integer;
-var
-  op, i, {l,} r: integer;
-  parent: boolean;
-begin
-  result := -1;
-  parent := false;
-  while p^ = ' ' do
-    inc(p);
-  if p^ = '(' then
-  begin
-    parent := true;
-    inc(p);
-  end;
-  op := -1;
-  i := TextParseNode(p, tok);
-  if i < 0 then
-    exit;
-  if tok in sctOperand then
-  begin
-    // XX binop YY
-    //l := i;
-    op := TextParse(p, tok);
-    if (op < 0) or
-       not (tok in sctBinary) then
-      exit;
-    r := TextParse(p, tok);
-    if r < 0 then
-      exit;
-
-  end;
-
-  // to be continued
-
-  while p^ = ' ' do
-    inc(p);
-  if parent then
-    if p^ <> ')' then
-      exit
-    else
-      inc(p);
-  result := op;
-end;
-
-function TAceTree.FromText: boolean;
-var
-  p: PUtf8Char;
-  tok: TSecConditionalToken;
-begin
-  result := false;
-  StorageForm := isText;
-  if (Storage = nil) or
-     (Storage[0] <> '(') or
-     (Storage[StorageSize - 1] <> ')') or
-     (cardinal(StrLen(Storage)) <> StorageSize) then
-    exit; // not a valid SDDL text input for sure
-  p := Storage;
-  if (TextParse(p, tok) < 0) or
-     (p^ <> #0) then
-    exit;
-  result := true;
-  StorageForm := isText;
-end;
-
-function TAceTree.ToBinary: RawByteString;
-begin
-  case StorageForm of
-    isBinary:
-      FastSetRawByteString(result, Storage, StorageSize); // FromBinary() value
-    //TODO: isText
-  else
-    FastAssignNew(result);
-  end;
-end;
-
-function TAceTree.ToText: RawUtf8;
-begin
-  case StorageForm of
-    isBinary:
-      BinaryNodeText(Count - 1, result); // simple recursive generation
-    isText:
-      FastSetString(result, Storage, StorageSize); // return FromText() value
-  else
-    FastAssignNew(result);
-  end;
-end;
-
 
 { ****************** Security Descriptor Definition Language (SDDL) }
 
 const
-  /// the last TWellKnownSid item which has a SDDL identifier
-  wksLastSddl = wksBuiltinWriteRestrictedCode;
-
   // defined as a packed array of chars for fast SSE2 brute force search
-  SID_SDDL: array[0 .. (ord(wksLastSddl) + ord(high(TWellKnownRid)) + 2) * 2 - 1] of AnsiChar =
-    // TWellKnownSid
-    '  WD    COCG                                    NU  ' +
-    'IUSUAN    PSAURC        SY          BABUBGPUAOSOPOBORERSRURDNO  MULU' +
-    '      ISCY      ERCDRAES  HAAA        WR' +  // WR = wksLastSddl
-    // TWellKnownRid
-    'ROLALG  DADUDGDCDDCASAEAPA  CNAPKAEKLWMEMPHISI';
+  SID_SDDL: array[1 .. (high(SDDL_WKS) + high(SDDL_WKR)) * 2] of AnsiChar =
+    // TWellKnownSid in SDDL_WKS[] order
+    'WDCOCGOWLWMEMPHISISSNUIUSUANEDPSAURCSYLSNSBABUBGPUAOSOPOBORERURDNOMULU'+
+    'ISCYERCDRAESMSHAAARMWRUDAC'+
+    // TWellKnownRid in SDDL_WKR[] order
+    'ROLALGDADUDGDCDDCASAEAPACNAPKAEKRSHO';
 var
   SID_SDDLW: packed array[byte] of word absolute SID_SDDL; // for fast lookup
+  SDDL_WKS_INDEX: array[TWellKnownSid] of byte; // into 1..48
+  SDDL_WKR_INDEX: array[TWellKnownRid] of byte; // into 49..66
 
 function KnownSidToSddl(wks: TWellKnownSid): RawUtf8;
+var
+  i: PtrInt;
 begin
-  FastAssignNew(result); // no need to optimize: only used for regression tests
-  if wks in wksWithSddl then
-    FastSetString(result, @SID_SDDLW[ord(wks)], 2);
+  FastAssignNew(result);
+  i := SDDL_WKS_INDEX[wks];
+  if i <> 0 then
+    FastSetString(result, @SID_SDDLW[i - 1], 2);
 end;
 
 function KnownRidToSddl(wkr: TWellKnownRid): RawUtf8;
+var
+  i: PtrInt;
 begin
   FastAssignNew(result);
-  if wkr in wkrWithSddl then
-    FastSetString(result, @SID_SDDLW[(ord(wksLastSddl) + 1) + ord(wkr)], 2);
+  i := SDDL_WKR_INDEX[wkr];
+  if i <> 0 then
+    FastSetString(result, @SID_SDDLW[i - 1], 2);
+end;
+
+function SddlToKnownSid(const sddl: RawUtf8; out wks: TWellKnownSid): boolean;
+var
+  i: PtrInt;
+begin
+  result := false;
+  if length(sddl) <> 2 then
+    exit;
+  i := WordScanIndex(@SID_SDDLW, high(SDDL_WKS), PWord(sddl)^);
+  if i < 0 then
+    exit;
+  wks := SDDL_WKS[i + 1];
+  result := true;
+end;
+
+function SddlToKnownRid(const sddl: RawUtf8; out wkr: TWellKnownRid): boolean;
+var
+  i: PtrInt;
+begin
+  result := false;
+  if length(sddl) <> 2 then
+    exit;
+  i := WordScanIndex(@SID_SDDLW[high(SDDL_WKS)], high(SDDL_WKR), PWord(sddl)^);
+  if i < 0 then
+    exit;
+  wkr := SDDL_WKR[i + 1];
+  result := true;
 end;
 
 function SddlNextSid(var p: PUtf8Char; var sid: RawSid; dom: PSid): boolean;
 var
-  i: PtrInt;
   tmp: TSid;
+begin
+  result := SddlNextSid(p, tmp, dom);
+  if result then
+    ToRawSid(@tmp, sid);
+end;
+
+function SddlNextSid(var p: PUtf8Char; out sid: TSid; dom: PSid): boolean;
+var
+  i: PtrInt;
 begin
   while p^ = ' ' do
     inc(p);
   if PCardinal(p)^ = SID_REV32 then
   begin
-    result := TextToSid(p, tmp); // parse e.g. S-1-5-32-544
-    if result then
-      FastSetRawByteString(RawByteString(sid), @tmp, SidLength(@tmp));
+    result := TextToSid(p, sid); // parse e.g. S-1-5-32-544
     while p^ = ' ' do
       inc(p);
     exit;
@@ -2244,14 +2346,14 @@ begin
   if not (p^ in ['A' .. 'Z']) then
     exit;
   i := WordScanIndex(@SID_SDDL, SizeOf(SID_SDDL) shr 1, PWord(p)^);
-  if i <= 0 then
+  if i < 0 then
     exit
-  else if i <= ord(wksLastSddl) then
-    KnownRawSid(TWellKnownSid(i), sid)
+  else if i < high(SDDL_WKS) then
+    KnownRawSid(SDDL_WKS[i + 1], sid)
   else if dom = nil then
     exit // no RID support
   else
-    KnownRidSid(TWellKnownRid(i - (ord(wksLastSddl) + 1)), dom, sid);
+    KnownRidSid(SDDL_WKR[i - pred(high(SDDL_WKS))], dom, sid);
   inc(p, 2);
   while p^ = ' ' do
     inc(p);
@@ -2261,31 +2363,34 @@ end;
 procedure SddlAppendSid(var s: ShortString; sid, dom: PSid);
 var
   k: TWellKnownSid;
-  r: TWellKnownRid;
-  tmp: ShortString;
+  i: PtrInt;
 begin
   if sid = nil then
     exit;
   k := SidToKnown(sid);
-  if k in wksWithSddl then
+  i := SDDL_WKS_INDEX[k];
+  if i <> 0 then
   begin
-    AppendShortTwoChars(@SID_SDDLW[ord(k)], @s);
+    AppendShortTwoChars(@SID_SDDLW[i - 1], @s); // e.g. WD SY
     exit;
   end
   else if (k = wksNull) and
           (dom <> nil) and
           SidSameDomain(sid, dom) and
-          (sid^.SubAuthority[4] <= $4000) then
+          (sid^.SubAuthority[4] <= WKR_RID_MAX) then
   begin
-    r := TWellKnownRid(WordScanIndex(@WKR_RID, length(WKR_RID), sid^.SubAuthority[4]));
-    if r in wkrWithSddl then
+    i := WordScanIndex(@WKR_RID, length(WKR_RID), sid^.SubAuthority[4]);
+    if i >= 0 then
     begin
-      AppendShortTwoChars(@SID_SDDLW[(ord(wksLastSddl) + 1) + ord(r)], @s);
-      exit;
+      i := SDDL_WKR_INDEX[TWellKnownRid(i)];
+      if i <> 0 then
+      begin
+        AppendShortTwoChars(@SID_SDDLW[i - 1], @s); // e.g. DA DU
+        exit;
+      end;
     end
   end;
-  SidToTextShort(sid, tmp);
-  AppendShort(tmp, s);
+  SidAppendShort(sid, s); // if not known, append as 'S-1-x....' standard text
 end;
 
 function SddlNextPart(var p: PUtf8Char; out u: ShortString): boolean;
@@ -2411,12 +2516,13 @@ begin
         AppendShortTwoChars(@SAM_SDDL[a][1], @s); // store as SDDL pairs
 end;
 
-function SddlNextOpaque(var p: PUtf8Char; var ace: TSecAce): boolean;
+function SddlNextOpaque(var p: PUtf8Char; var ace: TSecAce): TAceTextParse;
 var
   s: PUtf8Char;
   parent: integer;
+  tree: TAceTextTree;
 begin
-  result := false;
+  ace.Opaque := '';
   if p <> nil then
     while p^ = ' ' do
       inc(p);
@@ -2427,12 +2533,19 @@ begin
     if (ace.AceType in satConditional) and
        (s^ = '(') then // conditional ACE expression
     begin
+      result := atpMissingFinal;
       repeat
         case s^ of
           #0:
             exit; // premature end
           '(':
             inc(parent); // count nested parenthesis
+          '"':
+            repeat
+              inc(s);
+              if s^ = #0 then
+                exit;
+            until s^ = '"'; // ignore any ( ) within "unicode" blocks
           ')':
             if parent = 0 then
               break // ending ACE parenthesis
@@ -2441,31 +2554,46 @@ begin
         end;
         inc(s);
       until false;
-      FastSetString(RawUtf8(ace.Opaque), p, s - p);
+      tree.Storage := p;
+      tree.StorageSize := s - p;
+      if tree.FromText = atpSuccess then
+        ace.Opaque := tree.ToBinary;
+      if ace.Opaque = '' then
+      begin
+        result := tree.Error; // return the detailed parsing error
+        exit;
+      end;
     end
     else // fallback to hexadecimal output
     begin
       while not (s^ in [#0, ')']) do // retrieve everthing until ending ')'
         inc(s);
-      FastSetRawByteString(ace.Opaque, nil, (s - p) shr 1);
+      FastNewRawByteString(ace.Opaque, (s - p) shr 1);
+      result := atpInvalidContent;
       if ParseHex(PAnsiChar(p),
            pointer(ace.Opaque), length(ace.Opaque)) <> PAnsiChar(s) then
         exit;
     end;
   end;
   p := s;
-  result := true;
+  result := atpSuccess;
 end;
 
-procedure SddlAppendOpaque(var s: ShortString; const ace: TSecAce);
+procedure SddlAppendOpaque(var s: RawUtf8; const ace: TSecAce);
+var
+  tree: TAceBinaryTree;
+  tmp: shortstring absolute tree;
 begin
-  if ace.Opaque = '' then
-    exit;
-  if (ace.AceType in satConditional) and
-     (ace.Opaque[1] = '(') then
-    AppendShortAnsi7String(ace.Opaque, s) // conditional ACE expression
-  else
-    AppendShortHex(pointer(ace.Opaque), length(ace.Opaque), s); // hexadecimal
+  if ace.Opaque <> '' then
+    if (ace.AceType in satConditional) and
+       tree.FromBinary(ace.Opaque) then // conditional ACE expression
+      s := s + tree.ToText
+    else
+    begin
+      tmp[0] := #0; // fallback to hexadecimal
+      AppendShortHex(pointer(ace.Opaque), length(ace.Opaque), tmp);
+      AppendShortToUtf8(tmp, s);
+    end;
 end;
 
 procedure SddlOperandToText(v: PRawAceLiteral; out u: RawUtf8);
@@ -2497,8 +2625,13 @@ var
 begin
   op := @SDDL_OPER_TXT[SDDL_OPER_INDEX[tok]];
   if tok in [sctContains, sctAnyOf, sctNotContains, sctNotAnyOf] then
-    // e.g. '(@Resource.dept Any_of{"Sales","HR"})'
-    u := '(' + l + ' ' + op^ + r + ')'
+    if (r <> '') and
+       (r[1] <> '{') then
+      // e.g. '(@User.Project Any_of @Resource.Project)'
+      u := '(' + l + ' ' + op^ + ' ' + r + ')'
+    else
+      // e.g. '(@Resource.dept Any_of{"Sales","HR"})'
+      u := '(' + l + ' ' + op^ + r + ')'
   else
     // e.g. '(Title=="VP")'
     u := '(' + l + op^ + r + ')';
@@ -2621,9 +2754,10 @@ begin
   result := sctPadding; // unknown
   s := p;
   case s^ of
+    #0:
+      result := sctInternalFinal;
     '-', '0' .. '9':
       begin
-        p := s;
         repeat
           inc(s);
         until not (s^ in ['0' .. '9']);
@@ -2641,7 +2775,6 @@ begin
       end;
     '#':
       begin
-        p := s;
         repeat
           inc(s);
         until not (s^ in ['#', '0' .. '9', 'A' .. 'Z', 'a' .. 'z']);
@@ -2649,18 +2782,14 @@ begin
       end;
     '{':
        begin
+         repeat
+           inc(s);
+           if s^ = #0 then
+             exit;
+         until s^ = '}';
          inc(s);
          result := sctComposite;
-         // note: caller should handle final '}'
        end;
-    'S', 's':
-      begin
-        if PCardinal(s)^ and $ffdfdfdf <>
-             ord('S') + ord('I') shl 8 + ord('D') shl 16 + ord('(') shl 24 then
-          exit;
-        inc(s, 4);
-        result := sctSid;
-      end;
     '=':
       begin
         if s[1] <> '=' then
@@ -2701,18 +2830,36 @@ begin
         inc(s);
         result := sctGreaterThan;
       end;
-    'A', 'a', 'C', 'c', 'D', 'd', 'E', 'e', 'M', 'm', 'N', 'n':
+    'A' .. 'Z',
+    'a' .. 'z',
+    #$80 .. #$ff:
       begin
+        result := sctLocalAttribute;
         repeat
           inc(s);
-        until not (s^ in ['A' ..'Z', 'a' .. 'z', '_']);
-        for i := SDDL_OPER_INDEX[sctContains] to
-                 SDDL_OPER_INDEX[sctNotDeviceMemberOfAny] do
-          if PropNameEquals(@SDDL_OPER_TXT[i], PAnsiChar(p), s - p) then
-          begin
-            result := SDDL_OPER[i];
-            break;
-          end;
+        until s^ in SDDL_END_IDENT;
+        case p^ of
+          'A', 'C', 'D', 'E', 'M', 'N', 'a', 'c', 'd', 'e', 'm', 'n':
+            for i := SDDL_OPER_INDEX[sctContains] to
+                     SDDL_OPER_INDEX[sctNotDeviceMemberOfAny] do
+              if PropNameEquals(SDDL_OPER_TXT[i], PAnsiChar(p), s - p) then
+              begin
+                result := SDDL_OPER[i];
+                break;
+              end;
+          'S', 's': // e.g. 'SID(BA)'
+            if PCardinal(p)^ and $ffdfdfdf =
+                 ord('S') + ord('I') shl 8 + ord('D') shl 16 + ord('(') shl 24 then
+            begin
+              repeat
+                inc(s);
+                if s^ = #0 then
+                  exit;
+              until s^ = ')';
+              inc(s);
+              result := sctSid;
+            end;
+        end;
       end;
     '&':
       begin
@@ -2745,10 +2892,21 @@ begin
         if result = sctPadding then
           exit; // unknown @Reference.
         p := s;
-        while not (s^ in [#0, ' ', '!', '=', '<', '>']) do
+        while not (s^ in SDDL_END_IDENT) do
           inc(s);
         if s = p then
           exit; // no attribute name
+      end;
+    // for internal SDDL text parsing use only
+    '(':
+      begin
+        inc(s);
+        result := sctInternalParenthOpen;
+      end;
+    ')':
+      begin
+        inc(s);
+        result := sctInternalParenthClose;
       end;
   end;
   p := s;
@@ -2812,15 +2970,12 @@ begin
 end;
 
 function TSecAce.ConditionalExpression: RawUtf8;
-var
-  s: ShortString;
 begin
-  s[0] := #0;
-  SddlAppendOpaque(s, self);
-  ShortStringToAnsi7String(s, result);
+  result := '';
+  SddlAppendOpaque(result, self);
 end;
 
-function TSecAce.ConditionalExpression(const condExp: RawUtf8): boolean;
+function TSecAce.ConditionalExpression(const condExp: RawUtf8): TAceTextParse;
 var
   p: PUtf8Char;
 begin
@@ -2836,7 +2991,7 @@ begin
   if (sat = satUnknown) or
      not SidText(sidSddl, dom) or
      not MaskText(maskSddl) or
-     not ConditionalExpression(condExp) then
+     (ConditionalExpression(condExp) <> atpSuccess) then
     exit;
   AceType := sat;
   RawType := ord(sat) + 1;
@@ -2844,7 +2999,7 @@ begin
   result := true;
 end;
 
-procedure TSecAce.AppendAsText(var s: ShortString; dom: PSid);
+procedure TSecAce.AppendAsText(var s: ShortString; var sddl: RawUtf8; dom: PSid);
 var
   f: TSecAceFlag;
 begin
@@ -2857,9 +3012,10 @@ begin
     AppendShortIntHex(RawType, s); // fallback to lower hex - paranoid
   end;
   AppendShortChar(';', @s);
-  for f := low(f) to high(f) do
-    if f in Flags then
-      AppendShort(SAF_SDDL[f], s);
+  if Flags <> [] then
+    for f := low(f) to high(f) do
+      if f in Flags then
+        AppendShort(SAF_SDDL[f], s);
   AppendShortChar(';', @s);
   SddlAppendMask(s, Mask);
   if AceType in satObject then
@@ -2878,19 +3034,23 @@ begin
   if Opaque <> '' then
   begin
     AppendShortChar(';', @s);
-    SddlAppendOpaque(s, self);
+    AppendShortToUtf8(s, sddl);
+    s[0] := #0;
+    SddlAppendOpaque(sddl, self); // direct write conditional expression in sddl
   end;
   AppendShortChar(')', @s);
+  AppendShortToUtf8(s, sddl);
+  s[0] := #0;
 end;
 
-function TSecAce.FromText(var p: PUtf8Char; dom: PSid): boolean;
+function TSecAce.FromText(var p: PUtf8Char; dom: PSid): TAceTextParse;
 var
   u: ShortString;
   t: TSecAceType;
   f: TSecAceFlag;
   i: integer;
 begin
-  result := false;
+  result := atpInvalidType;
   while p^ = ' ' do
     inc(p);
   if PWord(p)^ = ord('0') + ord('x') shl 8 then // our own fallback format
@@ -2918,6 +3078,7 @@ begin
   repeat
     inc(p);
   until p^ <> ' ';
+  result := atpInvalidFlags;
   while p^ <> ';' do
   begin
     if not SddlNextTwo(p, u) then
@@ -2930,23 +3091,30 @@ begin
       end;
   end;
   inc(p);
+  result := atpInvalidMask;
   if not SddlNextMask(p, Mask) or
      (p^ <> ';') then
     exit;
   repeat
     inc(p);
   until p^ <> ' ';
+  result := atpInvalidUuid;
   if not SddlNextGuid(p, ObjectType) or
-     not SddlNextGuid(p, InheritedObjectType) or // satObject or nothing
-     not SddlNextSid(p, Sid, dom) then // entries always end with a SID/RID
+     not SddlNextGuid(p, InheritedObjectType) then // satObject or nothing
+    exit;
+  result := atpInvalidSid;
+  if not SddlNextSid(p, Sid, dom) then // entries always end with a SID/RID
     exit;
   if p^ = ';' then // optional additional/opaque parameter
   begin
     inc(p);
-    if not SddlNextOpaque(p, self) then
+    result := SddlNextOpaque(p, self);
+    if result <> atpSuccess then
       exit;
   end;
-  result := p^ = ')'; // ACE should end with a parenthesis
+  result := atpMissingParenthesis;
+  if p^ = ')' then // ACE should end with a parenthesis
+    result := atpSuccess;
 end;
 
 function TSecAce.ToBinary(dest: PAnsiChar): PtrInt;
@@ -3046,6 +3214,533 @@ begin
 end;
 
 
+{ ******************* Conditional ACE Expressions SDDL and Binary Support }
+
+function AceTokenLength(v: PRawAceLiteral): PtrUInt;
+begin
+  case v^.Token of
+    sctInt8,
+    sctInt16,
+    sctInt32,
+    sctInt64:
+      result := SizeOf(v^.Token) + SizeOf(v^.Int);
+    sctUnicode,     // need to append UnicodeBytes
+    sctLocalAttribute,
+    sctUserAttribute,
+    sctResourceAttribute,
+    sctDeviceAttribute,
+    sctOctetString, // OctetBytes     = UnicodeBytes
+    sctComposite,   // CompositeBytes = UnicodeBytes
+    sctSid:         // SidBytes       = UnicodeBytes
+      result := v^.UnicodeBytes + (SizeOf(v^.Token) + SizeOf(v^.UnicodeBytes));
+  else
+    result := SizeOf(v^.Token);
+  end;
+end;
+
+
+{ TAceBinaryTree }
+
+function TAceBinaryTree.FromBinary(const Input: RawByteString): boolean;
+var
+  v: PRawAceLiteral;
+  position, len, stCount: PtrUInt;
+  st: array[0 .. 31] of byte; // local stack of last few operands
+begin
+  result := false;
+  Storage := pointer(Input);
+  StorageSize := length(Input);
+  Count := 0;
+  if (Storage = nil) or
+     (StorageSize and 3 <> 0) or // should be DWORD-aligned
+     (StorageSize >= MAX_TREE_BYTES) or
+     (PCardinal(Storage)^ <> ACE_CONDITION_SIGNATURE) then
+    exit;
+  stCount := 0;
+  position := 4; // tokens start after 'artx' header
+  repeat
+    v := @Storage[position];
+    len := AceTokenLength(v);
+    if (position + len > StorageSize) then // overflow
+      exit;
+    if v^.Token <> sctPadding then
+    begin
+      // parse the next non-void operand or operation
+      if v^.Token in sctOperand then
+      begin
+        if not AddNode(position, 255, 255) then
+          exit;
+      end
+      else if v^.Token in sctUnary then
+      begin
+        if stCount < 1 then
+          exit;
+        dec(stCount); // unstack one operand
+        if not AddNode(position, st[stCount], 255) then
+          exit;
+      end
+      else if v^.Token in sctBinary then
+      begin
+        if stCount < 2 then
+          exit;
+        dec(stCount, 2); // unstack two operands
+        if not AddNode(position, st[stCount], st[stCount + 1]) then
+          exit;
+      end
+      else
+        exit; // invalid token
+      // stack this operand
+      if stCount > high(st) then
+        exit; // paranoid
+      st[stCount] := Count - 1;
+      inc(stCount);
+    end;
+    inc(position, len);
+  until position = StorageSize;
+  result := (Count > 0) and
+            (stCount = 1); // should end with no pending operand
+end;
+
+function TAceBinaryTree.AddNode(position, left, right: cardinal): boolean;
+var
+  n: PAceBinaryTreeNode;
+begin
+  result := (Count < high(Nodes)) and
+            (position < StorageSize);
+  if not result then
+    exit;
+  n := @Nodes[Count];
+  n^.Position := position;
+  n^.Left := left;
+  n^.Right := right;
+  inc(Count);
+end;
+
+procedure TAceBinaryTree.GetNodeText(index: byte; var u: RawUtf8);
+var
+  n: PAceBinaryTreeNode;
+  v: PRawAceLiteral;
+  l, r: pointer; // store actual RawUtf8 variables
+begin
+  if index >= Count then
+  begin
+    FastAssignNew(u);
+    exit;
+  end;
+  n := @Nodes[index];
+  l := nil;
+  r := nil;
+  if n^.Left < Count then
+    GetNodeText(n^.Left, RawUtf8(l)); // recursive resolution
+  if n^.Right < Count then
+    GetNodeText(n^.Right, RawUtf8(r));
+  v := @Storage[n^.Position];
+  if l <> nil then
+    if r <> nil then
+      SddlBinaryToText(v^.Token, RawUtf8(l), RawUtf8(r), u) // and release l+r
+    else
+      SddlUnaryToText(v^.Token, RawUtf8(l), u) // and release l
+  else
+    SddlOperandToText(v, u);
+end;
+
+function TAceBinaryTree.ToBinary: RawByteString;
+begin
+  FastSetRawByteString(result, Storage, StorageSize); // FromBinary() value
+end;
+
+function TAceBinaryTree.ToText: RawUtf8;
+begin
+  GetNodeText(Count - 1, result); // simple recursive generation
+end;
+
+
+{ TAceTextTree }
+
+function TAceTextTree.AddNode(position, len: cardinal): integer;
+var
+  n: ^TAceTextTreeNode;
+begin
+  n := @Nodes[Count];
+  n^.Token := TokenCurrent;
+  n^.Position := position;
+  n^.Length := len;
+  n^.Left := 255;
+  n^.Right := 255;
+  result := Count;
+  inc(Count);
+end;
+
+function TAceTextTree.ParseNextToken: integer;
+var
+  start: PUtf8Char;
+  len: PtrUInt;
+begin
+  result := -1;
+  if Count = MAX_TREE_NODE then
+  begin
+    Error := atpTooManyExpressions;
+    exit;
+  end;
+  start := TextCurrent;
+  while start^ = ' ' do
+    inc(start);
+  TextCurrent := start;
+  if PtrUInt(start - Storage) >= StorageSize then // reached of input text
+  begin
+    TokenCurrent := sctInternalFinal; // SDDL may be within another expression
+    exit;
+  end;
+  TokenCurrent := SddlNextOperand(TextCurrent);
+  len := TextCurrent - start;
+  if len > 255 then
+    Error := atpTooBigExpression
+  else
+    case TokenCurrent of
+      sctPadding:  // error parsing
+        Error := atpInvalidExpression;
+      sctInternalFinal .. high(TSecConditionalToken):
+        ; // internal tokens are never serialized nor added to Nodes[]
+    else
+      result := AddNode(start - Storage, len);
+    end;
+end;
+
+function TAceTextTree.ParseExpr: integer;
+var
+  t, l, r: integer;
+begin
+  result := -1;
+  t := ParseNextToken;
+  while Error = atpSuccess do
+  begin
+    case TokenCurrent of
+      sctInternalFinal:
+        exit;
+      sctInternalParenthOpen:
+        if ParentCount = 255 then
+          Error := atpTooManyParenthesis
+        else
+        begin
+          inc(ParentCount);
+          result := ParseExpr;
+        end;
+      sctInternalParenthClose:
+        if ParentCount = 0 then
+          Error := atpMissingParenthesis
+        else
+        begin
+          dec(ParentCount);
+          exit;
+        end;
+      sctNot: // !( .... ) token has always parenthesis
+        if ParentCount = 255 then
+          Error := atpTooManyParenthesis
+        else
+        begin
+          ParseNextToken;
+          if TokenCurrent <> sctInternalParenthOpen then
+            Error := atpMissingParenthesis
+          else
+          begin
+            result := t;
+            inc(ParentCount);
+            Nodes[t].Left := ParseExpr;
+          end;
+        end;
+    else
+      if TokenCurrent in sctUnary then
+      begin
+        result := t;
+        l := ParseNextToken; // sctAttribute, sctSid or sctComposite
+        if l < 0 then
+          Error := atpInvalidExpression
+        else
+          Nodes[t].Left := l;
+      end
+      else if TokenCurrent in sctLiteral + sctAttribute then
+      begin
+        l := t;
+        result := ParseNextToken;
+        r := -1;
+        if TokenCurrent in sctBinaryOperator then
+          r := ParseNextToken // sctAttribute, sctSid or sctComposite
+        else if TokenCurrent in sctBinaryLogicalOperator then
+          r := ParseExpr     // could be another expression
+        else if TokenCurrent in [sctInternalFinal, sctInternalParenthClose] then
+        begin
+          result := t;       // e.g. '&& @Device.Bitlocker'
+          continue;
+        end
+        else
+          Error := atpInvalidExpression;
+        if (Error = atpSuccess) and
+           (r >= 0) then
+          with Nodes[result] do
+          begin
+            Left := l;
+            Right := r;
+          end;
+      end else if TokenCurrent in sctBinaryLogicalOperator then
+        if result < 0 then
+          Error := atpInvalidExpression
+        else
+        begin
+          l := result;
+          r := ParseExpr;
+          result := t;
+          if (Error = atpSuccess) and
+             (r >= 0) then
+            with Nodes[result] do
+            begin
+              Left := l;
+              Right := r;
+            end;
+        end
+      else
+        Error := atpInvalidExpression;
+    end;
+    if (TokenCurrent = sctInternalFinal) or
+       (Error <> atpSuccess) then
+      break;
+    t := ParseNextToken;
+  end;
+end;
+
+function TAceTextTree.FromText(const Input: RawUtf8): TAceTextParse;
+begin
+  Storage := pointer(Input);
+  StorageSize := length(Input);
+  result := FromText;
+end;
+
+function TAceTextTree.FromText: TAceTextParse;
+var
+  r: integer;
+begin
+  result := atpNoExpression;
+  Root := 255;
+  Count := 0;
+  ParentCount := 0;
+  if (Storage = nil) or
+     (Storage[0] <> '(') or
+     (Storage[StorageSize - 1] <> ')') or
+     (StorageSize >= MAX_TREE_BYTES) or
+     (cardinal(StrLen(Storage)) < StorageSize) then
+    exit; // not a valid SDDL text input for sure
+  TextCurrent := Storage;
+  TokenCurrent := sctPadding;
+  Error := atpSuccess;
+  r := ParseExpr;
+  Root := r;
+  if Error = atpSuccess then
+    if r < 0 then
+      Error := atpInvalidExpression
+    else if ParentCount <> 0 then
+      Error := atpMissingParenthesis;
+  result := Error;
+end;
+
+function TAceTextTree.RawAppendBinary(var bin: TSynTempBuffer;
+  const node: TAceTextTreeNode): boolean;
+
+  procedure DoBytes(b: pointer; blen: PtrInt);
+  var
+    v: PRawAceLiteral;
+  begin
+    if (blen = 0) and
+       (node.Token <> sctUnicode) then
+    begin
+      Error := atpMissingExpression; // those tokens could not have length = 0
+      exit;
+    end;
+    v := bin.Add(5 + blen);
+    v^.Token := node.Token;
+    v^.UnicodeBytes := blen;        // also v^.CompositeBytes/v^.SidBytes
+    MoveFast(b^, v^.Unicode, blen); // also v^.Composite/v^.Sid
+    result := true; // success
+  end;
+
+  // sub-functions to have minimal stack usage on main RawAppendBinary()
+
+  procedure DoComposite(p: PUtf8Char);
+  var
+    s: PUtf8Char;
+    one: TAceTextTreeNode;
+    items: TSynTempBuffer;
+  begin
+    items.InitOnStack;
+    s := p + 1; // ignore trailing '{'
+    repeat
+      while s^ = ' ' do
+        inc(s);
+      one.Position := s - Storage;
+      p := s;
+      one.Token := SddlNextOperand(p);
+      one.Length := p - s;
+      if not (one.Token in sctLiteral) then
+        Error := atpInvalidComposite
+      else if not RawAppendBinary(items, one) then // allow recursive {..,{..}}
+        break;
+      s := p;
+      while s^ = ' ' do
+        inc(s);
+      if s^ = '}' then
+        break // end of sctComposite text block
+      else if s^ <> ',' then
+        Error := atpInvalidComposite
+      else
+        inc(s);
+    until Error <> atpSuccess;
+    if Error = atpSuccess then
+      DoBytes(items.buf, items.added);
+    items.Done;
+  end;
+
+  procedure DoSid(p: PUtf8Char);
+  var
+    sid: TSid;
+  begin
+    inc(p, 4); // ignore trailing 'SID(' chars
+    if SddlNextSid(p, sid, nil) then
+      DoBytes(@sid, SidLength(@sid))
+    else
+      Error := atpInvalidSid;
+  end;
+
+  procedure DoUnicode(p: PUtf8Char);
+  var
+    tmpw: TSynTempBuffer;
+    l: PtrInt;
+    w: PWideChar;
+  begin
+    l := node.Length;
+    case node.Token of
+      sctUnicode:
+        begin
+          inc(p);
+          dec(l, 2); // trim "...." double quotes
+        end;
+     sctUserAttribute,
+     sctResourceAttribute,
+     sctDeviceAttribute:
+       begin
+         l := ord(ATTR_SDDL[node.Token][0]); // ignore e.g. trailing '@User.'
+         inc(p, l); // no double quotes on identifiers
+         l := node.Length - l;
+       end;
+    end;
+    w := Unicode_ToUtf8(p, l, tmpw);
+    if w = nil then
+      Error := atpInvalidUnicode // invalid UTF-8 input
+    else
+      DoBytes(w, tmpw.len * 2);  // length in bytes
+    tmpw.Done; // paranoid, since node.Length <= 255
+  end;
+
+var
+  v: PRawAceLiteral;
+  p: pointer;
+  b: PtrUInt;
+begin
+  result := false;
+  p := Storage + node.Position;
+  case node.Token of
+    // sctLiteral tokens
+    sctInt64:
+      begin
+        v := bin.Add(SizeOf(v^.Token) + SizeOf(v^.Int));
+        v^.Token := node.Token;
+        v^.Int.Value := GetInt64(p);
+        v^.Int.Sign := scsNone;
+        if v^.Int.Value < 0 then
+          v^.Int.Sign := scsNegative;
+        v^.Int.Base := scbDecimal;
+        result := true;
+      end;
+    sctOctetString:
+      begin
+        b := node.Length shr 1;
+        v := bin.Add((SizeOf(v^.Token) + SizeOf(v^.OctetBytes)) + b);
+        v^.Token := node.Token;
+        inc(PAnsiChar(p)); // ignore trailing '#'
+        v^.OctetBytes := ParseHex(p, @v^.Octet, b) - p;
+        if v^.OctetBytes = b then
+          result := true
+        else
+          Error := atpInvalidOctet;
+      end;
+    sctComposite:  // e.g. '{"Sales","HR"}'
+      DoComposite(p);
+    sctSid:        // e.g. 'SID(BA)'
+      DoSid(p);
+    sctUnicode,
+    // sctAttribute tokens
+    sctLocalAttribute,
+    sctUserAttribute,
+    sctResourceAttribute,
+    sctDeviceAttribute:
+      DoUnicode(p);
+  else
+    if node.Token in sctOperator then // expect only single-byte token here
+    begin
+      PSecConditionalToken(bin.Add(1))^ := node.Token;
+      result := true;
+    end
+    else
+      Error := atpUnexpectedToken;
+  end;
+end;
+
+function TAceTextTree.AppendBinary(var bin: TSynTempBuffer; node: integer): boolean;
+var
+  n: ^TAceTextTreeNode;
+begin
+  result := false;
+  if cardinal(node) > cardinal(Count) then
+    exit;
+  n := @Nodes[node];
+  if n^.Token >= sctInternalFinal then
+    exit; // paranoid
+  if n^.Left <> 255 then
+    if not AppendBinary(bin, n^.Left) then
+      exit;
+  if n^.Right <> 255 then
+    if not AppendBinary(bin, n^.Right) then
+      exit;
+  result := RawAppendBinary(bin, n^); // stored in reverse Polish order
+end;
+
+function TAceTextTree.ToBinary: RawByteString;
+var
+  pad: PtrUInt;
+  bin: TSynTempBuffer; // no temporary allocation needed
+begin
+  result := '';
+  if (Count = 0) or
+     (Error <> atpSuccess) or
+     (Root >= Count) then
+    exit;
+  bin.InitOnStack;
+  PCardinal(bin.Add(4))^ := ACE_CONDITION_SIGNATURE;
+  if AppendBinary(bin, Root) then // recursive generation
+  begin
+    pad := bin.added and 3;
+    if pad <> 0 then
+      PCardinal(bin.Add(4 - pad))^ := 0; // should be DWORD-padded with zeros
+    FastSetRawByteString(result, bin.buf, bin.added);
+  end
+  else if Error = atpSuccess then
+    Error := atpInvalidContent; // if no Error was specified
+  bin.Done;
+end;
+
+function TAceTextTree.ToText: RawUtf8;
+begin
+  FastSetString(result, Storage, StorageSize); // FromText() value
+end;
+
+
 { ****************** TSecurityDescriptor Wrapper Object }
 
 function IsValidSecurityDescriptor(p: PByteArray; len: cardinal): boolean;
@@ -3054,6 +3749,7 @@ begin
     // main buffer coherency
     (p <> nil) and
     (len > SizeOf(TRawSD)) and
+    (len and 3 = 0) and // should be DWORD-aligned
     // header
     (PRawSD(p)^.Revision = 1) and
     (PRawSD(p)^.Sbz1 = 0) and
@@ -3142,7 +3838,7 @@ var
   p: PAnsiChar;
   hdr: PRawSD;
 begin
-  FastSetRawByteString(RawByteString(result), nil,
+  FastNewRawByteString(RawByteString(result),
     SizeOf(hdr^) + length(Owner) + length(Group) +
     SecAclToBin(nil, Sacl) + SecAclToBin(nil, Dacl));
   p := pointer(result);
@@ -3192,11 +3888,10 @@ const
     scDaclPresent, scSaclPresent);
 
 function TSecurityDescriptor.NextAclFromText(var p: PUtf8Char; dom: PSid;
-  scope: TSecAceScope): boolean;
+  scope: TSecAceScope): TAceTextParse;
 var
   acl: PSecAcl;
 begin
-  result := false;
   while p^ = ' ' do
     inc(p);
   if p^ = 'P' then
@@ -3220,15 +3915,16 @@ begin
   end;
   while p^ = ' ' do
     inc(p);
+  result := atpMissingParenthesis;
   if p^ <> '(' then
     exit;
   repeat
     inc(p);
-    if not InternalAdd(scope, acl).FromText(p, dom) then
+    result := InternalAdd(scope, acl).FromText(p, dom);
+    if result <> atpSuccess then
       exit;
     inc(p); // p^ = ')'
   until p^ <> '(';
-  result := true;
 end;
 
 procedure TSecurityDescriptor.AclToText(var sddl: RawUtf8;
@@ -3249,41 +3945,40 @@ begin
   if scope = sasSacl then
     acl := @Sacl;
   for i := 0 to length(acl^) - 1 do
-  begin
-    acl^[i].AppendAsText(tmp, dom);
-    AppendShortToUtf8(tmp, sddl);
-    tmp[0] := #0;
-  end;
+    acl^[i].AppendAsText(tmp, sddl, dom);
 end;
 
-function TSecurityDescriptor.FromText(var p: PUtf8Char; dom: PSid; endchar: AnsiChar): boolean;
+function TSecurityDescriptor.FromText(var p: PUtf8Char;
+  dom: PSid; endchar: AnsiChar): TAceTextParse;
 begin
   Clear;
-  result := false;
+  result := atpMissingExpression;
   if p = nil then
     exit;
   repeat
     while p^ = ' ' do
       inc(p);
+    result := atpMissingExpression;
     if p[1] <> ':' then
       exit;
     inc(p, 2);
+    result := atpSuccess;
     case p[-2] of
       'O':
         if not SddlNextSid(p, Owner, dom) then
-          exit;
+          result := atpInvalidOwner;
       'G':
         if not SddlNextSid(p, Group, dom) then
-          exit;
+          result := atpInvalidGroup;
       'D':
-        if not NextAclFromText(p, dom, sasDacl) then
-          exit;
+        result := NextAclFromText(p, dom, sasDacl);
       'S':
-        if not NextAclFromText(p, dom, sasSacl) then
-          exit;
+        result := NextAclFromText(p, dom, sasSacl);
     else
-      exit;
+      result := atpInvalidContent;
     end;
+    if result <> atpSuccess then
+      exit;
     while p^ = ' ' do
       inc(p);
   until (p^ = #0) or (p^ = endchar);
@@ -3291,17 +3986,18 @@ begin
     include(Flags, scDaclPresent);
   if Sacl <> nil then
     include(Flags, scSaclPresent);
-  result := true;
 end;
 
-function TSecurityDescriptor.FromText(const SddlText, RidDomain: RawUtf8): boolean;
+function TSecurityDescriptor.FromText(
+  const SddlText, RidDomain: RawUtf8): TAceTextParse;
 var
   p: PUtf8Char;
   dom: RawSid;
 begin
   p := pointer(SddlText);
-  result := TryDomainTextToSid(RidDomain, dom) and
-            FromText(p, pointer(dom));
+  result := atpInvalidSid;
+  if TryDomainTextToSid(RidDomain, dom) then
+    result := FromText(p, pointer(dom));
 end;
 
 function TSecurityDescriptor.ToText(const RidDomain: RawUtf8): RawUtf8;
@@ -3387,7 +4083,8 @@ begin
     exit;
   inc(p);
   result := InternalAdd(scope, acl);
-  result := InternalAdded(scope, result, acl, result^.FromText(p, dom));
+  result := InternalAdded(scope, result, acl,
+    result^.FromText(p, dom) = atpSuccess);
 end;
 
 procedure TSecurityDescriptor.Delete(index: PtrUInt; scope: TSecAceScope);
@@ -3675,26 +4372,24 @@ var
   wkr: TWellKnownRid;
   sam: TSecAccess;
   i: PtrInt;
-  w: PWord;
 begin
-  w := @SID_SDDLW;
-  for wks := low(wks) to wksLastSddl do
+  for i := low(SDDL_WKS) to high(SDDL_WKS) do
   begin
-    if w^ <> $2020 then
-      include(wksWithSddl, wks);
-    inc(w);
+    wks := SDDL_WKS[i];
+    include(wksWithSddl, wks);
+    SDDL_WKS_INDEX[wks] := i;
   end;
-  for wkr := low(wkr) to high(wkr) do
+  for i := low(SDDL_WKR) to high(SDDL_WKR) do
   begin
-    if w^ <> $2020 then
-      include(wkrWithSddl, wkr);
-    inc(w);
+    wkr := SDDL_WKR[i];
+    include(wkrWithSddl, wkr);
+    SDDL_WKR_INDEX[wkr] := i + high(SDDL_WKS);
   end;
+  for i := low(SDDL_OPER) to high(SDDL_OPER) do
+    SDDL_OPER_INDEX[SDDL_OPER[i]] := i;
   for sam := low(sam) to high(sam) do
     if SAM_SDDL[sam][0] <> #0  then
       include(samWithSddl, sam);
-  for i := low(SDDL_OPER) to high(SDDL_OPER) do
-    SDDL_OPER_INDEX[SDDL_OPER[i]] := i;
 end;
 
 initialization

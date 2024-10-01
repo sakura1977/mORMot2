@@ -6499,21 +6499,13 @@ const
     'O:BAG:DUD:AI(A;ID;FA;;;BA)(A;ID;FA;;;SY)(A;ID;0x1200a9;;;BU)(A;ID;0x1301bf;;;AU)',
     'O:S-1-5-21-2461620395-3297676348-3167859224-1001G:DUD:AI(A;ID;FA;;;BA)' +
     '(A;ID;FA;;;SY)(A;ID;0x1200a9;;;BU)(A;ID;0x1301bf;;;AU)');
-  // some ACE conditional expressions
-  COND_TXT: array[0..2] of RawUtf8 = (
-    'D:(XA;;FX;;;WD;(@User.Title=="PM" && (@User.Division=="Finance" || ' +
-      '@User.Division ==" Sales")))',
-    'D:(XA;;FX;;;WD;(@User.Project Any_of @Resource.Project))(A;ID;FA;;;SY)',
-    'D:(XA;;FR;;;WD;(Member_of {SID(Smartcard_SID), SID(BO)} ' +
-      '&& @Device.Bitlocker))(A;ID;FA;;;SY)');
   // [MS-DTYP] 2.4.4.17.9 Examples: Conditional Expression Binary Representation
   ARTX_HEX: array[0..2] of RawUtf8 = (
     '61727478f80a0000005400690074006c00650010040000005600500080000000',
     '61727478f91200000073006d006100720074006300610072006400' +
     '040100000000000000030280fb0e0000006d0061006e006100670065006400' +
     '040100000000000000030280a1fa080000006400650070007400' +
-    '5018000000100a000000530061006c006500730010040000004800520088a0' +
-    '00000000000000000000000000',
+    '5018000000100a000000530061006c006500730010040000004800520088a000',
     '61727478f91c00000063006c0065006100720061006e00630065004c006500760065006c00' +
     'fa220000007200650071007500690072006500640043006c0065006100720061006e0063006500' +
     '85501500000051100000000102000000000005200000002002000089a1000000');
@@ -6521,24 +6513,42 @@ const
     '(Title=="VP")',
     '(((@User.smartcard==1) || (@Device.managed==1)) && (@Resource.dept Any_of{"Sales","HR"}))',
     '((@User.clearanceLevel>=@Resource.requiredClearance) || (Member_of{SID(BA)}))');
+  // some ACE conditional expressions
+  COND_TXT: array[0..2] of RawUtf8 = (
+    'D:(XA;;FX;;;WD;(@User.Title=="PM" && (@User.Division=="Finance" || ' +
+      '@User.Division ==" Sales")))',
+    'D:(XA;;FX;;;WD;(@User.Project Any_of @Resource.Project))(A;ID;FA;;;SY)',
+    'D:(XA;;FR;;;WD;(Member_of{SID(S-1-3-7),SID(BO)} && @Device.Bitlocker))(A;ID;FA;;;SY)');
+  // our SDDL output always add parenthesis on binary expressions
+  COND_EXP: array[0..2] of RawUtf8 = (
+    'D:(XA;;FX;;;WD;((@User.Title=="PM") && ((@User.Division=="Finance") || ' +
+      '(@User.Division==" Sales"))))',
+    'D:(XA;;FX;;;WD;(@User.Project Any_of @Resource.Project))(A;ID;FA;;;SY)',
+    'D:(XA;;FR;;;WD;((Member_of{SID(S-1-3-7),SID(BO)}) && @Device.Bitlocker))(A;ID;FA;;;SY)');
 
 procedure TTestCoreBase._SDDL;
 var
   i, j: PtrInt;
   c: TSecControls;
-  k: TWellKnownSid;
-  r: TWellKnownRid;
+  k, k2: TWellKnownSid;
+  r, r2: TWellKnownRid;
   bin, saved: RawSecurityDescriptor;
   u, dom, json: RawUtf8;
+  all: TRawUtf8DynArray;
+  n: integer;
   domsid: RawSid;
   sd, sd2: TSecurityDescriptor;
-  tree: TAceTree;
+  bintree: TAceBinaryTree;
+  sddltree: TAceTextTree;
+  atp: TAceTextParse;
   p: PUtf8Char;
 begin
   // validate internal structures and types
   CheckEqual(KnownSidToSddl(wksNull), '');
   CheckEqual(KnownSidToSddl(wksWorld), 'WD');
   CheckEqual(KnownSidToSddl(wksLocal), '');
+  CheckEqual(KnownSidToSddl(wksCreatorOwnerRights), 'OW');
+  CheckEqual(KnownSidToSddl(wksDialup), '');
   CheckEqual(KnownSidToSddl(wksNetwork), 'NU');
   CheckEqual(KnownSidToSddl(wksSelf), 'PS');
   CheckEqual(KnownSidToSddl(wksLocalSystem), 'SY');
@@ -6548,12 +6558,43 @@ begin
   CheckEqual(KnownSidToSddl(wksBuiltinEventLogReadersGroup), 'ER');
   CheckEqual(KnownSidToSddl(wksBuiltinAccessControlAssistanceOperators), 'AA');
   CheckEqual(KnownSidToSddl(wksBuiltinWriteRestrictedCode), 'WR');
+  CheckEqual(KnownSidToSddl(wksBuiltinUserModeDriver), 'UD');
+  CheckEqual(KnownSidToSddl(wksBuiltinAnyPackage), 'AC');
+  CheckEqual(KnownSidToSddl(wksAuthenticationServiceAsserted), 'SS');
   CheckEqual(KnownSidToSddl(wksCapabilityInternetClient), '');
   CheckEqual(KnownSidToSddl(high(TWellKnownSid)), '');
+  CheckEqual(KnownRidToSddl(wrkUserModeHwOperator), 'HO');
+  n := 0;
   for k := low(k) to high(k) do
-    Check((KnownSidToSddl(k) <> '') = (k in wksWithSddl));
+  begin
+    u := KnownSidToSddl(k);
+    Check((u <> '') = (k in wksWithSddl));
+    Check(SddlToKnownSid(u, k2) = (u <> ''));
+    if u = '' then
+      continue;
+    CheckUtf8(k2 = k, u);
+    CheckUtf8(not SddlToKnownRid(u, r2), u);
+    AddRawUtf8(all, n, FormatUtf8('% = %', [u, ToText(k)^]));
+  end;
   for r := low(r) to high(r) do
-    Check((KnownRidToSddl(r) <> '') = (r in wkrWithSddl));
+  begin
+    u := KnownRidToSddl(r);
+    Check((u <> '') = (r in wkrWithSddl));
+    Check(SddlToKnownRid(u, r2) = (u <> ''));
+    if u = '' then
+      continue;
+    CheckUtf8(r2 = r, u);
+    CheckUtf8(not SddlToKnownSid(u, k2), u);
+    AddRawUtf8(all, n, FormatUtf8('% = %', [u, ToText(r)^]));
+  end;
+  DynArrayFakeLength(all, n);
+  QuickSortRawUtf8(all, n);
+  u := RawUtf8ArrayToCsv(all, #10); //ConsoleWrite(u);
+  CheckHash(u, $30EF8B6D, 'sid sddl list');
+  CheckEqual(SizeOf(TSid)    and 3, 0, 'TSid    DWORD-aligned');
+  CheckEqual(SizeOf(TRawSD)  and 3, 0, 'TRawSD  DWORD-aligned');
+  CheckEqual(SizeOf(TRawAcl) and 3, 0, 'TRawAcl DWORD-aligned');
+  CheckEqual(SizeOf(TRawAce) and 3, 0, 'TRawAce DWORD-aligned');
   CheckEqual(ord(scDaclAutoInheritReq), 8);
   CheckEqual(ord(scSelfRelative), 15);
   c := [scSelfRelative];
@@ -6561,7 +6602,7 @@ begin
   CheckEqual(ord(samGenericRead), 31, 'sam');
   dom := 'S-1-5-21-823746769-1624905683-418753922';
   CheckEqual(KnownSidToText(wkrUserAdmin, dom), dom + '-500');
-  CheckEqual(KnownSidToText(wkrSecurityMandatorySystem, dom), dom + '-16384');
+  CheckEqual(KnownSidToText(wrkGroupRasServers, dom), dom + '-553');
   // validate against some reference binary material
   for i := 0 to high(SD_B64) do
   begin
@@ -6597,10 +6638,10 @@ begin
     if i >= 3 then // serialization offsets seem not consistent
       Check(saved = bin, 'ToBinary');
     // TSecurityDescriptor load from SDDL into another instance
-    Check(not sd2.FromText(''));
+    Check(sd2.FromText('') = atpMissingExpression);
     CheckEqual(sd2.ToText, '', 'fromnil');
     Check(not sd.IsEqual(sd2));
-    Check(sd2.FromText(u), 'fromu');
+    Check(sd2.FromText(u) = atpSuccess, 'fromu');
     CheckEqual(sd2.ToText, u, 'fromutou');
     Check(sd.IsEqual(sd2));
     Check(sd2.IsEqual(sd));
@@ -6650,9 +6691,11 @@ begin
     Check(scDaclPresent in sd.Flags);
   end;
   // validate parsing RID in text (e.g. DU,DA)
-  Check(not sd.FromText(RID_TXT[4]), 'dom0');
+  atp := sd.FromText(RID_TXT[4]);
+  Check(atp = atpInvalidOwner, 'dom0');
   Check(not sd.IsEqual(sd2));
-  Check(sd.FromText(' O: DU G: DA D: ( A ; ; FA ; ; ; DA ) ', dom), 'dom1');
+  atp := sd.FromText(' O: DU G: DA D: ( A ; ; FA ; ; ; DA ) ', dom);
+  Check(atp = atpSuccess, 'dom1');
   Check(not sd.IsEqual(sd2));
   u := sd.ToText;
   CheckEqual(u, FormatUtf8('O:%-513G:%-512D:(A;;FA;;;%-512)', [dom, dom, dom]));
@@ -6676,34 +6719,40 @@ begin
   for i := low(DOM_TXT) to high(DOM_TXT) do
   begin
     Check(TryDomainTextToSid(DOM_TXT[i], domsid));
-    Check(sd.FromText(SD_TXT[i]));
+    atp := sd.FromText(SD_TXT[i]);
+    Check(atp = atpSuccess);
     u := '';
     sd.AppendAsText(u, pointer(domsid));
     CheckEqual(u, RID_TXT[i]);
     p := pointer(u);
-    Check(sd2.FromText(p, pointer(domsid)));
+    atp := sd2.FromText(p, pointer(domsid));
+    Check(atp = atpSuccess);
     Check(sd.IsEqual(sd2));
   end;
-  // validate conditional ACEs binary
+  // validate conditional ACEs reference binary
   for i := 0 to high(ARTX_HEX) do
   begin
-    Check(not tree.Init(''));
-    CheckEqual(tree.Count, 0);
-    CheckEqual(tree.ToText, '');
     bin := mormot.core.text.HexToBin(ARTX_HEX[i]);
     Check(bin <> '');
-    Check(tree.Init(bin));
-    CheckEqual(tree.Count, 0);
-    CheckEqual(tree.ToText, '');
-    Check(tree.FromBinary);
-    Check(tree.Count > 0);
-    u := tree.ToText;
-    CheckEqual(u, ARTX_TXT[i]);
+    Check(bintree.FromBinary(bin));
+    Check(bintree.Count > 0);
+    u := bintree.ToText;
+    CheckEqual(u, ARTX_TXT[i], 'artx1');
+    atp := sddltree.FromText(u);
+    Check(atp = atpSuccess);
+    saved := sddltree.ToBinary;
+    CheckEqual(length(saved), length(bin), '2binl');
+    Check(saved = bin, '2bin');
+    Check(bintree.FromBinary(saved), 'artx2');
+    Check(bintree.Count > 0);
+    u := bintree.ToText;
+    CheckEqual(u, ARTX_TXT[i], 'artx3');
   end;
   // validate conditional ACEs
   for i := 0 to high(COND_TXT) do
   begin
-    Check(sd.FromText(COND_TXT[i]));
+    atp := sd.FromText(COND_TXT[i]);
+    Check(atp = atpSuccess);
     Check(length(sd.Dacl) in [1, 2]);
     CheckEqual(length(sd.Sacl), 0);
     Check(sd.Dacl[0].AceType = satCallbackAccessAllowed);
@@ -6714,13 +6763,14 @@ begin
       Check(u[1] = '(');
       Check(u[length(u)] = ')');
     end;
-    CheckEqual(sd.ToText, COND_TXT[i]);
+    u := sd.ToText;
+    CheckEqual(u, COND_EXP[i]);
     saved := sd.ToBinary;
     Check(saved <> '');
     Check(IsValidSecurityDescriptor(pointer(saved), length(saved)), 'savcond');
     Check(sd2.FromBinary(saved));
     Check(sd.IsEqual(sd2));
-    CheckEqual(sd2.ToText, COND_TXT[i]);
+    CheckEqual(sd2.ToText, u);
   end;
 end;
 

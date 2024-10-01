@@ -87,7 +87,7 @@ type
   /// the decoded TCldapDomainInfo.RawFlags content
   TCldapDomainFlags = set of TCldapDomainFlag;
 
-  /// define the domain information returned by CldapGetDomainInfo(
+  /// the domain information returned by CldapGetDomainInfo(
   TCldapDomainInfo = record
     RawLogonType, RawFlags, NTVersion: cardinal;
     LogonType: TCldapDomainLogonType;
@@ -508,7 +508,7 @@ function RawLdapErrorString(ErrorCode: integer; out Enum: TLdapError): RawUtf8;
 function RawLdapTranslateFilter(const Filter: RawUtf8): TAsnObject;
 
 /// encode the ASN.1 binary for a LDAP_ASN1_SEARCH_REQUEST
-// - as used by CldapBroadcast() and TLdapClient.Search()
+// - as used by TLdapClient.Search and CldapGetDomainInfo/CldapBroadcast/CldapSortHosts
 function RawLdapSearch(const BaseDN: RawUtf8; TypesOnly: boolean;
   Filter: RawUtf8; const Attributes: array of RawUtf8;
   Scope: TLdapSearchScope = lssBaseObject; Aliases: TLdapSearchAliases = lsaAlways;
@@ -750,7 +750,8 @@ function AttributeNameType(const AttrName: RawUtf8): TLdapAttributeType;
 // - as used by TLdapAttribute.GetReadable/GetAllReadable
 // - will detect SID, GUID, FileTime and text date/time known fields
 // - if s is not truly UTF-8 encoded, will return its hexadecimal representation
-procedure AttributeValueMakeReadable(var s: RawUtf8; ats: TLdapAttributeTypeStorage);
+procedure AttributeValueMakeReadable(var s: RawUtf8;
+  ats: TLdapAttributeTypeStorage; dom: PSid = nil);
 
 /// convert a set of common Attribute Types into their array text representation
 // - by design, atUndefined would be excluded from the list
@@ -861,6 +862,7 @@ type
     roCommonNameAtRoot,
     roNoObjectName,
     roWithCanonicalName,
+    roNoSddlDomainRid,
     roRawValues,
     roRawBoolean,
     roRawUac,
@@ -876,10 +878,11 @@ type
     fCount: integer;
     fKnownType: TLdapAttributeType;
     fKnownTypeStorage: TLdapAttributeTypeStorage;
+    fObjectSidIsDomain: boolean;
     procedure SetVariantOne(var v: TVarData; const s: RawUtf8;
-      options: TLdapResultOptions);
+      options: TLdapResultOptions; dom: PSid);
     procedure SetVariantArray(var v: TDocVariantData;
-      options: TLdapResultOptions);
+      options: TLdapResultOptions; dom: PSid);
     function ToAsnSeq: TAsnObject;
   public
     /// initialize the attribute(s) storage
@@ -914,11 +917,12 @@ type
     // - return null if there is no value (self=nil or Count=0)
     // - if there is a single value, return it as a single variant text
     // - if Count > 0, return a TDocVariant array with all texts
-    function GetVariant(options: TLdapResultOptions = []): variant;
+    function GetVariant(options: TLdapResultOptions = []; dom: PSid = nil): variant;
     /// retrieve this attribute value(s) as a variant
     // - expects v to be fully zeroed (e.g. just allocated from a variant array)
     // - as called by GetVariant()
-    procedure SetNewVariant(var v: variant; options: TLdapResultOptions);
+    procedure SetNewVariant(var v: variant;
+      options: TLdapResultOptions; dom: PSid);
     /// search for a given value within this list
     function FindIndex(const aValue: RawByteString): PtrInt;
     /// add all attributes to a "dn: ###" entry of a ldif-content buffer
@@ -1028,6 +1032,8 @@ type
     function GroupTypes: TGroupTypes;
     /// access atSystemFlags attribute value with proper decoding
     function SystemFlags: TSystemFlags;
+    /// return the atObjectSid, if it is in a 'S-1-5-21-xx-xx-xx-RID' domain form
+    function Domain: PSid;
     /// access atUserAccountControl attribute value with proper decoding/encoding
     property UserAccountControl: TUserAccountControls
       read GetUserAccountControl write SetUserAccountControl;
@@ -1455,9 +1461,9 @@ type
     fSearchSDFlags: TLdapSearchSDFlags;
     fSearchCookie: RawUtf8;
     fSearchResult: TLdapResultList;
-    fDefaultDN, fRootDN, fConfigDN: RawUtf8;
+    fDefaultDN, fRootDN, fConfigDN, fVendorName, fServiceName: RawUtf8;
     fNetbiosDN: RawUtf8;
-    fMechanisms, fControls, fExtensions: TRawUtf8DynArray;
+    fMechanisms, fControls, fExtensions, fNamingContexts: TRawUtf8DynArray;
     fSecContext: TSecContext;
     fBoundUser: RawUtf8;
     fSockBuffer: RawByteString;
@@ -1482,6 +1488,7 @@ type
     procedure GetByAccountType(AT: TSamAccountType; Uac, unUac: integer;
       const BaseDN, CustomFilter, Match: RawUtf8; Attribute: TLdapAttributeType;
       out Res: TRawUtf8DynArray; ObjectNames: PRawUtf8DynArray);
+    procedure RetrieveRootDseInfo;
   public
     /// initialize this LDAP client instance
     constructor Create; overload; override;
@@ -1499,25 +1506,41 @@ type
     // - do nothing if was already connected
     function Connect(DiscoverMode: TLdapClientConnect = [lccCldap, lccTlsFirst];
       DelayMS: integer = 500): boolean;
-    /// the Root domain name of this LDAP server
+    /// the published "rootDomainNamingContext" attribute in the Root DSE
+    // - a typical value is e.g. 'DC=ad,DC=company,DC=it'
     // - use an internal cache for fast retrieval
     function RootDN: RawUtf8;
-    /// the Default domain name of this LDAP server
+    /// the published "defaultNamingContext" attribute in the Root DSE
     // - is the same as RootDN when domain isn't a subdomain
+    // - a typical value is e.g. 'DC=ad,DC=company,DC=it'
     // - use an internal cache for fast retrieval
     function DefaultDN(const BaseDN: RawUtf8 = ''): RawUtf8;
-    /// the Confirguration domain name of this LDAP server
+    /// the published "vendorName" attribute in the Root DSE
+    // - a typical value is e.g. 'Samba Team (https://www.samba.org)'
+    // - use an internal cache for fast retrieval
+    function VendorName: RawUtf8;
+    /// the published "ldapServiceName" attribute in the Root DSE
+    // - a typical value is e.g. 'ad.company.it:dc-main@AD.COMPANY.IT'
+    // - use an internal cache for fast retrieval
+    function ServiceName: RawUtf8;
+    /// the published "configurationNamingContext" attribute in the Root DSE
     // - use an internal cache for fast retrieval
     function ConfigDN: RawUtf8;
     /// the NETBIOS domain name, empty string if not found
+    // - retrieved from the CN=Partitions of this server's ConfigDN
     // - use an internal cache for fast retrieval
     function NetbiosDN: RawUtf8;
+    /// the published "namingContexts" attribute in the Root DSE
+    // - use an internal cache for fast retrieval
+    function NamingContexts: TRawUtf8DynArray;
     /// the authentication mechanisms supported on this LDAP server
     // - returns e.g. ['GSSAPI','GSS-SPNEGO','EXTERNAL','DIGEST-MD5']
+    // - from the published "supportedSASLMechanisms" attribute in the Root DSE
     // - use an internal cache for fast retrieval
     function Mechanisms: TRawUtf8DynArray;
     /// the controls supported on this LDAP server
     // - the OIDs are returned sorted, and de-duplicated
+    // - from the published "supportedControl" attribute in the Root DSE
     // - use an internal cache for fast retrieval
     function Controls: TRawUtf8DynArray;
     /// the LDAP v3 extensions supported on this LDAP server
@@ -1887,6 +1910,7 @@ type
       read fSearchCookie write fSearchCookie;
     /// the optional security flags to include in the response
     // - default [] means no atNTSecurityDescriptor
+    // - you can set e.g. lsfMain to retrieve main Security Descriptor fields
     // - if not [], append a LDAP_SERVER_SD_FLAGS_OID control to each Search(),
     // so that atNTSecurityDescriptor will contain the specified flags
     property SearchSDFlags: TLdapSearchSDFlags
@@ -1994,6 +2018,14 @@ type
     property CacheTimeoutSeconds: integer
       read fCacheTimeoutSeconds write fCacheTimeoutSeconds;
   end;
+
+const
+  /// common possible value for TLdapClient.SearchSDFlags
+  // - lsfSaclSecurityInformation is not included because it is likely to be not
+  // available for the client, and would void the atNTSecurityDescriptor field
+  lsfMain = [lsfOwnerSecurityInformation,
+             lsfGroupSecurityInformation,
+             lsfDaclSecurityInformation];
 
 
 { **************** HTTP BASIC Authentication via LDAP or Kerberos }
@@ -2391,8 +2423,11 @@ begin
     req := Asn(ASN1_SEQ, [
              Asn(id),
              //Asn(''), // the RFC 1798 requires user, but MS AD does not :(
-             RawLdapSearch('', false, '*', ['dnsHostName',
-               'defaultNamingContext', 'ldapServiceName', 'vendorName'])
+             RawLdapSearch('', false, '*', [
+               'dnsHostName',
+               'defaultNamingContext',
+               'ldapServiceName',
+               'vendorName'])
            ]);
     sock.SetReceiveTimeout(TimeOutMS);
     QueryPerformanceMicroSeconds(start);
@@ -3114,7 +3149,8 @@ begin
   result := _AttributeNameType(_LdapIntern.Existing(AttrName)); // very fast
 end;
 
-procedure AttributeValueMakeReadable(var s: RawUtf8; ats: TLdapAttributeTypeStorage);
+procedure AttributeValueMakeReadable(var s: RawUtf8;
+  ats: TLdapAttributeTypeStorage; dom: PSid);
 var
   ft: QWord;
   guid: TGuid;
@@ -3139,12 +3175,12 @@ begin
     atsGuid:
       if length(s) = SizeOf(TGuid) then // stored as binary GUID
       begin
-        guid := PGuid(s)^; // temp copy to avoid issues with s content
+        guid := PGuid(s)^; // temp copy since ToUtf8() overrides s itself
         ToUtf8(guid, s);  // e.g. '3F2504E0-4F89-11D3-9A0C-0305E82C3301'
         exit;
       end;
     atsSecurityDescriptor:
-      if SecurityDescriptorToText(s, s) then // use our TSecurityDescriptor wrapper
+      if SecurityDescriptorToText(s, s, dom) then // TSecurityDescriptor wrapper
         exit;
     atsFileTime: // 64-bit FileTime
       begin
@@ -3508,6 +3544,7 @@ end;
 
 procedure TLdapAttribute.Add(const aValue: RawByteString; Option: TLdapAddOption);
 begin
+  // handle Add() options
   case Option of
     aoReplaceValue:
       if (fCount = 1) and
@@ -3522,6 +3559,12 @@ begin
       if FindIndex(aValue) >= 0 then
         exit;
   end;
+  // some type-specific process
+  case fKnownType of
+    atObjectSid:
+      fObjectSidIsDomain := SidIsDomain(pointer(aValue));
+  end;
+  // append to the internal list, with optional resize
   AddRawUtf8(TRawUtf8DynArray(fList), fCount, aValue);
   if Option <> aoAlwaysFast then
     DynArrayFakeLength(fList, fCount);
@@ -3590,7 +3633,7 @@ begin
 end;
 
 procedure TLdapAttribute.SetVariantOne(var v: TVarData; const s: RawUtf8;
-  options: TLdapResultOptions);
+  options: TLdapResultOptions; dom: PSid);
 var
   i: integer;
   uac: TUserAccountControls;
@@ -3696,37 +3739,38 @@ begin
   RawUtf8(v.VAny) := s;
   if not (fKnownTypeStorage in ATS_READABLE) and
      not (roRawValues in options) then
-    AttributeValueMakeReadable(RawUtf8(v.VAny), fKnownTypeStorage);
+    AttributeValueMakeReadable(RawUtf8(v.VAny), fKnownTypeStorage, dom);
 end;
 
 procedure TLdapAttribute.SetVariantArray(var v: TDocVariantData;
-  options: TLdapResultOptions);
+  options: TLdapResultOptions; dom: PSid);
 var
   i: PtrInt;
 begin // avoid implit try..finally in TLdapAttribute.GetVariant
   v.InitFast(fCount, dvArray);
   v.SetCount(fCount);
   for i := 0 to fCount - 1 do
-    SetVariantOne(PVarData(@v.Values[i])^, fList[i], options);
+    SetVariantOne(PVarData(@v.Values[i])^, fList[i], options, dom);
 end;
 
-procedure TLdapAttribute.SetNewVariant(var v: variant; options: TLdapResultOptions);
+procedure TLdapAttribute.SetNewVariant(var v: variant;
+  options: TLdapResultOptions; dom: PSid);
 begin
   if fCount = 1 then
-    SetVariantOne(TVarData(v), fList[0], options)
+    SetVariantOne(TVarData(v), fList[0], options, dom)
   else if fKnownTypeStorage = atsRawUtf8 then
     TDocVariantData(v).InitArrayFrom(TRawUtf8DynArray(fList), JSON_FAST, fCount)
   else
-    SetVariantArray(TDocVariantData(v), options);
+    SetVariantArray(TDocVariantData(v), options, dom);
 end;
 
-function TLdapAttribute.GetVariant(options: TLdapResultOptions): variant;
+function TLdapAttribute.GetVariant(options: TLdapResultOptions; dom: PSid): variant;
 begin
   SetVariantNull(result);
   TVarData(result).VAny := nil; // as required by SetNewVariant()
   if (self <> nil) and
      (fCount > 0) then
-    SetNewVariant(result, options);
+    SetNewVariant(result, options, dom);
 end;
 
 function TLdapAttribute.ToAsnSeq: TAsnObject;
@@ -3779,13 +3823,17 @@ end;
 
 destructor TLdapAttributeList.Destroy;
 begin
-  Clear;
+  ObjArrayClear(fItems, fCount);
   inherited Destroy;
 end;
 
 procedure TLdapAttributeList.Clear;
 begin
   ObjArrayClear(fItems, fCount);
+  fCount := 0;
+  fLastFound := 0;
+  fKnownTypes := [];
+  FillCharFast(fIndexTypes, SizeOf(fIndexTypes), 0);
 end;
 
 function TLdapAttributeList.FindIndex(const AttributeName: RawUtf8): PtrInt;
@@ -3998,6 +4046,18 @@ end;
 procedure TLdapAttributeList.SetUserAccountControl(Value: TUserAccountControls);
 begin
   Add(atUserAccountControl, ToUtf8(UserAccountControlsValue(Value)), aoReplaceValue);
+end;
+
+function TLdapAttributeList.Domain: PSid;
+var
+  a: TLdapAttribute;
+begin
+  a := Find(atObjectSid);
+  if (a = nil) or
+     not a.fObjectSidIsDomain then // checked once in TLdapAttribute.Add()
+    result := nil
+  else
+    result := pointer(a.fList[0]);
 end;
 
 
@@ -4256,6 +4316,7 @@ var
   i, j, k: PtrInt;
   res: TLdapResult;
   attr: ^TLdapAttribute;
+  dom: PSid;
   dc, ou, cn, lastdc: TRawUtf8DynArray;
   a: TDocVariantData;
   v, last: PDocVariantData;
@@ -4276,8 +4337,8 @@ begin
     ELdap.RaiseUtf8('%.AppendTo: roNoDCAtRoot, roObjectNameAtRoot, ' +
       'roObjectNameWithoutDCAtRoot, roCanonicalNameAtRoot and ' +
       'roCommonNameAtRoot are exclusive', [self]);
-  if (roRawValues in options) and
-     (options * [roRawBoolean .. roRawAccountType] <> []) then
+  if (roRawValues in Options) and
+     (Options * [roRawBoolean .. roRawAccountType] <> []) then
     ELdap.RaiseUtf8('%.AppendTo: roRawValues and other roRaw* options ' +
       'are exclusive', [self]);
   last := nil;
@@ -4320,27 +4381,30 @@ begin
       continue; // no attribute
     a.Init(mNameValue, dvObject);
     a.SetCount(res.Attributes.Count +
-               ord(not(roNoObjectName in options)) +
-               ord(roWithCanonicalName in options));
+               ord(not(roNoObjectName in Options)) +
+               ord(roWithCanonicalName in Options));
     a.Capacity := a.Count;
     k := 0;
-    if not(roNoObjectName in options) then
+    if not(roNoObjectName in Options) then
     begin
       a.Names[0] := sObjectName;
       RawUtf8ToVariant(res.ObjectName, a.Values[0]);
       inc(k);
     end;
-    if roWithCanonicalName in options then
+    if roWithCanonicalName in Options then
     begin
       a.Names[k] := sCanonicalName;
       RawUtf8ToVariant(ComputeCanonicalName, a.Values[k]);
       inc(k);
     end;
+    dom := nil;
+    if not(roNoSddlDomainRid in Options) then
+      dom := res.Attributes.Domain; // recognize known RID in this context
     attr := pointer(res.Attributes.Items);
     for j := k to k + res.Attributes.Count - 1 do
     begin
       a.Names[j] := attr^.AttributeName; // use TRawUtf8Interning
-      attr^.SetNewVariant(a.Values[j], options);
+      attr^.SetNewVariant(a.Values[j], Options, dom);
       inc(attr);
     end;
     if ObjectAttributeField = '*' then
@@ -4759,11 +4823,39 @@ begin
   result := fNetbiosDN;
 end;
 
+procedure TLdapClient.RetrieveRootDseInfo;
+var
+  root: TLdapResult;
+begin
+  if not fSock.SockConnected then
+    exit;
+  root := SearchObject('', '*', [
+    'rootDomainNamingContext',
+    'defaultNamingContext',
+    'namingContexts',
+    'configurationNamingContext',
+    'supportedSASLMechanisms',
+    'supportedControl',
+    'supportedExtension',
+    'vendorName',
+    'ldapServiceName']);
+  fRootDN := root.Attributes.GetByName('rootDomainNamingContext');
+  fDefaultDN := root.Attributes.GetByName('defaultNamingContext');
+  fNamingContexts := root.Attributes.Find('namingContexts').GetAllReadable;
+  fConfigDN := root.Attributes.GetByName('configurationNamingContext');
+  fMechanisms := root.Attributes.Find('supportedSASLMechanisms').GetAllReadable;
+  fControls := root.Attributes.Find('supportedControl').GetAllReadable;
+  DeduplicateRawUtf8(fControls);
+  fExtensions := root.Attributes.Find('supportedExtension').GetAllReadable;
+  DeduplicateRawUtf8(fExtensions);
+  fVendorName := root.Attributes.GetByName('vendorName');
+  fServiceName := root.Attributes.GetByName('ldapServiceName');
+end;
+
 function TLdapClient.RootDN: RawUtf8;
 begin
-  if (fRootDN = '') and
-     fSock.SockConnected then
-    fRootDN := SearchObject('', '*', 'rootDomainNamingContext').GetReadable;
+  if fRootDN = '' then
+    RetrieveRootDseInfo;
   result := fRootDN;
 end;
 
@@ -4773,48 +4865,58 @@ begin
     result := BaseDN
   else
   begin
-    if (fDefaultDN = '') and
-       fSock.SockConnected then
-      fDefaultDN := SearchObject('', '*', 'defaultNamingContext').GetReadable;
+    if fRootDN = '' then
+      RetrieveRootDseInfo;
     result := fDefaultDN;
   end;
 end;
 
+function TLdapClient.NamingContexts: TRawUtf8DynArray;
+begin
+  if fRootDN = '' then
+    RetrieveRootDseInfo;
+  result := fNamingContexts;
+end;
+
 function TLdapClient.ConfigDN: RawUtf8;
 begin
-  if (fConfigDN = '') and
-     fSock.SockConnected then
-    fConfigDN := SearchObject('', '*', 'configurationNamingContext').GetReadable;
+  if fRootDN = '' then
+    RetrieveRootDseInfo;
   result := fConfigDN;
+end;
+
+function TLdapClient.VendorName: RawUtf8;
+begin
+  if fRootDN = '' then
+    RetrieveRootDseInfo;
+  result := fVendorName;
+end;
+
+function TLdapClient.ServiceName: RawUtf8;
+begin
+  if fRootDN = '' then
+    RetrieveRootDseInfo;
+  result := fServiceName;
 end;
 
 function TLdapClient.Mechanisms: TRawUtf8DynArray;
 begin
-  if (fMechanisms = nil) and
-     fSock.SockConnected then
-    fMechanisms := SearchObject('', '*', 'supportedSASLMechanisms').GetAllReadable;
+  if fRootDN = '' then
+    RetrieveRootDseInfo;
   result := fMechanisms;
 end;
 
 function TLdapClient.Controls: TRawUtf8DynArray;
 begin
-  if (fControls = nil) and
-     fSock.SockConnected then
-  begin
-    fControls := SearchObject('', '*', 'supportedControl').GetAllReadable;
-    DeduplicateRawUtf8(fControls);
-  end;
+  if fRootDN = '' then
+    RetrieveRootDseInfo;
   result := fControls;
 end;
 
 function TLdapClient.Extensions: TRawUtf8DynArray;
 begin
-  if (fExtensions = nil) and
-     fSock.SockConnected then
-  begin
-    fExtensions := SearchObject('', '*', 'supportedExtension').GetAllReadable;
-    DeduplicateRawUtf8(fExtensions);
-  end;
+  if fRootDN = '' then
+    RetrieveRootDseInfo;
   result := fExtensions;
 end;
 
