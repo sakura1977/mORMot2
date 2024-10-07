@@ -6040,7 +6040,7 @@ type
   TSetMyEnum = set of TMyEnum;
   TSetMyEnumPart = set of TMyEnumPart; // validate partial sets
 
-  TComplexClass = class(TSynPersistent)
+  TComplexClass = class(TPersistent) // also validate RTL TPersistent support
   private
     csv: RawUtf8;
     function GetArray: TRawUtf8DynArray;

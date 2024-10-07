@@ -1905,8 +1905,7 @@ type
   POrmPropInfoRttiMany = ^TOrmPropInfoRttiMany;
 
   /// handle a read-only list of fields information for published properties
-  // - high-level cache generated from RTTI, tuned for TOrm RTTI, but may be
-  // used for any TPersistent/TSynPersistent
+  // - high-level cache generated from RTTI, especially tuned for TOrm RTTI
   TOrmPropInfoList = class
   protected
     fList: TOrmPropInfoObjArray;
@@ -4302,7 +4301,7 @@ begin
   begin
     Source := Flattened(Source);
     Dest := DestInfo.Flattened(Dest);
-    if DestInfo.ClassType = ClassType then
+    if PClass(DestInfo)^ = PClass(self)^ then
       CopySameClassProp(Source, DestInfo, Dest) // fast overriden method
     else
       GenericCopy(Source, Dest, self, DestInfo);
@@ -7683,7 +7682,8 @@ begin
     rkFloat:
       if Info.IsCurrency then
         result := oftCurrency
-      else if Info = TypeInfo(TDateTime) then
+      else if (Info = TypeInfo(TDateTime)) or
+              (Info = TypeInfo(TDate)) then
         result := oftDateTime
       else if Info = TypeInfo(TDateTimeMS) then
         result := oftDateTimeMS
@@ -11514,7 +11514,7 @@ procedure InitializeUnit;
 var
   ptc: TRttiParserComplexType;
 begin
-  OrmHashSeed := Random32; // avoid hash flooding
+  OrmHashSeed := Random32Not0; // avoid hash flooding
   // manual set of OrmFieldTypeComp[] which are not exact TUtf8Compare match
   pointer(@OrmFieldTypeComp[oftAnsiText])   := @AnsiIComp;
   pointer(@OrmFieldTypeComp[oftUtf8Custom]) := @AnsiIComp;
