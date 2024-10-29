@@ -920,7 +920,7 @@ begin
       mustacheJson := HttpGet(
        'https://raw.githubusercontent.com/mustache/spec/' +
        'master/specs/' + StringToAnsi7(MUSTACHE_SPECS[spec]) + '.json',
-       '', nil, false, nil, 0, {forcesocket:}true, {ignorecerterror:}true);
+       '', nil, false, nil, 0, {forcesocket:}false, {ignorecerterror:}true);
       FileFromString(mustacheJson, mustacheJsonFileName);
     end;
     RecordLoadJson(mus, pointer(mustacheJson), TypeInfo(TMustacheTests));
@@ -3235,7 +3235,7 @@ begin
   begin
     discogsJson := HttpGet(
       'https://api.discogs.com/artists/45/releases?page=1&per_page=100',
-       '', nil, false, nil, 0, {forcesocket:}true, {ignorecerterror:}true);
+       '', nil, false, nil, 0, {forcesocket:}false, {ignorecerterror:}true);
     FileFromString(discogsJson, WorkDir + discogsFileName);
   end;
   Check(IsValidJson(discogsJson), 'discogsJson');
@@ -3244,7 +3244,7 @@ begin
   begin
     zendframeworkJson := HttpGet(
       'https://api.github.com/users/zendframework/repos',
-      '', nil, false, nil, 0, {forcesocket:}true, {ignorecerterror:}true);
+      '', nil, false, nil, 0, {forcesocket:}false, {ignorecerterror:}true);
     FileFromString(zendframeworkJson, WorkDir + zendframeworkFileName);
   end;
   Check(IsValidJson(zendframeworkJson), 'zendJson');
@@ -3511,6 +3511,15 @@ begin
   for i := 1 to ITER do
     Check(IsValidUtf8(PUtf8Char(pointer(people))));
   NotifyTestSpeed('IsValidUtf8(PUtf8Char)', 0, len, @timer, ONLYLOG);
+  {$ifdef ASMX64AVXNOCONST}
+  if cpuHaswell in X64CpuFeatures then
+  begin
+    timer.Start;
+    for i := 1 to ITER do
+      Check(IsValidUtf8Pas(pointer(people), length(people)));
+    NotifyTestSpeed('IsValidUtf8Pas(RawUtf8)', 0, len, @timer, ONLYLOG);
+  end;
+  {$endif ASMX64AVXNOCONST}
   timer.Start;
   for i := 1 to ITER do
     Check(IsValidJson(people));
@@ -6039,6 +6048,9 @@ type
   TMyEnumPart = enTwo .. enFour;
   TSetMyEnum = set of TMyEnum;
   TSetMyEnumPart = set of TMyEnumPart; // validate partial sets
+  TEnumPetStore1 = (
+    epsNone, epsAvailable, epsPending, epsSold);
+  TEnumPetStore1Set = set of TEnumPetStore1;
 
   TComplexClass = class(TPersistent) // also validate RTL TPersistent support
   private
@@ -6050,6 +6062,10 @@ type
       read GetArray write SetArray;
   end;
 
+const
+  ENUMPETSTORE1_TXT: array[TEnumPetStore1] of RawUtf8 = (
+    '', 'available', 'pending', 'sold');
+
 function TComplexClass.GetArray: TRawUtf8DynArray;
 begin
   result := nil;
@@ -6060,6 +6076,7 @@ procedure TComplexClass.SetArray(const AValue: TRawUtf8DynArray);
 begin
   csv := RawUtf8ArrayToCsv(AValue);
 end;
+
 
 {$ifdef HASEXTRECORDRTTI} // Delphi 2010+ enhanced RTTI
 type
@@ -6080,9 +6097,12 @@ type
 procedure TTestCoreProcess._RTTI;
 var
   i: Integer;
-  tmp: RawUtf8;
+  tmp, u: RawUtf8;
   auto: TPersistentAutoCreateFieldsTest;
   s: TSynLogLevels;
+  ps: TEnumPetStore1;
+  pss, pss2: TEnumPetStore1Set;
+  psa: array of TEnumPetStore1;
   astext: boolean;
   P: PUtf8Char;
   eoo: AnsiChar;
@@ -6232,6 +6252,37 @@ begin
   end;
   Check(PRttiInfo(TypeInfo(TSynLogLevels))^.SetEnumType =
     PRttiInfo(TypeInfo(TSynLogLevel))^.EnumBaseType);
+  // custom enumerates/sets
+  SetLength(psa, 1);
+  pss2 := [];
+  for ps := low(ps) to high(ps) do
+  begin
+    pss := [];
+    include(pss, ps);
+    include(pss2, ps);
+    CheckEqual(GetSetNameCustom(TypeInfo(TEnumPetStore1Set),
+      pss, @ENUMPETSTORE1_TXT), ENUMPETSTORE1_TXT[ps]);
+    psa[0] := ps;
+    CheckEqual(GetEnumArrayNameCustom(psa, length(ENUMPETSTORE1_TXT),
+      @ENUMPETSTORE1_TXT), ENUMPETSTORE1_TXT[ps]);
+  end;
+  u := GetSetNameCustom(TypeInfo(TEnumPetStore1Set), pss2, @ENUMPETSTORE1_TXT);
+  CheckEqual(u, ',available,pending,sold');
+  u := GetSetName(TypeInfo(TEnumPetStore1Set), pss2, {trimmed=}false);
+  CheckEqual(u, 'epsNone,epsAvailable,epsPending,epsSold');
+  u := GetSetName(TypeInfo(TEnumPetStore1Set), pss2, {trimmed=}true);
+  CheckEqual(u, 'None,Available,Pending,Sold');
+  u := SaveJson(pss2, TypeInfo(TEnumPetStore1Set));
+  CheckEqual(u, '15');
+  u := SaveJson(pss2, TypeInfo(TEnumPetStore1Set), {enumastext=}true);
+  CheckEqual(u, '["*"]');
+  TRttiJson.RegisterCustomEnumValues([
+    TypeInfo(TEnumPetStore1), TypeInfo(TEnumPetStore1Set), @ENUMPETSTORE1_TXT]);
+  u := SaveJson(pss2, TypeInfo(TEnumPetStore1Set));
+  CheckEqual(u, '["available","pending","sold"]');
+  TRttiJson.UnRegisterCustomSerializer(TypeInfo(TEnumPetStore1Set));
+  u := SaveJson(pss2, TypeInfo(TEnumPetStore1Set));
+  CheckEqual(u, '15');
   // class RTTI
   with PRttiInfo(TypeInfo(TOrmTest))^ do
   begin

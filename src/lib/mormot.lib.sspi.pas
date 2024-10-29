@@ -468,21 +468,22 @@ type
 const
   UNISP_NAME = 'Microsoft Unified Security Protocol Provider';
 
-  SP_PROT_TLS1_0_SERVER = $040;
-  SP_PROT_TLS1_0_CLIENT = $080;
-  SP_PROT_TLS1_1_SERVER = $100;
-  SP_PROT_TLS1_1_CLIENT = $200;
-  SP_PROT_TLS1_2_SERVER = $400;
-  SP_PROT_TLS1_2_CLIENT = $800;
+  SP_PROT_TLS1_0_SERVER = $0040;
+  SP_PROT_TLS1_0_CLIENT = $0080;
+  SP_PROT_TLS1_1_SERVER = $0100;
+  SP_PROT_TLS1_1_CLIENT = $0200;
+  SP_PROT_TLS1_2_SERVER = $0400; // first SP_PROT_TLS_SAFE protocol
+  SP_PROT_TLS1_2_CLIENT = $0800;
   SP_PROT_TLS1_3_SERVER = $1000; // Windows 11 or Windows Server 2022 ;)
   SP_PROT_TLS1_3_CLIENT = $2000;
-
-  SP_PROT_TLS1_0   = SP_PROT_TLS1_0_CLIENT or SP_PROT_TLS1_0_SERVER;
-  SP_PROT_TLS1_1   = SP_PROT_TLS1_1_CLIENT or SP_PROT_TLS1_1_SERVER;
-  SP_PROT_TLS1_2   = SP_PROT_TLS1_2_CLIENT or SP_PROT_TLS1_2_SERVER;
-  SP_PROT_TLS1_3   = SP_PROT_TLS1_3_CLIENT or SP_PROT_TLS1_3_SERVER;
+  // SSL 2/3 protocols ($04,$08,$10,$20) are just not defined at all
+  SP_PROT_TLS1_0 = SP_PROT_TLS1_0_CLIENT or SP_PROT_TLS1_0_SERVER;
+  SP_PROT_TLS1_1 = SP_PROT_TLS1_1_CLIENT or SP_PROT_TLS1_1_SERVER;
+  SP_PROT_TLS1_2 = SP_PROT_TLS1_2_CLIENT or SP_PROT_TLS1_2_SERVER;
+  SP_PROT_TLS1_3 = SP_PROT_TLS1_3_CLIENT or SP_PROT_TLS1_3_SERVER;
   // TLS 1.0 and TLS 1.1 are universally deprecated
-  SP_PROT_TLS_SAFE = SP_PROT_TLS1_2 or SP_PROT_TLS1_3;
+  SP_PROT_TLS_SAFE   = SP_PROT_TLS1_2 or SP_PROT_TLS1_3;
+  SP_PROT_TLS_UNSAFE = pred(SP_PROT_TLS1_2_SERVER);
 
   PKCS12_INCLUDE_EXTENDED_PROPERTIES = $10;
 
@@ -570,7 +571,7 @@ type
   /// exception class raised during SSPI process
   ESynSspi = class(ExceptionWithProps)
   public
-    constructor CreateLastOSError(const aContext: TSecContext);
+    class procedure RaiseLastOSError(const aContext: TSecContext);
   end;
 
 
@@ -1096,42 +1097,43 @@ function SspiResToText(res: cardinal): TShort31;
 begin
   case res of
     SEC_E_OK:
-      result := 'SEC_E_OK';
+      result := 'E_OK';
     SEC_I_CONTINUE_NEEDED:
-      result := 'SEC_I_CONTINUE_NEEDED';
+      result := 'I_CONTINUE_NEEDED';
     SEC_I_CONTEXT_EXPIRED:
-      result := 'SEC_I_CONTEXT_EXPIRED';
+      result := 'I_CONTEXT_EXPIRED';
     SEC_I_INCOMPLETE_CREDENTIALS:
-      result := 'SEC_I_INCOMPLETE_CREDENTIALS';
+      result := 'I_INCOMPLETE_CREDENTIALS';
     SEC_I_RENEGOTIATE:
-      result := 'SEC_I_RENEGOTIATE';
+      result := 'I_RENEGOTIATE';
     SEC_E_UNSUPPORTED_FUNCTION:
-      result := 'SEC_E_UNSUPPORTED_FUNCTION';
+      result := 'E_UNSUPPORTED_FUNCTION';
     SEC_E_INCOMPLETE_MESSAGE:
-      result := 'SEC_E_INCOMPLETE_MESSAGE';
+      result := 'E_INCOMPLETE_MESSAGE';
     SEC_E_BUFFER_TOO_SMALL:
-      result := 'SEC_E_BUFFER_TOO_SMALL';
+      result := 'E_BUFFER_TOO_SMALL';
     SEC_E_MESSAGE_ALTERED:
-      result := 'SEC_E_MESSAGE_ALTERED';
+      result := 'E_MESSAGE_ALTERED';
     SEC_E_INVALID_TOKEN:
-      result := 'SEC_E_INVALID_TOKEN';
+      result := 'E_INVALID_TOKEN';
     SEC_E_ILLEGAL_MESSAGE:
-      result := 'SEC_E_ILLEGAL_MESSAGE';
+      result := 'E_ILLEGAL_MESSAGE';
     SEC_E_CERT_UNKNOWN:
-      result := 'SEC_E_CERT_UNKNOWN';
+      result := 'E_CERT_UNKNOWN';
     SEC_E_CERT_EXPIRED:
-      result := 'SEC_E_CERT_EXPIRED';
+      result := 'E_CERT_EXPIRED';
     SEC_E_CONTEXT_EXPIRED:
-      result := 'SEC_E_CONTEXT_EXPIRED';
+      result := 'E_CONTEXT_EXPIRED';
     SEC_E_ENCRYPT_FAILURE:
-      result := 'SEC_E_ENCRYPT_FAILURE';
+      result := 'E_ENCRYPT_FAILURE';
     SEC_E_DECRYPT_FAILURE:
-      result := 'SEC_E_DECRYPT_FAILURE';
+      result := 'E_DECRYPT_FAILURE';
     SEC_E_ALGORITHM_MISMATCH:
-      result := 'SEC_E_ALGORITHM_MISMATCH';
+      result := 'E_ALGORITHM_MISMATCH';
   else
     str(res, result);
   end;
+  result := 'SEC_' + result;
 end;
 
 
@@ -1269,13 +1271,13 @@ end;
 
 { ESynSspi }
 
-constructor ESynSspi.CreateLastOSError(const aContext: TSecContext);
+class procedure ESynSspi.RaiseLastOSError(const aContext: TSecContext);
 var
   error: integer;
 begin
   error := GetLastError;
-  CreateFmt('SSPI API Error %x [%s] for ConnectionID=%d',
-    [error, string(GetErrorText(error)), aContext.ID]);
+  raise CreateFmt('SSPI API Error %x [%s] for ConnectionID=%d',
+    [error, string(WinErrorText(error, nil)), aContext.ID]);
 end;
 
 
@@ -1333,7 +1335,7 @@ begin
   // Sizes.cbSecurityTrailer is size of the trailer (signature + padding) block
   if QueryContextAttributesW(
        @aSecContext.CtxHandle, SECPKG_ATTR_SIZES, @Sizes) <> 0 then
-    raise ESynSspi.CreateLastOSError(aSecContext);
+    ESynSspi.RaiseLastOSError(aSecContext);
   if (Sizes.cbSecurityTrailer > SizeOf(Token)) or
      (Sizes.cbBlockSize > SizeOf(Padding)) then
     raise ESynSspi.Create('SecEncrypt: invalid ATTR_SIZES');
@@ -1360,7 +1362,7 @@ begin
   {%H-}InDesc.Init(SECBUFFER_VERSION, @InBuf, 3);
   Status := EncryptMessage(@aSecContext.CtxHandle, 0, @InDesc, 0);
   if Status < 0 then
-    raise ESynSspi.CreateLastOSError(aSecContext);
+    ESynSspi.RaiseLastOSError(aSecContext);
   EncLen := InBuf[0].cbBuffer + InBuf[1].cbBuffer + InBuf[2].cbBuffer;
   SetLength(result, EncLen);
   BufPtr := pointer(result);
@@ -1386,7 +1388,7 @@ begin
   if EncLen < SizeOf(cardinal) then
   begin
     SetLastError(ERROR_INVALID_PARAMETER);
-    raise ESynSspi.CreateLastOSError(aSecContext);
+    ESynSspi.RaiseLastOSError(aSecContext);
   end;
   // Hack for compatibility with previous versions.
   // Should be removed in future.
@@ -1404,7 +1406,7 @@ begin
   {%H-}InDesc.Init(SECBUFFER_VERSION, @InBuf, 2);
   Status := DecryptMessage(@aSecContext.CtxHandle, @InDesc, 0, QOP);
   if Status < 0 then
-    raise ESynSspi.CreateLastOSError(aSecContext);
+    ESynSspi.RaiseLastOSError(aSecContext);
   FastSetRawByteString(result, InBuf[1].pvBuffer, InBuf[1].cbBuffer);
 end;
 
@@ -1716,7 +1718,7 @@ begin
     aSecContext.CreatedTick64 := mormot.core.os.GetTickCount64;
     if AcquireCredentialsHandleW(nil, pointer(NegotiateName), SECPKG_CRED_OUTBOUND,
         nil, pAuthData, nil, nil, @aSecContext.CredHandle, nil) <> 0 then
-      raise ESynSspi.CreateLastOSError(aSecContext);
+      ESynSspi.RaiseLastOSError(aSecContext);
     InDesc.cBuffers := 0;
     LInCtxPtr := nil;
   end
@@ -1745,7 +1747,7 @@ begin
      (Status = SEC_I_COMPLETE_AND_CONTINUE) then
     Status := CompleteAuthToken(@aSecContext.CtxHandle, @OutDesc);
   if Status < 0 then
-    raise ESynSspi.CreateLastOSError(aSecContext);
+    ESynSspi.RaiseLastOSError(aSecContext);
   FastSetRawByteString(aOutData, OutBuf.pvBuffer, OutBuf.cbBuffer);
   FreeContextBuffer(OutBuf.pvBuffer);
 end;
@@ -1843,7 +1845,7 @@ begin
       PkgName := pointer(NegotiateName);
     if AcquireCredentialsHandleW(nil, PkgName, SECPKG_CRED_INBOUND,
         nil, nil, nil, nil, @aSecContext.CredHandle, nil) <> 0 then
-      raise ESynSspi.CreateLastOSError(aSecContext);
+      ESynSspi.RaiseLastOSError(aSecContext);
     LInCtxPtr := nil;
   end
   else
@@ -1863,7 +1865,7 @@ begin
      (Status = SEC_I_COMPLETE_AND_CONTINUE) then
     Status := CompleteAuthToken(@aSecContext.CtxHandle, @OutDesc);
   if Status < 0 then
-      raise ESynSspi.CreateLastOSError(aSecContext);
+      ESynSspi.RaiseLastOSError(aSecContext);
   FastSetRawByteString(aOutData, OutBuf.pvBuffer, OutBuf.cbBuffer);
   FreeContextBuffer(OutBuf.pvBuffer);
 end;
@@ -1875,7 +1877,7 @@ var
 begin
   if QueryContextAttributesW(@aSecContext.CtxHandle,
        SECPKG_ATTR_NAMES, @Names) <> 0 then
-    raise ESynSspi.CreateLastOSError(aSecContext);
+    ESynSspi.RaiseLastOSError(aSecContext);
   Win32PWideCharToUtf8(Names.sUserName, aUserName);
   FreeContextBuffer(Names.sUserName);
 end;
@@ -1904,7 +1906,7 @@ var
 begin
   if QueryContextAttributesW(@aSecContext.CtxHandle,
        SECPKG_ATTR_NEGOTIATION_INFO, @NegotiationInfo) <> 0 then
-    raise ESynSspi.CreateLastOSError(aSecContext);
+    ESynSspi.RaiseLastOSError(aSecContext);
   Win32PWideCharToUtf8(NegotiationInfo.PackageInfo^.Name, result);
   FreeContextBuffer(NegotiationInfo.PackageInfo);
 end;
@@ -2190,10 +2192,10 @@ var
   sz, res: cardinal;
 begin
   result := false;
-  sz := tmp.Init;
+  sz := tmp.Init shr 1; // size in WideChar
   res := MsiRecordGetStringW(hRecord, index, tmp.buf, sz);
   if res = ERROR_MORE_DATA then // unlikely > 4KB: requires temp allocation
-    res := MsiRecordGetStringW(hRecord, index, tmp.Init(sz), sz);
+    res := MsiRecordGetStringW(hRecord, index, tmp.Init(sz shl 1), sz);
   if res = NO_ERROR then
   begin
     Win32PWideCharToUtf8(tmp.buf, sz, str);

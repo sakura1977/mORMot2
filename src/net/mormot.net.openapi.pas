@@ -389,7 +389,7 @@ type
     fProperties: TRawUtf8List; // Objects are owned TPascalProperty
     fRttiTextRepresentation: RawUtf8;
     fTypes: set of TOpenApiBuiltInType;
-    fNeedsDummyField: boolean;
+    fNeedsDummyField, fIsVoidVariant: boolean;
     procedure ResolveDependencies(var all, pending: TPascalRecordDynArray);
   public
     constructor Create(aParser: TOpenApiParser; const SchemaName: RawUtf8;
@@ -408,6 +408,7 @@ type
   private
     fPrefix, fConstTextArrayName: RawUtf8;
     fChoices: TDocVariantData;
+    fDynArrayEnum: boolean; // true if fChoices.Count > ENUM_MAX = 64
   public
     constructor Create(aParser: TOpenApiParser; const aName: RawUtf8;
       aSchema: POpenApiSchema);
@@ -1200,16 +1201,16 @@ end;
 function TPascalCustomType.ToArrayTypeName(AsFinalType: boolean): RawUtf8;
 begin
   if AsFinalType then
-    result := FormatUtf8('%DynArray', [PascalName])
+    FormatUtf8('%DynArray', [PascalName], result)
   else
-    result := FormatUtf8('array of %', [PascalName]);
+    FormatUtf8('array of %', [PascalName], result);
 end;
 
 function TPascalCustomType.ToArrayTypeDefinition: RawUtf8;
 begin
   if fRequiresArrayDefinition then
-    result := FormatUtf8('%% = %;%', [fParser.fLineIndent,
-      ToArrayTypeName({final=}true), ToArrayTypeName(false), fParser.LineEnd])
+    FormatUtf8('%% = %;%', [fParser.fLineIndent, ToArrayTypeName({final=}true),
+      ToArrayTypeName(false), fParser.LineEnd], result)
   else
     result := '';
 end;
@@ -1492,7 +1493,9 @@ begin
                      not p.fRequired) and
                     (p.fType.IsArray or
                      not (p.fType.fBuiltInType in [obtVariant, obtRecord, obtGuid]));
-      Make([_CONST[p.fType.fNoConst], p.PascalName, ': ', p.fType.ToPascalName], decl);
+      Make([_CONST[p.fType.fNoConst], p.PascalName, ': ',
+        p.fType.ToPascalName({final=}true)], decl);
+      // here p.fType.ToPascalName needs final=true for nil default value
       if hasdefault then
         if InImplementation then // same order, but no "= default" statement
           AddRawUtf8(def, decl)
@@ -1543,11 +1546,11 @@ var
         case p.Location of
           oplQuery:
             if p.ParamType.IsArray then
-              w.AddDirect('*'); // ueStarNameIsCsv
+              w.AddDirect('*'); // ueStarNameIsCsv for UrlEncodeFull()
           // oplHeader uses natively CSV in OpenAPI default "simple" style
           oplCookie:
             w.AddShorter('Cookie: ');
-            // warning: arrays are not yet properly written in cookies
+            // warning: arrays may not be properly written in cookies
         end;
         w.AddStrings([p.Name, ''', ', p.ParamType.ToFormatUtf8Arg(p.PascalName)]);
       end;
@@ -1708,6 +1711,7 @@ begin
   fSchema := aSchema;
   fChoices.InitCopy(Variant(aSchema^.Enum^), JSON_FAST);
   fChoices.AddItem('None', 0); // always prepend a first void item
+  fDynArrayEnum := fChoices.Count > ENUM_MAX; // use dynamic array, not set
   for i := 2 to length(fPascalName) do
     if length(p) >= 3 then
       break
@@ -1763,7 +1767,8 @@ end;
 procedure TPascalEnum.ToRegisterCustom(W: TTextWriter);
 begin
   w.AddStrings(['    TypeInfo(', fPascalName, ')']);
-  if fRequiresArrayDefinition then
+  if fRequiresArrayDefinition and
+     not fDynArrayEnum then
     w.AddStrings([', TypeInfo(', ToArrayTypeName, ')'])
   else
     w.AddShorter(', nil');
@@ -1772,10 +1777,12 @@ end;
 
 function TPascalEnum.ToArrayTypeName(AsFinalType: boolean): RawUtf8;
 begin
-  if AsFinalType then
-    result := FormatUtf8('%Set', [PascalName])
+  if fDynArrayEnum then
+    result := inherited ToArrayTypeName(AsFinalType)
+  else if AsFinalType then
+    FormatUtf8('%Set', [PascalName], result)
   else
-    result := FormatUtf8('set of %', [PascalName]);
+    FormatUtf8('set of %', [PascalName], result);
 end;
 
 procedure TPascalEnum.ToConstTextArray(W: TTextWriter);
@@ -1828,9 +1835,14 @@ end;
 procedure TPascalType.SetArray(AValue: boolean);
 begin
   fIsArray := AValue;
-  if AValue and
-     Assigned(fCustomType) then
-    fCustomType.fRequiresArrayDefinition := true;
+  if AValue then
+  begin
+    fNoConst := false;
+    if Assigned(fCustomType) then
+      fCustomType.fRequiresArrayDefinition := true;
+  end
+  else
+    fNoConst := fBuiltInType in [obtInteger .. obtDateTime]
 end;
 
 const
@@ -1877,8 +1889,6 @@ begin
   if fBuiltInTypeName = '' then
     EOpenApi.RaiseUtf8('Unexpected %.CreateBuiltin(%)', [self, ToText(aBuiltInType)^]);
   fBuiltinSchema := aSchema;
-  if not aIsArray then
-    fNoConst := aBuiltInType in [obtInteger .. obtDateTime];
   SetArray(aIsArray);
 end;
 
@@ -1886,8 +1896,7 @@ constructor TPascalType.CreateCustom(aCustomType: TPascalCustomType);
 begin
   fParser := aCustomType.fParser;
   fCustomType := aCustomType;
-  fNoConst := IsEnum;
-  if fNoConst then
+  if IsEnum then
     fBuiltInType := obtEnumerationOrSet
   else if IsRecord then
     fBuiltInType := obtRecord;
@@ -1898,7 +1907,8 @@ begin
   if Assigned(CustomType) then
   begin
     result := CustomType.PascalName;
-    if not IsArray then
+    if (result = 'variant') or
+       not IsArray then
       exit;
     if AsFinalType and NoRecordArrayTypes and IsRecord then
       AsFinalType := false;
@@ -1907,7 +1917,8 @@ begin
   else
   begin
     result := fBuiltInTypeName;
-    if not IsArray then
+    if (fBuiltInType = obtVariant) or // emit "array of variant" as "variant"
+       not IsArray then
       exit;
     if AsFinalType then
     begin
@@ -1926,6 +1937,7 @@ end;
 function TPascalType.ToFormatUtf8Arg(const VarName: RawUtf8): RawUtf8;
 var
   func: RawUtf8;
+  e: TPascalEnum;
 begin
   result := VarName; // default to direct value
   if IsBuiltin then
@@ -1951,7 +1963,7 @@ begin
       obtDateTime:
         func := 'DateTimeToIso8601(%, true)';
       obtGuid:
-        func := 'ToUtf8(%)';
+        func := 'NotNullGuidToUtf8(%)'; // GUID_NULL = '' to ignore param
       obtRawByteString:
         func := 'mormot.core.buffers.BinToBase64(%)';
       obtString:
@@ -1960,10 +1972,15 @@ begin
     end
   else if IsEnum then
   begin
-    func := (fCustomType as TPascalEnum).fConstTextArrayName;
+    e := fCustomType as TPascalEnum;
+    func := e.fConstTextArrayName; // ###_TXT[]
     if IsArray then
-      FormatUtf8('GetSetNameCustom(TypeInfo(%), %, @%)',
-        [(fCustomType as TPascalEnum).PascalName, VarName, func], result)
+      if e.fDynArrayEnum then
+        FormatUtf8('GetEnumArrayNameCustom(%, %, @%)',
+          [VarName, e.fChoices.Count, func], result)
+      else
+        FormatUtf8('GetSetNameCustom(TypeInfo(%), %, @%)',
+          [e.PascalName, VarName, func], result)
     else
       FormatUtf8('%[%]', [func, VarName], result);
     exit;
@@ -1975,6 +1992,7 @@ end;
 function TPascalType.ToDefaultParameterValue(aParam: TPascalParameter): RawUtf8;
 var
   def: PVariant;
+  e: TPascalEnum;
 begin
   def := aParam.fDefault;
   if Assigned(def) and
@@ -1987,10 +2005,16 @@ begin
       result := QuotedStr(result); // single quoted pascal string
   end
   else if IsEnum then
+  begin
+    e := CustomType as TPascalEnum;
     if IsArray then
-      result := '[]' // set
+      if e.fDynArrayEnum then
+        result := 'nil' // dynamic array
+      else
+        result := '[]' // set
     else
-      result := (CustomType as TPascalEnum).Prefix + 'None' // first enum
+      result := e.Prefix + 'None'; // first enum
+  end
   else if IsArray then
     result := 'nil'
   else
@@ -2026,12 +2050,8 @@ var
   p: TPascalProperty;
   s: POpenApiSchema;
 begin
-  if fProperties.Count = 0 then
-  begin
-    // this is no fixed record, but maybe a "oneOf" or "anyOf" object
-    fPascalName := 'variant';
+  if fIsVoidVariant then
     exit;
-  end;
   if (fFromRef <> '') and
      (fParser.Options * [opoDtoNoRefFrom, opoDtoNoDescription] = []) then
     fParser.Comment(w, ['from ', fFromRef]);
@@ -2084,11 +2104,9 @@ var
   p: TPascalProperty;
   line, name: RawUtf8;
 begin
-  if fProperties.Count = 0 then
-    // this is no real record
-    fPascalName := 'variant';
   result := fRttiTextRepresentation;
-  if result <> '' then
+  if (result <> '') or
+     fIsVoidVariant then
     exit;
   FormatUtf8('_% = ''', [PascalName], line);
   for i := 0 to fProperties.Count - 1 do
@@ -2114,7 +2132,7 @@ end;
 
 function TPascalRecord.ToRttiRegisterDefinitions: RawUtf8;
 begin
-  result := FormatUtf8('TypeInfo(%), _%', [PascalName, PascalName]);
+  FormatUtf8('TypeInfo(%), _%', [PascalName, PascalName], result);
 end;
 
 procedure TPascalRecord.CopyProperties(aDest: TPascalRecord);
@@ -2144,6 +2162,7 @@ begin
     p := fProperties.ObjectPtr[i];
     t := p.PropType;
     if t.IsRecord and
+       (t.CustomType <> self) and // ParseRecordDefinition() handled it
        (ObjArrayFind(all, t.CustomType) < 0) then
       if ObjArrayFind(pending, t.CustomType) < 0 then
         TPascalRecord(t.CustomType).ResolveDependencies(all, pending)
@@ -2411,13 +2430,6 @@ begin
     begin
       result := NewPascalTypeFromSchema(items, aSchemaName);
       result.fBuiltinSchema := aSchema;
-      if result.IsEnum and
-         (TPascalEnum(result.CustomType).fChoices.Count >= ENUM_MAX) then
-      begin
-        // mormot.core.rtti/json is limited to 64 items: use TRawUtf8DynArray
-        result.Free;
-        result := TPascalType.CreateBuiltin(self, obtRawUtf8);
-      end;
       result.SetArray(true);
     end;
   end
@@ -2575,9 +2587,10 @@ begin
       begin
         n := v^.Names[j];
         p := TPascalProperty.CreateFromSchema(self, n, @v^.Values[j]);
-        if p.PropType.CustomType = result then // nested definition
+        if p.PropType.CustomType = result then // most obvious nested definition
           // e.g. TGroup = record Another: TGroup; ...
           //   or TGroup = record Groups: array of TGroup; ...
+          // TPascalRecord.ResolveDependencies will detect deeper recursion levels
           if (opoGenerateOldDelphiCompatible in fOptions) or
              not p.PropType.IsArray then
             p.ConvertToVariant; // fallback to TDocVariant/JSON
@@ -2585,8 +2598,15 @@ begin
         result.fProperties.AddObject(n, p, {raise=}false, {free=}nil, {replace=}true);
       end;
   end;
-  result.fNeedsDummyField := (opoGenerateOldDelphiCompatible in fOptions) and
-                             (result.fTypes - [obtInteger .. obtGuid] = []);
+  if result.fProperties.Count = 0 then
+  begin
+    // this is no fixed record, but maybe a "oneOf" or "anyOf" object
+    result.fIsVoidVariant := true;
+    result.fPascalName := 'variant';
+  end
+  else
+    result.fNeedsDummyField := (opoGenerateOldDelphiCompatible in fOptions) and
+                               (result.fTypes - [obtInteger .. obtGuid] = []);
 end;
 
 procedure TOpenApiParser.ParsePath(
@@ -2964,7 +2984,7 @@ begin
     end;
     // finalize the class definition and start the implementation section
     w.AddStrings([LineEnd,
-      '    // access to the associated HTTP/JSON request', LineEnd,
+      '    // access to the associated HTTP/JSON client instance', LineEnd,
       '    property JsonClient: IJsonClient', LineEnd,
       '      read fClient write fClient;', LineEnd,
       '  end;', LineEnd,
@@ -2985,6 +3005,7 @@ begin
       'constructor ', fClientClassName, '.Create(const aClient: IJsonClient);', LineEnd,
       'begin', LineEnd,
       '  fClient := aClient;', LineEnd,
+      '  fClient.Options := [jcoParseTolerant, jcoHttpErrorRaise];', LineEnd,
       '  fClient.UrlEncoder :=', LineEnd,
       '    [ueEncodeNames, ueSkipVoidString, ueSkipVoidValue, ueStarNameIsCsv];', LineEnd,
       'end;', LineEnd, LineEnd]);

@@ -516,15 +516,19 @@ function RawLdapError(ErrorCode: integer): TLdapError;
 
 /// translate a LDAP_RES_* integer result code into some human-readable text
 // - searching for the ErrorCode within LDAP_RES_CODE[] values
-// - see LDAP_ERROR_TEXT[RawLdapError(] if you only need the error text
+// - use LDAP_ERROR_TEXT[RawLdapError()] if you only need the error text
 function RawLdapErrorString(ErrorCode: integer; out Enum: TLdapError): RawUtf8;
 
-/// encode a LDAP search filter text into an ASN.1 binary
-// - as used by CldapBroadcast() and TLdapClient.Search()
-function RawLdapTranslateFilter(const Filter: RawUtf8): TAsnObject;
+/// encode a LDAP search filter text into its ASN.1 binary representation
+// - as used by CLDAP raw functions and TLdapClient.Search()
+// - in respect to the standard, this function allows no outter parenthesis,
+// e.g. allows 'accountBalance<=1234' or '&(attr1=a)(attr2=b)'
+// - on parsing error raise ELdap or return '' if NoRaise is true
+function RawLdapTranslateFilter(const Filter: RawUtf8;
+  NoRaise: boolean = false): TAsnObject;
 
 /// encode the ASN.1 binary for a LDAP_ASN1_SEARCH_REQUEST
-// - as used by TLdapClient.Search and CldapGetDomainInfo/CldapBroadcast/CldapSortHosts
+// - as used by CLDAP raw functions and TLdapClient.Search()
 function RawLdapSearch(const BaseDN: RawUtf8; TypesOnly: boolean;
   Filter: RawUtf8; const Attributes: array of RawUtf8;
   Scope: TLdapSearchScope = lssBaseObject; Aliases: TLdapSearchAliases = lsaAlways;
@@ -532,7 +536,7 @@ function RawLdapSearch(const BaseDN: RawUtf8; TypesOnly: boolean;
 
 /// decode the ASN.1 binary of a LDAP_ASN1_SEARCH_ENTRY
 // - and lookup by name the returned attributes as RawUtf8 variables
-// - as used by CldapBroadcast()
+// - as used by CLDAP raw functions but not by TLdapClient.Search()
 function RawLdapSearchParse(const Response: TAsnObject; MessageId: integer;
   const Attributes: array of RawUtf8; const Values: array of PRawUtf8): boolean;
 
@@ -900,7 +904,7 @@ type
     roRawAccountType);
 
   /// store a named LDAP attribute with the list of its values
-  // - AssignTo() has been overriden, so Assign, Clone and CloneObjArray do work
+  // - inherit from TClonable: Assign or Clone/CloneObjArray methods are usable
   TLdapAttribute = class(TClonable)
   protected
     fList: TRawByteStringDynArray;
@@ -986,7 +990,7 @@ type
   /// list one or several TLdapAttribute
   // - will use a global TRawUtf8Interning as hashed list of names to minimize
   // memory allocation, and makes efficient lookup
-  // - AssignTo() has been overriden, so Assign, Clone and CloneObjArray do work
+  // - inherit from TClonable: Assign or Clone/CloneObjArray methods are usable
   TLdapAttributeList = class(TClonable)
   protected
     fItems: TLdapAttributeDynArray;
@@ -1158,7 +1162,7 @@ function Modifier(Op: TLdapModifyOp;
 
 type
   /// store one LDAP result, i.e. one object name and associated attributes
-  // - AssignTo() has been overriden, so Assign, Clone and CloneObjArray do work
+  // - inherit from TClonable: Assign or Clone/CloneObjArray methods are usable
   TLdapResult = class(TClonable)
   protected
     fObjectName, fCanonicalName: RawUtf8;
@@ -1202,7 +1206,7 @@ type
   TLdapResultObjArray = array of TLdapResult;
 
   /// maintain a list of LDAP result objects
-  // - AssignTo() has been overriden, so Assign, Clone and CloneObjArray do work
+  // - inherit from TClonable: Assign or Clone/CloneObjArray methods are usable
   TLdapResultList = class(TClonable)
   protected
     fItems: TLdapResultObjArray;
@@ -1353,6 +1357,7 @@ type
   PLdapUser = ^TLdapUser;
 
   /// how TLdapClient.Connect try to find the LDAP server if no TargetHost is set
+  // - lccNoDiscovery overrides lccCldap/lccClosest and disable any DNS discovery
   // - default lccCldap will call CldapMyLdapController() to retrieve the
   // best possible LDAP server for this client
   // - lccClosest will make a round over the supplied addresses with a CLDAP
@@ -1361,6 +1366,7 @@ type
   // - default lccTlsFirst will try to connect as TLS on port 636 (if OpenSSL
   // is loaded)
   TLdapClientConnect = set of (
+    lccNoDiscovery,
     lccCldap,
     lccClosest,
     lccTlsFirst);
@@ -2187,133 +2193,10 @@ implementation
 // enable low-level debugging of the LDAP transmitted frames on the console
 
 
-{****** Support procedures and functions }
-
-function SeparateRight(const Value: RawUtf8; Delimiter: AnsiChar): RawUtf8;
-var
-  x: PtrInt;
-begin
-  x := PosExChar(Delimiter, Value);
-  if x = 0 then
-    result := Value
-  else
-    result := copy(Value, x + 1, length(Value) - x);
-end;
-
-function SeparateRightU(const Value, Delimiter: RawUtf8): RawUtf8;
-var
-  x: PtrInt;
-begin
-  x := mormot.core.base.PosEx(Delimiter, Value);
-  if x = 0 then
-    result := Value
-  else
-    result := copy(Value, x + length(Delimiter), MaxInt); // no TrimCopy()
-end;
-
-function GetBetween(PairBegin, PairEnd: AnsiChar; const Value: RawUtf8): RawUtf8;
-var
-  n, len, x: PtrInt;
-  s: RawUtf8;
-begin
-  n := length(Value);
-  if (n = 2) and
-     (Value[1] = PairBegin) and
-     (Value[2] = PairEnd) then
-  begin
-    result := ''; // nothing in-between
-    exit;
-  end;
-  if n < 2 then
-  begin
-    result := Value;
-    exit;
-  end;
-  s := SeparateRight(Value, PairBegin);
-  if s = Value then
-  begin
-    result := Value;
-    exit;
-  end;
-  n := PosExChar(PairEnd, s);
-  if n = 0 then
-    ELdap.RaiseUtf8('Missing ending parenthesis in %', [Value]);
-  len := length(s);
-  x := 1;
-  for n := 1 to len do
-  begin
-    if s[n] = PairBegin then
-      inc(x)
-    else if s[n] = PairEnd then
-    begin
-      dec(x);
-      if x <= 0 then
-      begin
-        len := n - 1;
-        break;
-      end;
-    end;
-  end;
-  result := copy(s, 1, len);
-end;
-
-function TrimSPLeft(const S: RawUtf8): RawUtf8;
-var
-  i, l: PtrInt;
-begin
-  result := '';
-  if S = '' then
-    exit;
-  l := length(S);
-  i := 1;
-  while (i <= l) and
-        (S[i] = ' ') do
-    inc(i);
-  result := copy(S, i, Maxint);
-end;
-
-function TrimSPRight(const S: RawUtf8): RawUtf8;
-var
-  i: PtrInt;
-begin
-  result := '';
-  if S = '' then
-    exit;
-  i := length(S);
-  while (i > 0) and
-        (S[i] = ' ') do
-    dec(i);
-  result := copy(S, 1, i);
-end;
-
-function TrimSP(const S: RawUtf8): RawUtf8;
-begin
-  result := TrimSPRight(TrimSPLeft(s));
-end;
-
-function FetchBin(var Value: RawUtf8; Delimiter: AnsiChar): RawUtf8;
-var
-  s: RawUtf8;
-begin
-  result := GetFirstCsvItem(Value, Delimiter);
-  s := SeparateRight(Value, Delimiter);
-  if s = Value then
-    Value := ''
-  else
-    Value := s;
-end;
-
-function Fetch(var Value: RawUtf8; Delimiter: AnsiChar): RawUtf8;
-begin
-  result := TrimSP(FetchBin(Value, Delimiter));
-  Value := TrimSP(Value);
-end;
-
-
 { **************** CLDAP Client Functions }
 
 const
-  NTVER: RawByteString = #6#0#0#0; // '\00\00\00\06' does NOT work on CLDAP
+  NTVER: RawByteString = '\06\00\00\00';
 
 function CldapGetDomainInfo(var Info: TCldapDomainInfo; TimeOutMS: integer;
   const DomainName, LdapServerAddress, LdapServerPort: RawUtf8): boolean;
@@ -2483,8 +2366,14 @@ begin
       begin
         FastSetRawByteString(response, @tmp, len);
         if RawLdapSearchParse(response, id,
-          ['dnsHostName', 'defaultNamingContext', 'ldapServiceName', 'vendorName'],
-          [@v.HostName, @v.NamingContext, @v.ServiceName, @v.VendorName]) then
+          ['dnsHostName',
+           'defaultNamingContext',
+           'ldapServiceName',
+           'vendorName'],
+          [@v.HostName,
+           @v.NamingContext,
+           @v.ServiceName,
+           @v.VendorName]) then
         begin
           QueryPerformanceMicroSeconds(stop);
           v.TimeMicroSec := stop - start;
@@ -2804,151 +2693,213 @@ end;
 
 // https://ldap.com/ldapv3-wire-protocol-reference-search
 
-function RawLdapTranslateFilter(const Filter: RawUtf8): TAsnObject;
+function RawLdapTranslateFilter(const Filter: RawUtf8; NoRaise: boolean): TAsnObject;
 var
-  x: integer;
-  c: Ansichar;
-  dn: boolean;
-  s, t, l, r, attr, rule: RawUtf8;
-begin
-  if Filter = '*' then
+  text, attr, value, rule: RawUtf8;
+  expr: TAsnObject;
+  i, attrlen: PtrInt;
+  ok, dn: boolean;
+
+  procedure RaiseError;
   begin
-    result := Asn('*', ASN1_CTX7);
-    exit;
+    ELdap.RaiseUtf8('Invalid Expression: %', [Filter]);
   end;
+
+  function GetNextRecursiveExpr: boolean;
+  var
+    p, i, len, parent: PtrInt;
+  begin
+    // extract the next (..(..(..)..)..) expression from text into expr
+    result := false;
+    parent := 1;
+    len := length(text);
+    p := PosExChar('(', text);
+    if (p <> 0) and
+       (len > 2) then
+      for i := p + 1 to len do
+        case text[i] of
+          '(':
+            inc(parent);
+          ')':
+            begin
+              dec(parent);
+              if parent <> 0 then
+                continue;
+              // return the whole expression and the trimmed text
+              inc(p); // excluding parenthesis
+              rule := copy(text, p, i - p);
+              p := i;
+              while (p <= len) and
+                    (text[p] = ' ') do
+                inc(p);
+              delete(text, 1, p);
+              expr := RawLdapTranslateFilter(rule, NoRaise); // recursive call
+              result := expr <> '';
+              break;
+            end;
+        end;
+    if (not result) and
+       (not NoRaise) then
+      RaiseError;
+  end;
+
+  function TrimAttr: boolean;
+  begin
+    result := false;
+    dec(attrlen);
+    if attrlen = 0 then
+      if NoRaise then
+        exit
+      else
+        RaiseError;
+    FakeLength(attr, attrlen);
+    result := true;
+  end;
+
+  procedure ParseOperator(ctc: integer);
+  begin
+    if TrimAttr then
+      result := Asn(ctc, [
+        Asn(attr),
+        Asn(UnescapeHex(value))]);
+  end;
+
+  procedure SubFetch(asn: integer);
+  begin
+    if i > 1 then
+    begin
+      TrimCopy(value, 1, i - 1, text);
+      AsnAdd(expr, UnescapeHex(text), asn);
+    end;
+    delete(value, 1, i);
+    i := PosExChar('*', value);
+  end;
+
+begin
   result := '';
-  if Filter = '' then
+  text := TrimU(Filter);
+  if text = '' then
     exit;
-  s := Filter;
-  if Filter[1] = '(' then
-    for x := length(Filter) downto 2 do
-      if Filter[x] = ')' then
+  if text[1] = '(' then
+  begin
+    ok := false;
+    for i := length(text) downto 2 do
+      if text[i] = ')' then
       begin
-        s := copy(Filter, 2, x - 2); // get value between (...)
+        TrimCopy(text, 2, i - 2, text); // trim main parenthesis
+        ok := text <> '';
         break;
       end;
-  if s = '' then
-    exit;
-  case s[1] of
-    '!':
-      // NOT rule (recursive call)
-      result := Asn(RawLdapTranslateFilter(GetBetween('(', ')', s)), ASN1_CTC2);
+    if not ok then
+      if NoRaise then
+        exit
+      else
+        RaiseError;
+  end;
+  if PWord(text)^ = ord('*') then
+    // Present Filter Type
+    result := Asn('*', ASN1_CTX7)
+  else
+  case text[1] of
     '&':
-      // and rule (recursive call)
+      // AND Filter Type (recursive call)
       begin
-        repeat
-          t := GetBetween('(', ')', s);
-          s := SeparateRightU(s, t);
-          if s <> '' then
-            if s[1] = ')' then
-              System.Delete(s, 1, 1);
-          AsnAdd(result, RawLdapTranslateFilter(t));
-        until s = '';
+        if Filter <> '(&)' then // RFC 4526 absolute true filter
+          repeat
+            if not GetNextRecursiveExpr then
+              exit;
+            AsnAdd(result, expr);
+          until text = '';
         result := Asn(result, ASN1_CTC0);
       end;
     '|':
-      // or rule (recursive call)
+      // OR Filter Type (recursive call)
       begin
-        repeat
-          t := GetBetween('(', ')', s);
-          s := SeparateRightU(s, t);
-          if s <> '' then
-            if s[1] = ')' then
-              System.Delete(s, 1, 1);
-          AsnAdd(result, RawLdapTranslateFilter(t));
-        until s = '';
+        if Filter <> '(|)' then // RFC 4526 absolute false filter
+          repeat
+            if not GetNextRecursiveExpr then
+              exit;
+            AsnAdd(result, expr);
+          until text = '';
         result := Asn(result, ASN1_CTC1);
       end;
+    '!':
+      // NOT Filter Type (recursive call)
+      if GetNextRecursiveExpr then
+        result := Asn(expr, ASN1_CTC2);
     else
       begin
-        l := TrimU(GetFirstCsvItem(s, '='));
-        r := SeparateRight(s, '=');
-        if l <> '' then
-        begin
-          c := l[length(l)];
-          case c of
-            ':':
-              // Extensible match
-              begin
-                SetLength(l, length(l) - 1);
-                attr := '';
-                rule := '';
-                dn := false;
-                if mormot.core.base.PosEx(':dn', l) > 0 then
-                begin
-                  dn := true;
-                  l := StringReplaceAll(l, ':dn', '');
-                end;
-                attr := TrimU(GetFirstCsvItem(l, ':'));
-                rule := TrimU(SeparateRight(l, ':'));
-                if rule = l then
-                  rule := '';
-                if rule <> '' then
-                  result := Asn(rule, ASN1_CTX1);
-                if attr <> '' then
-                  AsnAdd(result, attr, ASN1_CTX2);
-                AsnAdd(result, UnescapeHex(r), ASN1_CTX3);
-                if dn then // default is FALSE
-                  AsnAdd(result, RawByteString(#$01#$ff), ASN1_CTX4);
-                result := Asn(result, ASN1_CTC9);
-              end;
-            '~':
-              // Approx match
-              begin
-                SetLength(l, length(l) - 1);
-                result := Asn(ASN1_CTC8, [
-                  Asn(l),
-                  Asn(UnescapeHex(r))]);
-              end;
+        // extract the (attr=value) pair
+        i := PosExChar('=', text);
+        if i = 0 then
+          if NoRaise then
+            exit
+          else
+            RaiseError;
+        TrimCopy(text, 1, i, attr);
+        attrlen := length(attr);
+        value := copy(text, i + 1, 500); // no value trim
+        if TrimAttr then
+          case attr[attrlen] of
             '>':
-              // Greater or equal match
-              begin
-                SetLength(l, length(l) - 1);
-                result := Asn(ASN1_CTC5, [
-                   Asn(l),
-                   Asn(UnescapeHex(r))]);
-              end;
+              // (attr>=value) greaterOrEqual Filter Type
+              ParseOperator(ASN1_CTC5);
             '<':
-              // Less or equal match
+              // (attr<=value) lessOrEqual Filter Type
+              ParseOperator(ASN1_CTC6);
+            '~':
+              // (attr~=value) approximateMatch Filter Type
+              ParseOperator(ASN1_CTC8);
+            ':':
+              // (attr:=value) extensibleMatch Filter Type
+              if TrimAttr then
               begin
-                SetLength(l, length(l) - 1);
-                result := Asn(ASN1_CTC6, [
-                   Asn(l),
-                   Asn(UnescapeHex(r))]);
+                // e.g. '(uid:dn:caseIgnoreMatch:=jdoe)'
+                dn := false;
+                repeat
+                  i := mormot.core.base.PosEx(':dn', attr);
+                  if i = 0 then
+                    break;
+                  dn := true;
+                  delete(attr, i, 3);
+                until false;
+                if TrimSplit(attr, attr, rule, ':') then
+                  if rule <> '' then
+                    expr := Asn(rule, ASN1_CTX1);
+                if attr <> '' then
+                  AsnAdd(expr, attr, ASN1_CTX2);
+                AsnAdd(expr, UnescapeHex(value), ASN1_CTX3);
+                if dn then // dnAttributes flag - default is FALSE
+                  AsnAdd(expr, RawByteString(#$01#$ff), ASN1_CTX4);
+                result := Asn(expr, ASN1_CTC9);
               end;
           else
-            // present
-            if r = '*' then
-              result := Asn(l, ASN1_CTX7)
+            if value = '*' then
+              // (attr=*) present Filter Type
+              result := Asn(attr, ASN1_CTX7)
             else
-              if PosExChar('*', r) > 0 then
-              // substrings
-              begin
-                s := Fetch(r, '*');
-                if s <> '' then
-                  result := Asn(UnescapeHex(s), ASN1_CTX0);
-                while r <> '' do
-                begin
-                  if PosExChar('*', r) <= 0 then
-                    break;
-                  s := Fetch(r, '*');
-                  AsnAdd(result, UnescapeHex(s), ASN1_CTX1);
-                end;
-                if r <> '' then
-                  AsnAdd(result, UnescapeHex(r), ASN1_CTX2);
-                result := Asn(ASN1_CTC4, [
-                   Asn(l),
-                   Asn(ASN1_SEQ, [result])]);
-              end
+            begin
+              i := PosExChar('*', value);
+              if i = 0 then
+                // (attr=value) equalityMatch Filter Type
+                result := Asn(ASN1_CTC3, [
+                   Asn(attr),
+                   Asn(UnescapeHex(value))])
               else
               begin
-                // Equality match
-                result := Asn(ASN1_CTC3, [
-                   Asn(l),
-                   Asn(UnescapeHex(r))]);
+                // (attr=value*value*) substrings Filter Type
+                if i > 1 then
+                  SubFetch(ASN1_CTX0);
+                while i <> 0 do
+                  SubFetch(ASN1_CTX1);
+                if value <> '' then
+                  AsnAdd(expr, UnescapeHex(value), ASN1_CTX2);
+                result := Asn(ASN1_CTC4, [
+                   Asn(attr),
+                   Asn(ASN1_SEQ, [expr])]);
               end;
+            end;
           end;
-        end;
       end;
   end;
 end;
@@ -2958,13 +2909,13 @@ function RawLdapSearch(const BaseDN: RawUtf8; TypesOnly: boolean;
   Scope: TLdapSearchScope; Aliases: TLdapSearchAliases;
   Sizelimit, TimeLimit: integer): TAsnObject;
 var
-  filt: RawUtf8;
+  encodedfilter: RawUtf8;
 begin
   if Filter = '' then
     Filter := '(objectclass=*)';
-  filt := RawLdapTranslateFilter(Filter);
-  if filt = '' then
-    filt := Asn('', ASN1_NULL);
+  encodedfilter := RawLdapTranslateFilter(Filter);
+  if encodedfilter = '' then
+    encodedfilter := Asn('', ASN1_NULL);
   result := Asn(LDAP_ASN1_SEARCH_REQUEST, [
               Asn(BaseDN),
               Asn(ord(Scope),   ASN1_ENUM),
@@ -2972,7 +2923,7 @@ begin
               Asn(Sizelimit),
               Asn(TimeLimit),
               ASN1_BOOLEAN_VALUE[TypesOnly],
-              filt,
+              encodedfilter,
               Asn(ASN1_SEQ, [AsnArr(Attributes)])]);
 end;
 
@@ -3008,7 +2959,7 @@ begin
           result := true; // at least one attribute = success
         end;
       end;
-      i := {%H-}setend; // if several ASN1_OCTSTR are stored - but return first
+      i := {%H-}setend; // if several ASN1_OCTSTR are stored - return only first
     end;
 end;
 
@@ -3224,7 +3175,7 @@ begin
   _LdapIntern.Unique(sCanonicalName, 'canonicalName');
 end;
 
-// internal function: O(n) search 32-bit-truncated of AttrName interned pointer
+// internal function: O(n) search of AttrName 32-bit-truncated interned pointer
 function _AttributeNameType(AttrName: pointer): TLdapAttributeType;
 var
   i: PtrInt;
@@ -4863,33 +4814,39 @@ begin
   fResultError := leUnknown;
   fResultString := '';
   if fSettings.TargetHost = '' then
-  begin
-    // try all LDAP servers from OS list
-    if ForcedDomainName = '' then
-      ForcedDomainName := fSettings.KerberosDN; // may be pre-set
-    if lccCldap in DiscoverMode then
+    if lccNoDiscovery in DiscoverMode then
     begin
-      h := CldapGetDefaultLdapController(
-        @fSettings.fKerberosDN, @fSettings.fKerberosSpn);
-      if h <> '' then
-        AddRawUtf8(dc, h);
-    end;
-    if dc = nil then
+      fResultString := 'Connect: no TargetHost supplied';
+      exit;
+    end
+    else
     begin
-      if not (lccClosest in DiscoverMode) then
-        DelayMS := 0; // disable CldapSortHosts()
-      dc := DnsLdapControlersSorted(
-        DelayMS, {MinimalUdpCount=}0, '', false, @fSettings.fKerberosDN);
-    end;
-  end
+      // try all LDAP servers from OS list
+      if ForcedDomainName = '' then
+        ForcedDomainName := fSettings.KerberosDN; // may be pre-set
+      if lccCldap in DiscoverMode then
+      begin
+        h := CldapGetDefaultLdapController(
+          @fSettings.fKerberosDN, @fSettings.fKerberosSpn);
+        if h <> '' then
+          AddRawUtf8(dc, h);
+      end;
+      if dc = nil then
+      begin
+        if not (lccClosest in DiscoverMode) then
+          DelayMS := 0; // disable CldapSortHosts()
+        dc := DnsLdapControlersSorted(
+          DelayMS, {MinimalUdpCount=}0, '', false, @fSettings.fKerberosDN);
+      end;
+      if dc = nil then
+      begin
+        fResultString := 'Connect: no LDAP server found on this network';
+        exit;
+      end;
+    end
   else
     // try the LDAP server as specified in TLdapClient settings
     AddRawUtf8(dc, NetConcat([fSettings.TargetHost, ':', fSettings.TargetPort]));
-  if dc = nil then
-  begin
-    fResultString := 'Connect: no TargetHost supplied';
-    exit;
-  end;
   fSeq := 0;
   for i := 0 to high(dc) do
     try
@@ -4957,6 +4914,7 @@ procedure TLdapClient.RetrieveRootDseInfo;
 var
   root: TLdapResult;
 begin
+  // retrieve all needed Root DSE attributes in a single call
   if not fSock.SockConnected then
     exit;
   root := SearchObject('', '*', [

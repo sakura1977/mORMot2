@@ -712,7 +712,7 @@ type
     // - if s is a UnicodeString, will convert UTF-16 into UTF-8
     procedure AddNoJsonEscapeString(const s: string);
     /// append some unicode chars to the buffer
-    // - WideCharCount is the unicode chars count, not the byte size; if it is
+    // - WideCharCount is the UTF-16 chars count, not the byte size; if it is
     // 0, then it will convert until an ending #0 (fastest way)
     // - don't escapes chars according to the JSON RFC
     // - will convert the Unicode chars into UTF-8
@@ -1488,7 +1488,7 @@ function ToUtf8(const V: TVarData): RawUtf8; overload;
 // - empty and null variants will be stored as 'null' text - as expected by JSON
 // - custom variant types (e.g. TDocVariant) will be stored as JSON
 procedure VariantToUtf8(const V: Variant; var result: RawUtf8;
-   var wasString: boolean); overload;
+  var wasString: boolean); overload;
 
 /// convert any Variant into UTF-8 encoded String
 // - use VariantSaveJson() instead if you need a conversion to JSON with
@@ -2024,8 +2024,8 @@ type
     // - will handle vtPointer/vtClass/vtObject/vtVariant kind of arguments,
     // appending class name for any class or object, the hexa value for a
     // pointer, or the JSON representation of any supplied TDocVariant
-    constructor CreateLastOSError(const Format: RawUtf8; const Args: array of const;
-      const Trailer: ShortString = 'OSError');
+    class procedure RaiseLastOSError(const Format: RawUtf8;
+      const Args: array of const; const Trailer: ShortString = 'OSError');
     /// a wrapper function around raise CreateUtf8()
     // - generated executable code could be slightly shorter
     class procedure RaiseUtf8(const Format: RawUtf8; const Args: array of const); overload;
@@ -2067,9 +2067,6 @@ function StatusCodeToErrorMsg(Code: integer): RawUtf8;
 { **************** Hexadecimal Text And Binary Conversion }
 
 type
-  /// type of a lookup table used for fast XML/HTML conversion
-  TAnsiCharToByte = array[AnsiChar] of byte;
-  PAnsiCharToByte = ^TAnsiCharToByte;
   /// type of a lookup table used for fast two-digit chars conversion
   TAnsiCharToWord = array[AnsiChar] of word;
   PAnsiCharToWord = ^TAnsiCharToWord;
@@ -2364,6 +2361,9 @@ function GuidToRawUtf8(const guid: TGuid): RawUtf8;
 // - if you need the embracing { }, use GuidToRawUtf8() function instead
 function ToUtf8(const guid: TGuid): RawUtf8; overload;
   {$ifdef HASINLINE}inline;{$endif}
+
+/// convert a TGuid into 36 chars encoded text as RawUtf8, unless it is GUID_NULL
+function NotNullGuidToUtf8(const guid: TGuid): RawUtf8;
 
 /// convert a TGuid into 36 chars encoded text as RawUtf8
 // - will return e.g. '3F2504E0-4F89-11D3-9A0C-0305E82C3301' (without the {})
@@ -7757,6 +7757,11 @@ begin
           wasString := true;
           RawUnicodeToUtf8(VAny, length(UnicodeString(VAny)), result);
         end;
+      varUStringByRef:
+        begin
+          wasString := true;
+          RawUnicodeToUtf8(PPointer(VAny)^, length(PUnicodeString(VAny)^), result);
+        end;
       {$endif HASVARUSTRING}
       varOleStr:
         begin
@@ -8113,33 +8118,25 @@ begin
   result := true;
 end;
 
-procedure BufToTempUtf8(Buf: PUtf8Char; var Res: TTempUtf8);
+procedure PrepareTempUtf8(var Res: TTempUtf8; Len: PtrInt);
 begin // Res.Len has been set by caller
-  if Res.Len > SizeOf(Res.Temp) then
-  begin
-    FastSetString(RawUtf8(Res.TempRawUtf8), Buf, Res.Len); // new RawUtf8
-    Res.Text := Res.TempRawUtf8;
-  end
-  else
-  begin
-    {$ifdef CPUX86}
-    MoveFast(Buf^, Res.Temp, Res.Len);    // avoid slow "rep movsd" on FPC i386
-    {$else}
-    THash192(Res.Temp) := PHash192(Buf)^; // faster than MoveByOne/MoveFast
-    {$endif CPUX86}
-    Res.Text := @Res.Temp; // no RawUtf8 memory allocation
-  end;
+  Res.Len := Len;
+  Res.Text := @Res.Temp;
+  if Len <= SizeOf(Res.Temp) then // no memory allocation needed
+    exit;
+  FastSetString(RawUtf8(Res.TempRawUtf8), Len); // new RawUtf8
+  Res.Text := Res.TempRawUtf8;
 end;
 
 procedure DoubleToTempUtf8(V: double; var Res: TTempUtf8);
 var
   tmp: shortstring;
 begin
-  Res.Len := DoubleToShort(@tmp, V);
-  BufToTempUtf8(@tmp[1], Res);
+  PrepareTempUtf8(Res, DoubleToShort(@tmp, V));
+  MoveFast(tmp[1], Res.Text^, ord(tmp[0]));
 end;
 
-procedure WideToTempUtf8(WideChar: PWideChar; WideCharCount: integer;
+procedure WideToTempUtf8(WideChar: PWideChar; WideCharCount: PtrUInt;
   var Res: TTempUtf8);
 var
   tmp: TSynTempBuffer;
@@ -8150,12 +8147,20 @@ begin
     Res.Text := nil;
     Res.Len := 0;
   end
+  else if IsAnsiCompatibleW(WideChar, WideCharCount) then // very common case
+  begin
+    PrepareTempUtf8(Res, WideCharCount);
+    repeat
+      dec(WideCharCount);
+      Res.Text[WideCharCount] := AnsiChar(ord(WideChar[WideCharCount]));
+    until WideCharCount = 0;
+  end
   else
   begin
     tmp.Init(WideCharCount * 3);
-    Res.Len := RawUnicodeToUtf8(tmp.buf, tmp.len + 1,
-      WideChar, WideCharCount, [ccfNoTrailingZero]);
-    BufToTempUtf8(tmp.buf, Res);
+    PrepareTempUtf8(Res, RawUnicodeToUtf8(tmp.buf, tmp.len + 1,
+      WideChar, WideCharCount, [ccfNoTrailingZero]));
+    MoveFast(tmp.buf^, Res.Text^, Res.Len);
     tmp.Done;
   end;
 end;
@@ -9483,7 +9488,7 @@ begin
   CreateAfterSetMessageUtf8;
 end;
 
-constructor ESynException.CreateLastOSError(const Format: RawUtf8;
+class procedure ESynException.RaiseLastOSError(const Format: RawUtf8;
   const Args: array of const; const Trailer: ShortString);
 var
   error: integer;
@@ -9492,7 +9497,7 @@ begin
   error := GetLastError;
   FormatUtf8('% 0x% [%] %', [Trailer, CardinalToHexShort(error),
     StringReplaceAll(GetErrorText(error), '%', '#'), Format], fmt);
-  CreateUtf8(fmt, Args);
+  raise CreateUtf8(fmt, Args);
 end;
 
 class procedure ESynException.RaiseUtf8(const Format: RawUtf8;
@@ -10286,6 +10291,13 @@ end;
 function ToUtf8(const guid: TGuid): RawUtf8;
 begin
   ToUtf8(guid, result);
+end;
+
+function NotNullGuidToUtf8(const guid: TGuid): RawUtf8;
+begin
+  result := '';
+  if not IsNullGuid(guid) then
+    ToUtf8(guid, result);
 end;
 
 procedure ToUtf8(const guid: TGuid; var text: RawUtf8; tab: PWordArray);
