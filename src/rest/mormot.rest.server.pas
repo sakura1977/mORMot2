@@ -409,6 +409,9 @@ type
     // use the InputAsMultiPart() method instead when working with binary
     function GetInputAsTDocVariant(const Options: TDocVariantOptions;
       InterfaceMethod: PInterfaceMethod): variant;
+    /// could be used to trim a sensitive parameter from Call^.Uri buffer itself
+    // - typical UpperParamName is e.g. 'PASSWORD='
+    procedure InputRemoveFromUri(const UpperParamName: RawUtf8);
     /// low-level access to the input parameters, stored as pairs of UTF-8
     // - even items are parameter names, odd are values
     // - Input*[] properties should have been called previously to fill the
@@ -509,11 +512,6 @@ type
     /// same as Call^.Uri, after the 'root/' prefix, including '?' params
     // - will compute it from Call^.Url and Server.Model.RootLen
     function UriWithoutRoot: RawUtf8;
-    /// same as Call^.Uri, but without the ?... ending
-    // - will compute it from Call^.Url and fParameters
-    // - since used for logging, return a shortstring and not a RawUtf8 to
-    // avoid memory allocation
-    function UriWithoutInlinedParams: shortstring;
     /// the URI after the method service name, excluding the '?' parameters
     // - as set by TRestTreeNode.LookupParam from <path:fulluri> place holder
     property UriMethodPath: RawUtf8
@@ -1198,6 +1196,9 @@ type
   // - do not use this abstract class, but e.g. TRestServerAuthenticationHttpBasic
   // - this class will transmit the session_signature as HTTP cookie, not at
   // URI level, so is expected to be used only from browsers or old clients
+  // - security level is very low for this kind of authentication: consider
+  // the other more secure algorithms
+  // - note that such sessions can not be persisted on disk
   TRestServerAuthenticationHttpAbstract = class(TRestServerAuthentication)
   protected
     /// should be overriden according to the HTTP authentication scheme
@@ -1270,7 +1271,8 @@ type
   TRestServerAuthenticationSspi = class(TRestServerAuthenticationSignedUri)
   protected
     /// Windows built-in authentication
-    // - holds information between calls to ServerSspiAuth()
+    // - holds information between calls to ServerSspiAuth() for NTLM
+    // - such an array seems not needed with Kerberos two-way handshake
     // - access to this array is made thread-safe thanks to Safe.Lock/Unlock
     fSspiAuthContext: TSecContextDynArray;
     fSspiAuthContexts: TDynArray;
@@ -1601,6 +1603,7 @@ type
   // this could be a good option if you don't trust your clients
   // - rsoSessionInConnectionOpaque uses LowLevelConnectionOpaque^.ValueInternal
   // to store the current TAuthSession - may be used with a lot of sessions
+  // - rsoCookieSecure will add the "Secure" directive in the cookie content
   TRestServerOption = (
     rsoNoAjaxJson,
     rsoGetAsJsonNotAsString,
@@ -1620,7 +1623,8 @@ type
     rsoNoTableURI,
     rsoMethodUnderscoreAsSlashUri,
     rsoValidateUtf8Input,
-    rsoSessionInConnectionOpaque);
+    rsoSessionInConnectionOpaque,
+    rsoCookieSecure);
 
   /// allow to customize the TRestServer process via its Options property
   TRestServerOptions = set of TRestServerOption;
@@ -2841,10 +2845,14 @@ const
   HTTPONLY: array[boolean] of string[15] = (
     '; HttpOnly', '');
 begin
+// https://developer.mozilla.org/en-US/docs/Web/Security/Practical_implementation_guides/Cookies
   inherited SetOutSetCookie(aOutSetCookie);
   if StrPosI('; PATH=', pointer(fOutSetCookie)) = nil then
     fOutSetCookie := FormatUtf8('%; Path=/%%', [fOutSetCookie, Server.fModel.Root,
       HTTPONLY[rsoCookieHttpOnlyFlagDisable in Server.fOptions]]);
+  if (rsoCookieSecure in Server.fOptions) and
+     (StrPosI('; SECURE', pointer(fOutSetCookie)) = nil) then
+    fOutSetCookie := FormatUtf8('__Secure-%; Secure', [fOutSetCookie]);
 end;
 
 procedure TRestServerUriContext.OutHeadFromCookie;
@@ -2885,21 +2893,6 @@ begin
   if Call^.Url[1] = '/' then
     inc(pos); // trim leading '/' in '/root' (may happen when called in-process)
   result := copy(Call^.Url, pos, maxInt);
-end;
-
-function TRestServerUriContext.UriWithoutInlinedParams: shortstring;
-var
-  urllen, len: PtrUInt;
-begin
-  urllen := length(Call^.Url);
-  len := urllen;
-  if fParameters <> nil then
-  begin
-    len := fParameters - pointer(Call^.Url) - 1;
-    if len > urllen then // from InBody CONTENT_TYPE_WEBFORM, not from Url
-      len := urllen;
-  end;
-  SetString(result, PAnsiChar(pointer(Call^.Url)), len);
 end;
 
 procedure TRestServerUriContext.SessionAssign(AuthSession: TAuthSession);
@@ -3088,7 +3081,7 @@ begin
       end;
   else
     raise EOrmException.CreateUtf8('Unexpected Command=% in %.Execute',
-      [ord(Command), self]);
+      [ord(Command), self]); // RaiseUtf8() makes a Delphi compiler warning
   end;
   if exec^.Mode = amBackgroundOrmSharedThread then
     if (Command = execOrmWrite) and
@@ -3171,20 +3164,20 @@ begin
   if sllServer in fServer.LogLevel then
     fLog.Log(sllServer, '% % % % %=% out=% in %', [SessionUserName,
       RemoteIPNotLocal, COMMANDTEXT[fCommand], fCall.Method,
-      UriWithoutInlinedParams, fCall.OutStatus, KB(fCall.OutBody),
+      fCall.Url, fCall.OutStatus, KB(fCall.OutBody),
       MicroSecToString(fMicroSecondsElapsed)]);
-  if (fCall.OutBody <> '') and
+  if (sllServiceReturn in fServer.LogLevel) and
+     (fCall.OutBody <> '') and
      not (optNoLogOutput in fServiceExecutionOptions) and
-     (sllServiceReturn in fServer.LogLevel) and
-     (fCall.OutHead = '') or
-      IsHtmlContentTypeTextual(pointer(fCall.OutHead)) then
+     ((fCall.OutHead = '') or
+      IsHtmlContentTypeTextual(pointer(fCall.OutHead))) then
     fLog.Log(sllServiceReturn, fCall.OutBody, self, MAX_SIZE_RESPONSE_LOG);
 end;
 
 procedure TRestServerUriContext.ExecuteCallback(var Ctxt: TJsonParserContext;
   ParamInterfaceInfo: TRttiJson; out Obj);
 var
-  fakeid: PtrInt;
+  fakeid: PtrInt; // not integer: may be a pointer/IInvokable in disguise
 begin
   if not Assigned(Server.OnNotifyCallback) then
     EServiceException.RaiseUtf8('% does not implement callbacks for %',
@@ -3199,7 +3192,7 @@ begin
     pointer(Obj) := pointer(fakeid); // special call Obj = IInvokable(fakeid)
     exit;
   end;
-  // let TServiceContainerServer
+  // let TServiceContainerServer resolve this
   (Server.Services as TServiceContainerServer).GetFakeCallback(
     self, ParamInterfaceInfo.Info, fakeid, Obj);
 end;
@@ -4394,6 +4387,22 @@ begin
     MultiPartToDocVariant(multipart, res, @Options);
 end;
 
+procedure TRestServerUriContext.InputRemoveFromUri(const UpperParamName: RawUtf8);
+var
+  p: PUtf8Char;
+begin
+  p := StrPosI(pointer(UpperParamName), pointer(fCall^.Url));
+  if (p = nil) or
+     not (p[-1] in ['?', '&']) then
+    exit;
+  inc(p, length(UpperParamName));
+  while not (p^ in [#0, '&']) do
+  begin
+    p^ := 'x'; // in-place obfuscate
+    inc(p);
+  end;
+end;
+
 function TRestServerUriContext.IsRemoteIPBanned: boolean;
 begin
   if Server.fIPBan.Exists(fCall^.LowLevelRemoteIP) then
@@ -5309,9 +5318,12 @@ begin
       // check if match TRestClientUri.SetUser() algorithm
       pwd := Ctxt.InputUtf8OrVoid['Password'];
       if CheckPassword(Ctxt, usr, nonce, pwd) then
+      begin
+        Ctxt.InputRemoveFromUri('PASSWORD='); // anti-forensic
         // setup a new TAuthSession
         // SessionCreate would call Ctxt.AuthenticationFailed on error
-        SessionCreate(Ctxt, usr)
+        SessionCreate(Ctxt, usr);
+      end
       else
         Ctxt.AuthenticationFailed(afInvalidPassword);
     finally
@@ -5432,7 +5444,7 @@ end;
 class function TRestServerAuthenticationHttpBasic.ComputeAuthenticateHeader(
   const aUserName, aPasswordClear: RawUtf8): RawUtf8;
 begin
-  result := 'Authorization: Basic ' + BinToBase64(aUserName + ':' + aPasswordClear);
+  BasicClient(aUserName, aPasswordClear, SpiUtf8(result));
 end;
 
 function TRestServerAuthenticationHttpBasic.CheckPassword(
@@ -5511,7 +5523,8 @@ const
 constructor TRestServerAuthenticationSspi.Create(aServer: TRestServer);
 begin
   // setup mormot.lib.sspi/gssapi unit depending on the OS
-  InitializeDomainAuth;
+  if not InitializeDomainAuth then
+    ESecurityException.RaiseUtf8('%.Create with no %', [self, SECPKGNAMEAPI]);
   // initialize this authentication scheme
   inherited Create(aServer);
   // TDynArray access to fSspiAuthContext[] by TRestConnectionID (ptInt64)
@@ -5531,6 +5544,10 @@ end;
 // about Browser support and SPNEGO handshake via HTTP headers, see e.g.
 // https://learn.microsoft.com/en-us/previous-versions/ms995330(v=msdn.10)
 
+// note that Negotiate/Kerberos is two-way, and NTLM three-way so we need to
+// maintain a list of pending contexts in fSspiAuthContext[] for NTLM only
+// https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-sip/96a33a84-36cb-41dc-a630-f0c42820ec16
+
 function TRestServerAuthenticationSspi.Auth(Ctxt: TRestServerUriContext): boolean;
 var
   i, ndx: PtrInt;
@@ -5549,6 +5566,7 @@ begin
      not Ctxt.InputExists['Data'] then
     exit;
   // use connectionID to find authentication session
+  browserauth := false;
   connectionID := Ctxt.Call^.LowLevelConnectionID;
   indataenc := Ctxt.InputUtf8['Data'];
   if indataenc = '' then
@@ -5563,10 +5581,8 @@ begin
       StatusCodeToReason(HTTP_UNAUTHORIZED, Ctxt.Call.OutBody);
       exit;
     end;
-    browserauth := True;
-  end
-  else
-    browserauth := False;
+    browserauth := true;
+  end;
   // SSPI authentication
   fSafe.Lock;
   try
@@ -5591,7 +5607,7 @@ begin
         exit;
       end;
       ndx := fSspiAuthContexts.New; // add a new entry to fSspiAuthContext[]
-      InvalidateSecContext(fSspiAuthContext[ndx], connectionID);
+      InvalidateSecContext(fSspiAuthContext[ndx], connectionID, Ctxt.TickCount64);
     end;
     // call SSPI provider
     if ServerSspiAuth(fSspiAuthContext[ndx], Base64ToBin(indataenc), outdata) then
@@ -6041,7 +6057,7 @@ begin
     exit;
   p := pointer(Ctxt.Call^.Url);
   if p^ = '/' then
-    inc(p);
+    inc(p); // normalize
   result := pointer(TRestTreeNode(fTree[Ctxt.Method].Root).Lookup(p, Ctxt));
   if result = nil then
     exit;
@@ -6106,7 +6122,7 @@ begin
   end;
   // retrieve UriSessionSignaturePos as needed by Ctxt.Authenticate
   p := Ctxt.fParameters;
-  if p <> nil then
+  if p <> nil then // pre-located just after '?par=val&par=val&...'
   begin
     if fOwner.fHandleAuthentication then
     begin
@@ -7468,8 +7484,7 @@ procedure TRestServer.SessionsLoadFromFile(const aFileName: TFileName;
 
   procedure ContentError;
   begin
-    raise ESecurityException.CreateUtf8('%.SessionsLoadFromFile("%")',
-      [self, aFileName]);
+    ESecurityException.RaiseUtf8('%.SessionsLoadFromFile("%")', [self, aFileName]);
   end;
 
 var
@@ -7676,6 +7691,8 @@ begin
     // 7. return expected result to the client
     if StatusCodeIsSuccess(Call.OutStatus) then
     begin
+      if ctxt.fUriSessionSignaturePos > 0 then // remove session_signature=...
+        FakeLength(Call.Url, ctxt.fUriSessionSignaturePos - 1);
       outcomingfile := false;
       if Call.OutBody <> '' then
         // detect 'Content-type: !STATICFILE' as first header

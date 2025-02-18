@@ -633,13 +633,14 @@ function HttpDateToUnixTime(const httpdate: RawUtf8): TUnixTime;
 function HttpDateToUnixTimeBuffer(httpdate: PUtf8Char): TUnixTime;
 
 type
+  // HttpDateNowUtc consumes 37 chars, aligned to 40 bytes
   THttpDateNowUtc = string[39];
 
 /// returns the current UTC timestamp as the full 'Date' HTTP header line
 // - e.g. as 'Date: Tue, 15 Nov 1994 12:45:26 GMT'#13#10
 // - returns as a 40-bytes shortstring to avoid a memory allocation by caller
 // - use an internal cache for every second refresh
-function HttpDateNowUtc: THttpDateNowUtc;
+function HttpDateNowUtc(Tix64: Int64 = 0): THttpDateNowUtc;
 
 /// returns the a specified UTC timestamp in HTTP-like format
 // - e.g. as 'Tue, 15 Nov 1994 12:45:26 GMT'
@@ -670,7 +671,7 @@ const
     '%%%%%%%%%',
     '%-%-%%%:%:%.%%');
 
-/// compute an Etag: xxxx value from 64-bit of information, as '"xxxxxx...xxxx"' text
+/// compute an Etag: xxxx value from 64-bit of information, as '"##hexa##"' text
 procedure Int64ToHttpEtag(Value: Int64; out Etag: TShort23);
 
 /// handle HTTP_NOTMODIFIED (304) process against raw file information
@@ -695,6 +696,8 @@ const
   // - may be used to check for a valid just-generated Unix timestamp value
   // - or to store a timestamp without any 32-bit "Year 2038" overflow issue
   UNIXTIME_MINIMAL = 1481187020;
+  /// a contemporary, but elapsed, TUnixTimeMS millisecond-based value
+  UNIXTIMEMS_MINIMAL = QWord(UNIXTIME_MINIMAL) * MSecsPerSec;
 
 /// returns UnixTimeUtc - UNIXTIME_MINIMAL so has no "Year 2038" overflow issue
 function UnixTimeMinimalUtc: cardinal;
@@ -771,6 +774,11 @@ function UnixMSTimeToFileShort(const UnixMSTime: TUnixMSTime): TShort16;
 // - returns 'Thh:mm:ss' or 'YYYY-MM-DD' format, depending on the supplied value
 function UnixMSTimePeriodToString(const UnixMSTime: TUnixMSTime;
   FirstTimeChar: AnsiChar = 'T'): RawUtf8;
+
+/// convert some text encoded as TUnixTime/TUnixMSTime 64-bit integer value or
+// double/COM floating point value into a TDateTime
+// - a used e.g. by _JL_DateTime from mormot.core.json to unserialize TDateTime
+procedure UnixTimeOrDoubleToDateTime(P: PUtf8Char; Len: PtrInt; var V: TDateTime);
 
 
 { ************ TTimeLog efficient 64-bit custom date/time encoding }
@@ -1092,7 +1100,7 @@ var
   {$endif CPUX86NOTPIC}
 // expect 'YYYYMMDDThhmmss[.sss]' format but handle also 'YYYY-MM-DDThh:mm:ss[.sss]'
 begin
-  unaligned(result) := 0;
+  PInt64(@result)^ := 0;
   if P = nil then
     exit;
   if L = 0 then
@@ -1478,7 +1486,7 @@ begin
   else
   begin
     FastSetString(result, 10);
-    DateToIso8601PChar(Date, pointer(result), True);
+    DateToIso8601PChar(Date, pointer(result), true);
   end;
 end;
 
@@ -2822,13 +2830,15 @@ var
     Value: THttpDateNowUtc;
   end;
 
-function HttpDateNowUtc: THttpDateNowUtc;
+function HttpDateNowUtc(Tix64: Int64): THttpDateNowUtc;
 var
   c: cardinal;
   T: TSynSystemTime;
   now: shortstring; // use a temp variable for _HttpDateNowUtc atomic set
 begin
-  c := GetTickCount64 shr MilliSecsPerSecShl;
+  if Tix64 = 0 then
+    Tix64 := GetTickCount64;
+  c := Tix64 shr MilliSecsPerSecShl;
   with _HttpDateNowUtc do
   begin
     Safe.Lock;
@@ -3031,6 +3041,24 @@ begin
   else
     result := DateTimeMSToString(UnixMSTime / MilliSecsPerDay + UnixDateDelta,
                                  Expanded, FirstTimeChar, TZD);
+end;
+
+procedure UnixTimeOrDoubleToDateTime(P: PUtf8Char; Len: PtrInt; var V: TDateTime);
+var
+  u64: QWord;
+begin
+  if ByteScanIndex(pointer(P), Len, ord('.')) >= 0 then
+    V := GetExtended(P) // obviously a floating point / COM double value
+  else
+  begin
+    SetQWord(P, u64);
+    if u64 > UNIXTIMEMS_MINIMAL then
+      V := UnixMSTimeToDateTime(u64) // likely to have millisecond resolution
+    else if u64 > UNIXTIME_MINIMAL then
+      V := UnixTimeToDateTime(u64)   // likely to have second resolution
+    else
+      V := u64; // likely to have day resolution, i.e. TDate
+  end;
 end;
 
 

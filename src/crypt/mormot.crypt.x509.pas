@@ -319,7 +319,6 @@ const
     'SHA512 with secp521r1 ECDSA' ,   // xsaSha512Ecc512
     'SHA512 with Ed25519 ECDSA');     // xsaSha512EdDSA
 
-
   /// internal lookup table from X.509 Public Key Algorithm as text
   XKA_TXT: array[TXPublicKeyAlgorithm] of RawUtf8 = (
     '',                    // xkaNone
@@ -526,8 +525,8 @@ type
     /// convert Extension[x] from CSV to an array of RawUtf8
     function ExtensionArray(x: TXExtension): TRawUtf8DynArray;
     /// check a date/time coherency with NotBefore/NotAfter
+    // - a grace period of CERT_DEPRECATION_THRESHOLD (half a day) is applied
     function IsValidDate(timeutc: TDateTime = 0): boolean;
-      {$ifdef HASINLINE} inline; {$endif}
     /// reset all internal context
     procedure Clear;
     /// serialize those fields into ASN.1 DER binary
@@ -999,6 +998,7 @@ type
   TCryptStoreAlgoX509 = class(TCryptStoreAlgo)
   public
     function New: ICryptStore; override; // = TCryptStoreX509.Create(self)
+    function DefaultCertAlgo: TCryptCertAlgo; override;
   end;
 
   /// 'x509-pki' ICryptStore using TX509 and TX509Crl as a full featured PKI
@@ -1046,7 +1046,6 @@ type
       IgnoreError: TCryptCertValidities; TimeUtc: TDateTime): TCryptCertValidity; override;
     function Count: integer; override;
     function CrlCount: integer; override;
-    function DefaultCertAlgo: TCryptCertAlgo; override;
   public
     /// how many levels IsValid() should iterate over the trusted certificates
     // before finding a self-signed "root anchor"
@@ -3834,7 +3833,7 @@ begin
   fPrivateKey := CryptPrivateKey[XKA_TO_CKA[AlgoXka]].Create;
   fX509.Signed.SubjectPublicKey := fPrivateKey.Generate(XKA_TO_CAA[AlgoXka]);
   if fX509.Signed.SubjectPublicKey = '' then
-    RaiseErrorGenerate('GeneratePrivateKey failed');
+    RaiseError('GeneratePrivateKey(%) failed', [ToText(AlgoXka)^]);
   fX509.Signed.SubjectPublicKeyAlgorithm := AlgoXka;
   fX509.Signed.SubjectPublicKeyBits :=
     X509PubKeyBits(fX509.Signed.SubjectPublicKey);
@@ -4146,6 +4145,11 @@ end;
 function TCryptStoreAlgoX509.New: ICryptStore;
 begin
   result := TCryptStoreX509.Create(self);
+end;
+
+function TCryptStoreAlgoX509.DefaultCertAlgo: TCryptCertAlgo;
+begin
+  result := CryptCertX509[CryptAlgoDefault];
 end;
 
 
@@ -4476,12 +4480,6 @@ function TCryptStoreX509.CrlCount: integer;
 begin
   result := fSignedCrl.Count + fUnsignedCrl.Count;
 end;
-
-function TCryptStoreX509.DefaultCertAlgo: TCryptCertAlgo;
-begin
-  result := CryptCertX509[CryptAlgoDefault];
-end;
-
 
 
 { **************** Registration of our X.509 Engine to the TCryptCert Factory }

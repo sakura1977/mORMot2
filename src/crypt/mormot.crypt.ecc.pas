@@ -4258,7 +4258,7 @@ begin
   tmp.Init(json);
   try
     result :=
-      (DynArrayLoadJson(values, tmp.buf, TypeInfo(TRawUtf8DynArray)) <> nil) and
+      (DynArrayLoadJsonInPlace(values, tmp.buf, TypeInfo(TRawUtf8DynArray)) <> nil) and
       LoadFromArray(values);
   finally
     tmp.Done;
@@ -5204,6 +5204,7 @@ type
     fDefaultHasher: TCryptHasher;
   public
     constructor Create(const name: RawUtf8); override;
+    function KeyAlgo: TCryptKeyAlgo; override;
     procedure GenerateDer(out pub, priv: RawByteString; const privpwd: RawUtf8); override;
     function Sign(hasher: TCryptHasher; msg: pointer; msglen: PtrInt;
       const priv: RawByteString; out sig: RawByteString;
@@ -5221,6 +5222,11 @@ begin
   fDefaultHasher := Hasher('sha256');
   fPemPrivate := ord(pemEcPrivateKey);
   fPemPublic := ord(pemEcPublicKey);
+end;
+
+function TCryptAsymInternal.KeyAlgo: TCryptKeyAlgo;
+begin
+  result := ckaEcc256;
 end;
 
 procedure TCryptAsymInternal.GenerateDer(out pub, priv: RawByteString;
@@ -6139,6 +6145,7 @@ type
   TCryptStoreAlgoInternal = class(TCryptStoreAlgo)
   public
     function New: ICryptStore; override; // = TCryptStoreInternal.Create(self)
+    function DefaultCertAlgo: TCryptCertAlgo; override;
   end;
 
   /// class implementing ICryptStore using our ECC Public Key Cryptography
@@ -6165,7 +6172,6 @@ type
       IgnoreError: TCryptCertValidities; TimeUtc: TDateTime): TCryptCertValidity; override;
     function Count: integer; override;
     function CrlCount: integer; override;
-    function DefaultCertAlgo: TCryptCertAlgo; override;
   end;
 
   /// maintain a cache of ICryptCert instances, from their DER/binary
@@ -6296,11 +6302,6 @@ begin
   result := length(fEcc.fCrl);
 end;
 
-function TCryptStoreInternal.DefaultCertAlgo: TCryptCertAlgo;
-begin
-  result := CryptCertSyn;
-end;
-
 
 { TCryptStoreAlgoInternal }
 
@@ -6311,6 +6312,11 @@ begin
   a := TCryptStoreInternal.Create(self);
   a.fEcc.IsValidCached := AlgoName <> 'syn-store-nocache';
   result := a;
+end;
+
+function TCryptStoreAlgoInternal.DefaultCertAlgo: TCryptCertAlgo;
+begin
+  result := CryptCertSyn;
 end;
 
 

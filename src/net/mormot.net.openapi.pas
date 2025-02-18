@@ -27,7 +27,7 @@ unit mormot.net.openapi;
    - Tunable engine, with plenty of generation options (e.g. about verbosity)
    - Leverage the mORMot RTTI and JSON kernel for its internal plumbing
    - Compatible with FPC and oldest Delphi (7-2009)
-   - Tested with several Swagger 2 and OpenAPI 3 reference content
+   - Tested with several Swagger 2 and OpenAPI 2-3 reference content
   But still not fully compliant to all existing files: feedback is welcome!
 
   REFERENCE: https://swagger.io/docs/specification
@@ -177,6 +177,7 @@ type
     function AllowEmptyValues: boolean;
     function Default: PVariant;
     function Required: boolean;
+    function Explode: boolean;
     function Schema(Parser: TOpenApiParser): POpenApiSchema;
   end;
   /// pointer wrapper to TDocVariantData / variant content of an OpenAPI Parameter
@@ -222,6 +223,7 @@ type
     function Parameters: POpenApiParameters;
     function RequestBody(Parser: TOpenApiParser): POpenApiRequestBody;
     function Responses: PDocVariantData;
+    function ProducesJson: boolean;
     property Response[aStatusCode: integer]: POpenApiResponse
       read GetResponseForStatusCode;
   end;
@@ -904,7 +906,7 @@ begin
       if result = nil then
       begin
         n := c.Names[i];
-        if IsContentTypeJson(pointer(n)) or
+        if IsContentTypeJsonU(n) or
            (n = '*/*') or
            IdemPropNameU(n, 'application/jwt') then // exists in the wild :(
           if _SafeObject(c.Values[i], o) then
@@ -963,6 +965,12 @@ end;
 function TOpenApiParameter.Required: boolean;
 begin
   result := Data.B['required'];
+end;
+
+function TOpenApiParameter.Explode: boolean;
+begin
+  if not Data.GetAsBoolean('explode', result) then
+    result := true; // default is true
 end;
 
 function TOpenApiParameter.Schema(Parser: TOpenApiParser): POpenApiSchema;
@@ -1095,6 +1103,20 @@ end;
 function TOpenApiOperation.Responses: PDocVariantData;
 begin
   result := Data.O['responses'];
+end;
+
+function TOpenApiOperation.ProducesJson: boolean;
+var
+  produces: PDocVariantData;
+  i: PtrInt;
+begin
+  // OpenAPI v2 only: https://swagger.io/docs/specification/v2_0/describing-responses
+  result := true;
+  if Data.GetAsArray('produces', produces) then
+    for i := 0 to produces^.Count - 1 do
+      if IsContentTypeJsonU(VariantToUtf8(produces^.Values[i])) then
+        exit;
+  result := false;
 end;
 
 function TOpenApiOperation.Summary: RawUtf8;
@@ -1326,7 +1348,11 @@ begin
       begin
         fSuccessResponseCode := code;
         if schema <> nil then
-          fSuccessResponseType := fParser.NewPascalTypeFromSchema(schema);
+          fSuccessResponseType := fParser.NewPascalTypeFromSchema(schema)
+        else if (fParser.Version = oav2) and
+                fOperation.ProducesJson then
+          // no schema, but OpenAPI v2 "produces" -> JSON body as TDocVariant
+          fSuccessResponseType := TPascalType.CreateBuiltin(fParser, obtVariant);
       end;
     end
     else if Assigned(schema) and
@@ -1545,7 +1571,8 @@ var
         w.AddShorter('    ''');
         case p.Location of
           oplQuery:
-            if p.ParamType.IsArray then
+            if p.ParamType.IsArray and
+               p.Parameter^.Explode then
               w.AddDirect('*'); // ueStarNameIsCsv for UrlEncodeFull()
           // oplHeader uses natively CSV in OpenAPI default "simple" style
           oplCookie:
@@ -1604,7 +1631,7 @@ begin
     if urlParam[i] < 0 then
       EOpenApi.RaiseUtf8('%.Body: missing {%} in [%]', [self, urlName[i], fPath]);
   // emit the body block with its declaration and Request() call
-  Declaration(w, ClassName, {implemtation=}true);
+  Declaration(w, ClassName, {implementation=}true);
   w.AddStrings([fParser.LineEnd, 'begin', fParser.LineEnd,
          '  fClient.Request(''', UpperCase(fMethod), ''', ''', url, '''']);
   // Path parameters

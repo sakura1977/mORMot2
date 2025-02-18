@@ -158,7 +158,8 @@ type
   TPrivateRelay = class;
 
   /// regular mORMot client to Public Relay connection using
-  // synopsejson/synopsebin/synopsebinary protocols
+  // synopsejson/synopsebin/synopsebinary sub-protocols
+  // - will behave like a regular mORMot server from the client point of view
   // - any incoming frame will be encapsulated with the connection ID, then
   // relayed to the Private Relay node using TRelayServerProtocol
   TSynopseServerProtocol = class(TWebSocketProtocol)
@@ -168,6 +169,7 @@ type
       var Frame: TWebSocketFrame; const info: RawUtf8); override;
   public
     // implements mormot.net.ws.core's TWebSocketProtocolRest variants
+    // to behave like a regular mORMot server from the client point of view
     function GetSubprotocols: RawUtf8; override;
     function SetSubprotocol(const aProtocolName: RawUtf8): boolean; override;
   public
@@ -221,8 +223,6 @@ type
     // - the protocol is relayed from TRelayClientProtocol.ProcessIncomingFrame
     constructor Create(aOwner: TPrivateRelay;
       const aProtocolName: RawUtf8); reintroduce;
-    /// used server-side for any new connection
-    function Clone(const aClientUri: RawUtf8): TWebSocketProtocol; override;
   end;
 
 
@@ -736,12 +736,6 @@ begin
   inherited Create(aProtocolName, '');
 end;
 
-function TSynopseClientProtocol.Clone(
-  const aClientUri: RawUtf8): TWebSocketProtocol;
-begin
-  result := nil; // not used on this client-side only protocol
-end;
-
 procedure TSynopseClientProtocol.ProcessIncomingFrame(Sender: TWebSocketProcess;
   var Frame: TWebSocketFrame; const info: RawUtf8);
 var
@@ -815,7 +809,7 @@ begin
     tix := GetTickCount64 + 500;
     while (fRestPending <> 0) and
           (GetTickCount64 < tix) do
-      Sleep(1); // warning: waits typically 1-15 ms on Windows
+      SleepHiRes(1); // warning: waits typically 1-15 ms on Windows
   end;
   inherited Destroy;
 end;
@@ -1045,7 +1039,7 @@ begin
            fServerConnectedToLocalHost then
           SleepHiRes(0) // faster on loopback (e.g. tests)
         else
-          Sleep(1); // warning: waits typically 1-15 ms on Windows
+          SleepHiRes(1); // warning: waits typically 1-15 ms on Windows
         continue;
       end;
       if log <> nil then

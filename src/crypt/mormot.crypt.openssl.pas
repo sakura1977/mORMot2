@@ -1232,7 +1232,8 @@ const
     'sha512',     // hfSHA512
     'sha512-256', // hfSHA512_256
     'sha3-256',   // hfSHA3_256
-    'sha3-512');  // hfSHA3_512
+    'sha3-512',   // hfSHA3_512
+    'sha224');    // hfSHA224
 
   CAA_MD: array[TCryptAsymAlgo] of RawUtf8 = (
     'SHA256', // caaES256
@@ -1253,7 +1254,7 @@ var
 begin
   if (_HashAlgoMd[hfSHA256] = nil) and
      OpenSslIsAvailable then
-    for h := low(h) to high(h) do
+    for h := low(h) to high(h) do // populate once
       _HashAlgoMd[h] := EVP_get_digestbyname(HF_MD[h]);
   result := _HashAlgoMd[Algorithm];
 end;
@@ -1311,7 +1312,7 @@ begin
 end;
 
 var
-  EvpOk, EvpKo: TIntegerDynArray; // creating a context has a cost
+  EvpOk, EvpKo: TIntegerDynArray; // cache to avoid creating ctx each time
 
 function OpenSslSupports(EvpType: integer): boolean;
 var
@@ -1398,7 +1399,7 @@ begin
           EOpenSsl.Check(EVP_PKEY_keygen(ctx, @result));
         end
       else
-        exit; // unsupported type
+        exit; // unsupported type (yet)
     end;
   finally
     EVP_PKEY_CTX_free(ctx);
@@ -1866,6 +1867,7 @@ type
   public
     constructor Create(const name: RawUtf8); overload; override;
     constructor Create(caa: TCryptAsymAlgo); reintroduce; overload;
+    function KeyAlgo: TCryptKeyAlgo; override;
     procedure GeneratePem(out pub, priv: RawUtf8; const privpwd: RawUtf8); override;
     function Sign(hasher: TCryptHasher; msg: pointer; msglen: PtrInt;
       const priv: RawByteString; out sig: RawByteString;
@@ -1883,6 +1885,11 @@ begin
     result := fDefaultHashAlgorithm
   else
     result := hasher.AlgoName; // let OpenSSL resolve the algorithm by name
+end;
+
+function TCryptAsymOsl.KeyAlgo: TCryptKeyAlgo;
+begin
+  result := CAA_CKA[fCaa];
 end;
 
 constructor TCryptAsymOsl.Create(const name: RawUtf8);
@@ -2202,6 +2209,7 @@ type
   TCryptStoreAlgoOpenSsl = class(TCryptStoreAlgo)
   public
     function New: ICryptStore; override; // = TCryptStoreOpenSsl.Create(self)
+    function DefaultCertAlgo: TCryptCertAlgo; override;
   end;
 
   /// class implementing ICryptStore using OpenSSL
@@ -2227,7 +2235,6 @@ type
       IgnoreError: TCryptCertValidities; TimeUtc: TDateTime): TCryptCertValidity; override;
     function Count: integer; override;
     function CrlCount: integer; override;
-    function DefaultCertAlgo: TCryptCertAlgo; override;
   end;
 
 
@@ -2770,8 +2777,6 @@ end;
 
 function CanVerify(auth: PX509; usage: TX509Usage; selfsigned: boolean;
   IgnoreError: TCryptCertValidities; TimeUtc: TDateTime): TCryptCertValidity;
-var
-  na, nb: TDateTime;
 begin
   if auth = nil then
     result := cvUnknownAuthority
@@ -2783,14 +2788,7 @@ begin
     result := cvValidSigned;
     if cvDeprecatedAuthority in IgnoreError then
       exit;
-    if TimeUtc = 0 then
-      TimeUtc := NowUtc;
-    na := auth.NotAfter; // 0 if ASN1_TIME_to_tm() not supported by old OpenSSL
-    nb := auth.NotBefore;
-    if ((na <> 0) and
-        (TimeUtc > na + CERT_DEPRECATION_THRESHOLD)) or
-       ((nb <> 0) and
-        (TimeUtc + CERT_DEPRECATION_THRESHOLD < nb)) then
+    if not auth^.IsValidDate(TimeUtc) then
       result := cvDeprecatedAuthority;
   end;
 end;
@@ -2935,6 +2933,11 @@ end;
 function TCryptStoreAlgoOpenSsl.New: ICryptStore;
 begin
   result := TCryptStoreOpenSsl.Create(self);
+end;
+
+function TCryptStoreAlgoOpenSsl.DefaultCertAlgo: TCryptCertAlgo;
+begin
+  result := CryptCertOpenSsl[CryptAlgoDefault];
 end;
 
 
@@ -3127,11 +3130,6 @@ end;
 function TCryptStoreOpenSsl.CrlCount: integer;
 begin
   result := fStore.CrlCount;
-end;
-
-function TCryptStoreOpenSsl.DefaultCertAlgo: TCryptCertAlgo;
-begin
-  result := CryptCertOpenSsl[CryptAlgoDefault];
 end;
 
 function TCryptStoreOpenSsl.Revoke(const Cert: ICryptCert;

@@ -502,12 +502,12 @@ type
     /// the identifier of the callback, as sent to the server side
     // - computed from TRestClientUriCallbacks.fCurrentID counter
     ID: TRestClientCallbackID;
+    /// set to TRUE if the instance was released from the server
+    ReleasedFromServer: boolean;
     /// weak pointer typecast to the associated IInvokable variable
     Instance: pointer;
     //// information about the associated IInvokable
     Factory: TInterfaceFactory;
-    /// set to TRUE if the instance was released from the server
-    ReleasedFromServer: boolean;
   end;
 
   /// points to information about registered interface callbacks
@@ -1017,7 +1017,7 @@ type
       read fOnSetUser write fOnSetUser;
   published
     /// low-level error code, as returned by server
-    // - check this value about HTTP_* constants
+    // - check this value about HTTP_* constants, e.g. 404 for HTTP_NOTFOUND
     // - HTTP_SUCCESS or HTTP_CREATED mean no error
     // - otherwise, check LastErrorMessage property for additional information
     // - this property value will record status codes returned by Uri() method
@@ -1026,6 +1026,7 @@ type
     /// low-level error message, as returned by server
     // - this property value will record content returned by Uri() method in
     // case of an error, or '' if LastErrorCode is HTTP_SUCCESS or HTTP_CREATED
+    // - fallback to LastErrorCode corresponding text, e.g. 'Not Found' for 404
     property LastErrorMessage: RawUtf8
       read fLastErrorMessage;
     /// low-level exception class, if any
@@ -1597,8 +1598,7 @@ end;
 class function TRestClientAuthenticationHttpBasic.ComputeAuthenticateHeader(
   const aUserName, aPasswordClear: RawUtf8): RawUtf8;
 begin
-  result := 'Authorization: Basic ' +
-    BinToBase64(aUserName + ':' + aPasswordClear);
+  BasicClient(aUserName, aPasswordClear, SpiUtf8(result));
 end;
 
 
@@ -1609,17 +1609,16 @@ class function TRestClientAuthenticationSspi.ClientComputeSessionKey(
   Sender: TRestClientUri; User: TAuthUser): RawUtf8;
 var
   SecCtx: TSecContext;
-  WithPassword: boolean;
   OutData: RawByteString;
 begin
-  InitializeDomainAuth; // setup mormot.lib.sspi/gssapi unit depending on the OS
   result := '';
-  InvalidateSecContext(SecCtx, 0);
-  WithPassword := User.LogonName <> '';
+  if not InitializeDomainAuth then
+    exit;
   Sender.fSession.Data := '';
+  InvalidateSecContext(SecCtx);
   try
     repeat
-      if WithPassword then // will use ClientForceSpn() value
+      if User.LogonName <> '' then // will use ClientForceSpn() value
         ClientSspiAuthWithPassword(SecCtx, Sender.fSession.Data,
           User.LogonName, User.PasswordHashHexa, {spn=}'', OutData)
       else
@@ -1777,7 +1776,7 @@ begin
     i := FindIndex(aID);
     if i < 0 then
       exit;
-    List[i].ReleasedFromServer := True; // just flag it -> delay deletion
+    List[i].ReleasedFromServer := true; // just flag it -> delay deletion
   finally
     fSafe.UnLock;
   end;
@@ -2795,7 +2794,7 @@ var
   json: RawUtf8;
 begin
   result := (CallBackGet('stat', ['findservice', aServiceName], json) = HTTP_SUCCESS) and
-    (DynArrayLoadJson(URI, pointer({%H-}json), TypeInfo(TRestServerUriDynArray)) <> nil);
+    (DynArrayLoadJsonInPlace(URI, pointer({%H-}json), TypeInfo(TRestServerUriDynArray)) <> nil);
 end;
 
 function TRestClientUri.ServiceRetrieveAssociated(const aInterface: TGuid;

@@ -1187,13 +1187,12 @@ begin
   else
     // no AdjustHostUrl() below
     Ctxt.Host := '';
-  if call.Url = '' then
-  begin
-    call.Url := Ctxt.Url;
-    if (call.Url <> '') and
-       (call.Url[1] = '/') then
-      delete(call.Url, 1, 1); // normalize URI
-  end;
+  if (call.Url = '') and
+     (Ctxt.Url <> '') then
+    if Ctxt.Url[1] = '/' then // trim any initial '/'
+      FastSetString(call.Url, @PByteArray(Ctxt.Url)[1], length(Ctxt.Url) - 1)
+    else
+      call.Url := Ctxt.Url;
   call.Method := Ctxt.Method;
   call.InHead := Ctxt.InHeaders;
   call.InBody := Ctxt.InContent;
@@ -1264,17 +1263,23 @@ begin
   end;
   // set output content
   result := call.OutStatus;
+  Ctxt.Url := call.Url;
   Ctxt.OutContent := call.OutBody;
   P := pointer(call.OutHead);
-  if IdemPChar(P, 'CONTENT-TYPE: ') then
-  begin
-    // TRestServer.Uri is expected to customize the content-type
-    // as FIRST header (e.g. when returning GET blob fields)
-    Ctxt.OutContentType := GetNextLine(P + 14, P);
-    FastSetString(call.OutHead, P, StrLen(P));
-  end
-  else
-    // default content type is JSON
+  if P <> nil then
+    if P = pointer(JSON_CONTENT_TYPE_HEADER_VAR) then
+      FastAssignNew(call.OutHead) // most common case (e.g. mormot.soa.server)
+    else if IdemPChar(P, 'CONTENT-TYPE: ') then
+    begin
+      // TRestServer.Uri is expected to customize the content-type
+      // as FIRST header (e.g. when returning GET blob fields)
+      Ctxt.OutContentType := GetNextLine(P + 14, P, {trim=}true);
+      if P = nil then
+        FastAssignNew(call.OutHead)
+      else
+        FastSetString(call.OutHead, P, StrLen(P));
+    end;
+  if Ctxt.OutContentType = '' then // set JSON by default
     Ctxt.OutContentType := JSON_CONTENT_TYPE_VAR;
   // handle HTTP redirection and cookies over virtual hosts
   if Ctxt.Host <> '' then
@@ -1393,18 +1398,26 @@ begin
       [self, ToText(fUse)^]);
   result := (fHttpServer as THttpServerSocketGeneric).WebSocketsEnable(
     aWSURI, aWSEncryptionKey, aWSAjax, aWSBinaryOptions);
-  if Assigned(aOnWSUpgraded) or
-     Assigned(aOnWSClosed) then
     if fHttpServer is TWebSocketAsyncServer then
     begin
-      TWebSocketAsyncServer(fHttpServer).OnWebSocketUpgraded := aOnWSUpgraded;
-      TWebSocketAsyncServer(fHttpServer).OnWebSocketClose := aOnWSClosed;
+      if Assigned(aOnWSUpgraded) or
+         Assigned(aOnWSClosed) then
+      begin
+        TWebSocketAsyncServer(fHttpServer).OnWebSocketUpgraded := aOnWSUpgraded;
+        TWebSocketAsyncServer(fHttpServer).OnWebSocketClose := aOnWSClosed;
+      end;
+      // Ensure that the OnWSClose is called regardless of whether the client
+      // connection is disconnected normally or abnormally
       TWebSocketAsyncServer(fHttpServer).OnWebSocketDisconnect := OnWSAsyncClose;
     end
     else if fHttpServer is TWebSocketServer then
     begin
-      TWebSocketServer(fHttpServer).OnWebSocketUpgraded := aOnWSUpgraded;
-      TWebSocketServer(fHttpServer).OnWebSocketClose := aOnWSClosed;
+      if Assigned(aOnWSUpgraded) or
+         Assigned(aOnWSClosed) then
+      begin
+        TWebSocketServer(fHttpServer).OnWebSocketUpgraded := aOnWSUpgraded;
+        TWebSocketServer(fHttpServer).OnWebSocketClose := aOnWSClosed;
+      end;
       TWebSocketServer(fHttpServer).OnWebSocketDisconnect := OnWSSocketClose;
     end;
 end;
@@ -1439,7 +1452,7 @@ begin
     begin
       // aConnection.InheritsFrom(TSynThread) may raise an exception
       // -> checked in WebSocketsCallback/IsActiveWebSocket
-      ctxt := THttpServerRequest.Create(nil, aConnectionID, nil, [], nil);
+      ctxt := THttpServerRequest.Create(nil, aConnectionID, nil, 0, [], nil);
       try
         FormatUtf8('%/%/%',
           [aSender.Model.Root, aInterfaceDotMethodName, aFakeCallID], url);

@@ -898,9 +898,6 @@ type
     /// append 2 bytes of data at the current position
     procedure Write2(Data: cardinal);
       {$ifdef HASINLINE}inline;{$endif}
-    /// append 2 bytes of data, encoded as BigEndian,  at the current position
-    procedure Write2BigEndian(Data: cardinal);
-      {$ifdef HASINLINE}inline;{$endif}
     /// append 4 bytes of data at the current position
     procedure Write4(Data: integer);
       {$ifdef HASINLINE}inline;{$endif}
@@ -1576,7 +1573,8 @@ type
 // - parameters must be supplied two by two, as Name,Value pairs, e.g.
 // ! url := UrlEncode(['select','*','where','ID=12','offset',23,'object',aObject]);
 // - parameters names should be plain ASCII-7 RFC compatible identifiers
-// (0..9a..zA..Z_.~), otherwise they are skipped unless ueEncodeNames is set
+// (0..9a..zA..Z_.), otherwise they are skipped unless ueEncodeNames is set - the
+// tilde (~) character is part of RFC 3986 but should be escaped in practice
 // - parameters values can be either textual, integer or extended, or any TObject
 // - TObject serialization into UTF-8 will be processed with ObjectToJson()
 function UrlEncode(const NameValuePairs: array of const;
@@ -1703,12 +1701,13 @@ function UrlDecodeNextName(U: PUtf8Char; out Name: RawUtf8): PUtf8Char;
 
 /// checks if the supplied UTF-8 text don't need URI encoding
 // - returns TRUE if all its chars are non-void plain ASCII-7 RFC compatible
-// identifiers (0..9a..zA..Z-_.~)
+// identifiers (0..9a..zA..Z-_.) - the tilde (~) character is part of RFC 3986
+// but should be escaped in practice
 function IsUrlValid(P: PUtf8Char): boolean;
 
 /// checks if the supplied UTF-8 text values don't need URI encoding
 // - returns TRUE if all its chars of all strings are non-void plain ASCII-7 RFC
-// compatible identifiers (0..9a..zA..Z-_.~)
+// compatible identifiers (0..9a..zA..Z-_.) - excluding tilde (~)
 function AreUrlValid(const Url: array of RawUtf8): boolean;
 
 /// ensure the supplied URI contains a trailing '/' charater
@@ -1858,6 +1857,10 @@ function IsContentTypeCompressibleU(const ContentType: RawUtf8): boolean;
 
 /// recognize e.g. 'application/json' or 'application/vnd.api+json'
 function IsContentTypeJson(ContentType: PUtf8Char): boolean;
+
+/// recognize e.g. 'application/json' or 'application/vnd.api+json'
+function IsContentTypeJsonU(const ContentType: RawUtf8): boolean;
+  {$ifdef HASINLINE} inline; {$endif}
 
 /// fast guess of the size, in pixels, of a JPEG memory buffer
 // - will only scan for basic JPEG structure, up to the StartOfFrame (SOF) chunk
@@ -2222,9 +2225,17 @@ type
     /// release the associated Redirected stream
     destructor Destroy; override;
     /// can be used as TOnStreamProgress callback writing into the console
+    // - will append the current state in the console last line
     class procedure ProgressStreamToConsole(Sender: TStreamRedirect);
     /// can be used as TOnInfoProgress callback writing into the console
+    // - will append the current state in the console last line
     class procedure ProgressInfoToConsole(Sender: TObject; Info: PProgressInfo);
+    /// can be used as TOnStreamProgress callback writing into the console
+    // - will append the current state in the console with a line feed
+    class procedure ProgressStreamToConsoleLn(Sender: TStreamRedirect);
+    /// can be used as TOnInfoProgress callback writing into the console
+    // - will append the current state in the console with a line feed
+    class procedure ProgressInfoToConsoleLn(Sender: TObject; Info: PProgressInfo);
     /// notify a TOnStreamProgress callback that a process ended
     // - create a fake TStreamRedirect and call Ended with the supplied info
     class procedure NotifyEnded(
@@ -2266,6 +2277,10 @@ type
     // - this TStream instance will be owned by the TStreamRedirect
     property Redirected: TStream
       read fRedirected write fRedirected;
+    /// low-level access to the progression information data structure
+    // - don't use this but other specific properties like ExpectedSize or Percent
+    property Info: TProgressInfo
+      read fInfo;
     /// you can specify a number of bytes for the final Redirected size
     // - will be used for the callback progress - could be left to 0 for Write()
     // if size is unknown
@@ -2757,15 +2772,13 @@ type
   private
     fBuffer: RawUtf8; // actual storage, with length(fBuffer) as Capacity
     fLen: PtrInt;
-    procedure RawAppend(P: pointer; PLen: PtrInt);
-      {$ifdef HASINLINE}inline;{$endif}
-    procedure RawRealloc(needed: PtrInt);
   public
     /// set Len to 0, but doesn't clear/free the Buffer itself
     procedure Reset;
       {$ifdef HASINLINE}inline;{$endif}
     /// release/free the internal Buffer storage
-    procedure Clear;
+    // - returns the released memory bytes, i.e. former Capacity before clearing
+    function Clear: PtrInt;
       {$ifdef HASINLINE}inline;{$endif}
     /// a convenient wrapper to pointer(fBuffer) for direct Buffer/Len use
     function Buffer: pointer;
@@ -2775,7 +2788,6 @@ type
       {$ifdef HASINLINE}inline;{$endif}
     /// add some UTF-8 buffer content to the Buffer, resizing it if needed
     procedure Append(P: pointer; PLen: PtrInt); overload;
-      {$ifdef HASINLINE}inline;{$endif}
     /// add some UTF-8 string content to the Buffer, resizing it if needed
     procedure Append(const Text: RawUtf8); overload;
       {$ifdef HASINLINE}inline;{$endif}
@@ -2784,14 +2796,14 @@ type
     /// add some UTF-8 shortstring content to the Buffer, resizing it if needed
     procedure AppendShort(const Text: ShortString);
       {$ifdef HASINLINE}inline;{$endif}
-    /// add some UTF-8 string(s) content to the Buffer, resizing it if needed
-    procedure Append(const Text: array of RawUtf8); overload;
     /// just after Append/AppendShort, append a #13#10 end of line
     procedure AppendCRLF;
       {$ifdef HASINLINE}inline;{$endif}
     /// just after Append/AppendShort, append one single character
     procedure Append(Ch: AnsiChar); overload;
       {$ifdef HASINLINE}inline;{$endif}
+    /// add some UTF-8 string(s) content to the Buffer, resizing it if needed
+    procedure Append(const Text: array of RawUtf8); overload;
     /// add some UTF-8 buffer content to the Buffer, without resizing it
     function TryAppend(P: pointer; PLen: PtrInt): boolean;
       {$ifdef HASINLINE}inline;{$endif}
@@ -3598,7 +3610,7 @@ function TFastReader.Next2BigEndian: cardinal;
 begin
   if P + 1 >= Last then
     ErrorOverflow;
-  result := swap(PWord(P)^);
+  result := bswap16(PWord(P)^);
   inc(P, 2);
 end;
 
@@ -4565,11 +4577,6 @@ begin
     InternalFlush;
   PWord(@fBuffer^[fPos])^ := Data;
   inc(fPos, SizeOf(Word));
-end;
-
-procedure TBufferWriter.Write2BigEndian(Data: cardinal);
-begin
-  Write2(swap(word(Data)));
 end;
 
 procedure TBufferWriter.Write4(Data: integer);
@@ -6642,7 +6649,7 @@ begin
   begin
     Base64EncodeLoop(p, sp, PERLINE, @b64enc); // better inlining than AVX2 here
     inc(sp, PERLINE);
-    PWord(p + 64)^ := $0a0d; // CR + LF on all systems for safety
+    PWord(p + 64)^ := CRLFW; // CR + LF on all systems for safety
     inc(p, 66);
     dec(len, PERLINE);
   end;
@@ -6660,7 +6667,7 @@ begin
       Base64EncodeTrailing(p, sp, len); // 1/2 bytes as 4 chars with trailing =
       inc(p, 4);
     end;
-    PWord(p)^ := $0a0d;
+    PWord(p)^ := CRLFW;
     inc(p, 2);
   end;
   if Suffix <> '' then
@@ -8060,7 +8067,7 @@ begin
     inc(s);
     if tcUriUnreserved in tab[c] then
     begin
-      // was ['_', '-', '.', '~', '0'..'9', 'a'..'z', 'A'..'Z']
+      // was ['_', '-', '.', '0'..'9', 'a'..'z', 'A'..'Z'] - '~' excluded
       d^ := c;
       inc(d);
     end
@@ -8289,7 +8296,7 @@ begin
   tab := @TEXT_CHARS;
   repeat
     if tcUriUnreserved in tab[P^] then
-      inc(P) // was  ['_', '-', '.', '~', '0'..'9', 'a'..'z', 'A'..'Z']
+      inc(P) // was  ['_', '-', '.', '0'..'9', 'a'..'z', 'A'..'Z'] - exclude '~'
     else if P^ = #0 then
       break
     else
@@ -9061,6 +9068,11 @@ begin
             (PtrUInt(IdemPPChar(ContentType + 12, @_CONTENT_APP)) <= 2);
 end;
 
+function IsContentTypeJsonU(const ContentType: RawUtf8): boolean;
+begin
+  result := IsContentTypeJson(pointer(ContentType));
+end;
+
 function GetJpegSize(jpeg: PAnsiChar; len: PtrInt;
   out Height, Width, Bits: integer): boolean;
 var
@@ -9082,8 +9094,8 @@ begin
     case ord(jpeg^) of
       $c0..$c3, $c5..$c7, $c9..$cb, $cd..$cf: // SOF
         begin
-          Height := swap(PWord(jpeg + 4)^);
-          Width  := swap(PWord(jpeg + 6)^);
+          Height := bswap16(PWord(jpeg + 4)^);
+          Width  := bswap16(PWord(jpeg + 6)^);
           Bits   := PByte(jpeg + 8)^ * 8;
           result := (Height > 0) and
                     (Height < 20000) and
@@ -9098,7 +9110,7 @@ begin
       $ff: // padding
         ;
     else
-      inc(jpeg, swap(PWord(jpeg + 1)^) + 1);
+      inc(jpeg, bswap16(PWord(jpeg + 1)^) + 1);
     end;
   end;
 end;
@@ -9227,32 +9239,32 @@ var
 begin
   // generated asm is much better with a local proc
   if P < PEnd then
-  repeat
-    PBeg := P;
-    {$ifdef CPUX64}
-    inc(P, BufferLineLength(P, PEnd)); // use branchless SSE2 on x86_64
-    {$else}
-    while (P < PEnd) and
-          (P^ <> #13) and
-          (P^ <> #10) do
-      inc(P);
-    {$endif CPUX64}
-    Map.ProcessOneLine(PBeg, P);
-    if P + 1 < PEnd then
-      if PWord(P)^ = 13 + 10 shl 8 then
-      begin
-        inc(P, 2); // ignore #13#10
-        if P < PEnd then
-          continue;
-      end
-      else
-      begin
-        inc(P);    // ignore #13 or #10
-        if P < PEnd then
-          continue;
-      end;
-    break;
-  until false;
+    repeat
+      PBeg := P;
+      {$ifdef CPUX64}
+      inc(P, BufferLineLength(P, PEnd)); // use branchless SSE2 on x86_64
+      {$else}
+      while (P < PEnd) and
+            (P^ <> #13) and
+            (P^ <> #10) do
+        inc(P);
+      {$endif CPUX64}
+      Map.ProcessOneLine(PBeg, P);
+      if P + 1 < PEnd then
+        if PWord(P)^ = 13 + 10 shl 8 then
+        begin
+          inc(P, 2); // ignore #13#10
+          if P < PEnd then
+            continue;
+        end
+        else
+        begin
+          inc(P);    // ignore #13 or #10
+          if P < PEnd then
+            continue;
+        end;
+      break;
+    until false;
 end;
 
 procedure TMemoryMapText.LoadFromMap(AverageLineLength: integer = 32);
@@ -9265,9 +9277,8 @@ begin
   GetMem(fLines, fLinesMax * SizeOf(pointer));
   P := pointer(fMap.Buffer);
   fMapEnd := P + fMap.Size;
-  if (PWord(P)^ = $BBEF) and
-     (P[2] = #$BF) then
-    inc(P, 3); // ignore UTF-8 BOM
+  if PCardinal(P)^ and $00ffffff = BOM_UTF8 then
+    inc(P, 3); // ignore any UTF-8 BOM
   ParseLines(P, fMapEnd, self);
   if fLinesMax > fCount + 16384 then
     Reallocmem(fLines, fCount * SizeOf(pointer)); // size down only if worth it
@@ -9383,25 +9394,13 @@ begin
 end;
 
 function Plural(const itemname: ShortString; itemcount: cardinal): ShortString;
-var
-  len, L: PtrInt;
 begin
-  len := (AppendUInt32ToBuffer(@result[1], itemcount) - PUtf8Char(@result[1])) + 1;
-  result[len] := ' ';
-  L := ord(itemname[0]);
-  if (L > 0) and
-     (L <= 240) then
-  begin
-    // avoid buffer overflow
-    MoveFast(itemname[1], result[len + 1], L);
-    inc(len, L);
-    if itemcount > 1 then
-    begin
-      inc(len);
-      result[len] := 's';
-    end;
-  end;
-  result[0] := AnsiChar(len);
+  result[0] := #0;
+  AppendShortCardinal(itemcount, result);
+  AppendShortChar(' ', @result);
+  AppendShort(itemname, result);
+  if itemcount > 1 then
+    AppendShortChar('s', @result);
 end;
 
 function EscapeBuffer(s: PAnsiChar; slen: integer;
@@ -9786,17 +9785,31 @@ var
   eraseline: ShortString;
   msg: RawUtf8;
 begin
-  eraseline[0] := AnsiChar(Info.ConsoleLen + 2);
-  eraseline[1] := #13;
-  FillCharFast(eraseline[2], ord(eraseline[0]) - 2, 32);
-  eraseline[ord(eraseline[0])] := #13;
-  system.write(eraseline);
-  msg := Info.GetProgress;
+  msg := Info^.GetProgress;
   if length(msg) > 250 then
     FakeLength(msg, 250); // paranoid overflow check
-  Info.ConsoleLen := length(msg); // to properly erase previous line
+  // properly erase previous line
+  eraseline[0] := AnsiChar(Info^.ConsoleLen + 2);
+  eraseline[1] := #13;
+  FillCharFast(eraseline[2], Info^.ConsoleLen, 32);
+  eraseline[ord(eraseline[0])] := #13;
+  Info^.ConsoleLen := length(msg);
   Prepend(msg, [eraseline]);
-  ConsoleWrite(msg, ccLightGray, {nolf=}true, {nocolor=}true);
+  // output to console in a single syscall
+  ConsoleWriteRaw(msg, {nolf=}true);
+end;
+
+class procedure TStreamRedirect.ProgressStreamToConsoleLn(Sender: TStreamRedirect);
+begin
+  if (Sender <> nil) and
+     Sender.InheritsFrom(TStreamRedirect) then
+    ProgressInfoToConsoleLn(Sender, @Sender.fInfo);
+end;
+
+class procedure TStreamRedirect.ProgressInfoToConsoleLn(
+  Sender: TObject; Info: PProgressInfo);
+begin
+  ConsoleWriteRaw(Info^.GetProgress);
 end;
 
 class procedure TStreamRedirect.NotifyEnded(
@@ -10160,9 +10173,9 @@ begin
   begin
     result := pointer(fNested[n - 1].Stream);
     if PClass(result)^ = TRawByteStringStream then
-      exit;
+      exit; // we can append to the previous text stream
   end;
-  result := TRawByteStringStream.Create;
+  result := TRawByteStringStream.Create; // need a new text stream
   NewStream(result);
 end;
 
@@ -10559,7 +10572,7 @@ begin
   if tweItalic in st then
     Toggle(tweItalic);
   if P <> nil then
-    if PWord(P)^ = $0a0d then
+    if PWord(P)^ = CRLFW then
       inc(P, 2)
     else
       inc(P);
@@ -10659,7 +10672,7 @@ begin
 none:     if lst = twlParagraph then
           begin
             c := PWord(P)^; // detect blank line to separate paragraphs
-            if c = $0a0d then
+            if c = CRLFW then
               inc(P, 2)
             else if c and $ff = $0a then
               inc(P)
@@ -10743,7 +10756,7 @@ begin
         break
       else
       begin
-        if PWord(P)^ = $0a0d then
+        if PWord(P)^ = CRLFW then
           inc(P, 2)
         else
           inc(P);
@@ -10813,7 +10826,7 @@ begin
                 W.AddShort('<img alt="');
                 W.AddHtmlEscape(B2, P2 - B2, hfWithinAttributes);
                 W.AddShorter('" src="');
-                W.AddShort(B, P - B);
+                W.AddNoJsonEscape(B, P - B);
                 W.AddShorter('">');
                 inc(P);
                 continue;
@@ -11417,10 +11430,12 @@ begin
   fLen := 0;
 end;
 
-procedure TRawByteStringBuffer.Clear;
+function TRawByteStringBuffer.Clear: PtrInt;
 begin
   fLen := 0;
-  FastAssignNew(fBuffer);
+  result := length(fBuffer);
+  if result <> 0 then
+    FastAssignNew(fBuffer);
 end;
 
 function TRawByteStringBuffer.Buffer: pointer;
@@ -11433,35 +11448,23 @@ begin
   result := length(fBuffer);
 end;
 
-procedure TRawByteStringBuffer.RawRealloc(needed: PtrInt);
-begin
-  if fLen = 0 then // buffer from scratch (fBuffer may be '' or not)
-    FastSetString(fBuffer, needed + 128) // no realloc + small initial overhead
-  else
-  begin
-    inc(needed, needed shr 3 + 2048); // generous overhead on resize
-    SetLength(fBuffer, needed); // realloc = move existing data
-  end;
-end;
-
-const
-  APPEND_OVERLOAD = 24; // for AppendCRLF or IndexByte() read overflow
-
-procedure TRawByteStringBuffer.RawAppend(P: pointer; PLen: PtrInt);
+procedure TRawByteStringBuffer.Append(P: pointer; PLen: PtrInt);
 var
   needed: PtrInt;
 begin
-  needed := fLen + PLen + APPEND_OVERLOAD;
+  if PLen <= 0 then
+    exit;
+  needed := fLen + PLen + 32; // +32 for Append(AnsiChar), AppendCRLF
   if needed > length(fBuffer) then
-    RawRealloc(needed);
+    if fLen = 0 then // buffer from scratch (fBuffer may be '' or not)
+      FastSetString(fBuffer, needed + 96) // no realloc + small initial overhead
+    else
+    begin
+      inc(needed, needed shr 3 + 2048); // generous overhead on resize
+      SetLength(fBuffer, needed);       // realloc = move existing data
+    end;
   MoveFast(P^, PByteArray(fBuffer)[fLen], PLen);
   inc(fLen, PLen);
-end;
-
-procedure TRawByteStringBuffer.Append(P: pointer; PLen: PtrInt);
-begin
-  if PLen > 0 then
-    RawAppend(P, PLen);
 end;
 
 procedure TRawByteStringBuffer.Append(const Text: RawUtf8);
@@ -11470,7 +11473,7 @@ var
 begin
   P := pointer(Text);
   if P <> nil then
-    RawAppend(P, PStrLen(P - _STRLEN)^);
+    Append(P, PStrLen(P - _STRLEN)^);
 end;
 
 procedure TRawByteStringBuffer.Append(Value: QWord);
@@ -11485,13 +11488,13 @@ begin
   {$endif ASMINTEL}
   begin
     P := StrUInt64(@tmp[23], Value);
-    RawAppend(P, @tmp[23] - P);
+    Append(P, @tmp[23] - P);
   end;
 end;
 
 procedure TRawByteStringBuffer.AppendCRLF;
 begin
-  PWord(@PByteArray(fBuffer)[fLen])^ := $0a0d;
+  PWord(@PByteArray(fBuffer)[fLen])^ := CRLFW;
   inc(fLen, 2);
 end;
 
@@ -11503,27 +11506,15 @@ end;
 
 procedure TRawByteStringBuffer.AppendShort(const Text: ShortString);
 begin
-  RawAppend(@Text[1], ord(Text[0]));
+  Append(@Text[1], ord(Text[0]));
 end;
 
 procedure TRawByteStringBuffer.Append(const Text: array of RawUtf8);
 var
-  needed, i, l: PtrInt;
+  i: PtrInt;
 begin
-  needed := 0;
   for i := 0 to high(Text) do
-    inc(needed, length(Text[i]));
-  if needed = 0 then
-    exit;
-  inc(needed, fLen + APPEND_OVERLOAD);
-  if needed > length(fBuffer) then
-    RawRealloc(needed);
-  for i := 0 to high(Text) do
-  begin
-    l := length(Text[i]);
-    MoveFast(pointer(Text[i])^, PByteArray(fBuffer)[fLen], l);
-    inc(fLen, l);
-  end;
+    Append(Text[i]);
 end;
 
 function TRawByteStringBuffer.TryAppend(P: pointer; PLen: PtrInt): boolean;
@@ -11541,9 +11532,8 @@ end;
 procedure TRawByteStringBuffer.Reserve(MaxSize: PtrInt);
 begin
   fLen := 0;
-  inc(MaxSize, APPEND_OVERLOAD);
-  if MaxSize > length(fBuffer) then
-    RawRealloc(MaxSize);
+  if length(fBuffer) < MaxSize then
+    FastSetString(fBuffer, MaxSize); // make new buffer from scratch
 end;
 
 procedure TRawByteStringBuffer.Reserve(const WorkingBuffer: RawByteString);

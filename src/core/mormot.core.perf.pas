@@ -3870,8 +3870,7 @@ begin
     GlobalLock; // RegisterGlobalShutdownRelease() will use it anyway
     try
       if ProcessSystemUse = nil then
-        ProcessSystemUse := RegisterGlobalShutdownRelease(
-          TSystemUse.Create(60));
+        ProcessSystemUse := RegisterGlobalShutdownRelease(TSystemUse.Create(60));
     finally
       GlobalUnLock;
     end;
@@ -4799,8 +4798,7 @@ begin
   result := GlobalSynFpuExceptionLibrary; // threadvar instances
   if result <> nil then
     exit;
-  obj := TSynFpuException.Create(ffLibrary);
-  RegisterGlobalShutdownRelease(obj);
+  obj := RegisterGlobalShutdownRelease(TSynFpuException.Create(ffLibrary));
   GlobalSynFpuExceptionLibrary := obj;
   result := obj;
 end;
@@ -4812,8 +4810,7 @@ begin
   result := GlobalSynFpuExceptionDelphi;
   if result <> nil then
     exit;
-  obj := TSynFpuException.Create(ffPascal);
-  RegisterGlobalShutdownRelease(obj);
+  obj := RegisterGlobalShutdownRelease(TSynFpuException.Create(ffPascal));
   GlobalSynFpuExceptionDelphi := obj;
   result := obj;
 end;
@@ -4863,35 +4860,50 @@ begin
     {$endif OSLINUXANDROID}
   end;
   Rtti.RegisterTypes([
-    TypeInfo(TSmbiosBiosFlags),            TypeInfo(TSmbiosSystemWakeup),
-    TypeInfo(TSmbiosBoardFeatures),        TypeInfo(TSmbiosBoardType),
-    TypeInfo(TSmbiosChassisType),          TypeInfo(TSmbiosChassisState),
-    TypeInfo(TSmbiosChassisSecurityState), TypeInfo(TSmbiosCacheLocation),
-    TypeInfo(TSmbiosCacheMode),            TypeInfo(TSmbiosCacheSramType),
-    TypeInfo(TSmbiosCacheEcc),             TypeInfo(TSmbiosCacheType),
-    TypeInfo(TSmbiosCacheAssociativity),   TypeInfo(TSmbiosProcessorType),
-    TypeInfo(TSmbiosProcessorStatus),      TypeInfo(TSmbiosProcessorUpgrade),
-    TypeInfo(TSmbiosProcessorFlags),       TypeInfo(TSmbiosConnectorType),
-    TypeInfo(TSmbiosConnectorPort),        TypeInfo(TSmbiosSlotType),
-    TypeInfo(TSmbiosSlotWidth),            TypeInfo(TSmbiosMemoryFormFactor),
-    TypeInfo(TSmbiosMemoryType),           TypeInfo(TSmbiosMemoryDetails),
-    TypeInfo(TSmbiosMemoryArrayLocation),  TypeInfo(TSmbiosMemoryArrayUse),
-    TypeInfo(TSmbiosMemoryArrayEcc),       TypeInfo(TSmbiosSecurityStatus),
-    TypeInfo(TSmbiosPointingType),         TypeInfo(TSmbiosPointingInterface)
+    TypeInfo(TSmbiosBiosFlags),
+    TypeInfo(TSmbiosSystemWakeup),
+    TypeInfo(TSmbiosBoardFeatures),
+    TypeInfo(TSmbiosBoardType),
+    TypeInfo(TSmbiosChassisType),
+    TypeInfo(TSmbiosChassisState),
+    TypeInfo(TSmbiosChassisSecurityState),
+    TypeInfo(TSmbiosCacheLocation),
+    TypeInfo(TSmbiosCacheMode),
+    TypeInfo(TSmbiosCacheSramType),
+    TypeInfo(TSmbiosCacheEcc),
+    TypeInfo(TSmbiosCacheType),
+    TypeInfo(TSmbiosCacheAssociativity),
+    TypeInfo(TSmbiosProcessorType),
+    TypeInfo(TSmbiosProcessorStatus),
+    TypeInfo(TSmbiosProcessorUpgrade),
+    TypeInfo(TSmbiosProcessorFlags),
+    TypeInfo(TSmbiosConnectorType),
+    TypeInfo(TSmbiosConnectorPort),
+    TypeInfo(TSmbiosSlotType),
+    TypeInfo(TSmbiosSlotWidth),
+    TypeInfo(TSmbiosMemoryFormFactor),
+    TypeInfo(TSmbiosMemoryType),
+    TypeInfo(TSmbiosMemoryDetails),
+    TypeInfo(TSmbiosMemoryArrayLocation),
+    TypeInfo(TSmbiosMemoryArrayUse),
+    TypeInfo(TSmbiosMemoryArrayEcc),
+    TypeInfo(TSmbiosSecurityStatus),
+    TypeInfo(TSmbiosPointingType),
+    TypeInfo(TSmbiosPointingInterface)
   ]);
   Rtti.RegisterFromText([
-    TypeInfo(TSmbiosBios),            _TSmbiosBios,
-    TypeInfo(TSmbiosSystem),          _TSmbiosSystem,
-    TypeInfo(TSmbiosBoard),           _TSmbiosBoard,
-    TypeInfo(TSmbiosChassis),         _TSmbiosChassis,
-    TypeInfo(TSmbiosCache),           _TSmbiosCache,
-    TypeInfo(TSmbiosProcessor),       _TSmbiosProcessor,
-    TypeInfo(TSmbiosConnector),       _TSmbiosConnector,
-    TypeInfo(TSmbiosSlot),            _TSmbiosSlot,
-    TypeInfo(TSmbiosMemory),          _TSmbiosMemory,
-    TypeInfo(TSmbiosMemoryArray),     _TSmbiosMemoryArray,
-    TypeInfo(TSmbiosBattery),         _TSmbiosBattery,
-    TypeInfo(TSmbiosInfo),            _TSmbiosInfo
+    TypeInfo(TSmbiosBios),        _TSmbiosBios,
+    TypeInfo(TSmbiosSystem),      _TSmbiosSystem,
+    TypeInfo(TSmbiosBoard),       _TSmbiosBoard,
+    TypeInfo(TSmbiosChassis),     _TSmbiosChassis,
+    TypeInfo(TSmbiosCache),       _TSmbiosCache,
+    TypeInfo(TSmbiosProcessor),   _TSmbiosProcessor,
+    TypeInfo(TSmbiosConnector),   _TSmbiosConnector,
+    TypeInfo(TSmbiosSlot),        _TSmbiosSlot,
+    TypeInfo(TSmbiosMemory),      _TSmbiosMemory,
+    TypeInfo(TSmbiosMemoryArray), _TSmbiosMemoryArray,
+    TypeInfo(TSmbiosBattery),     _TSmbiosBattery,
+    TypeInfo(TSmbiosInfo),        _TSmbiosInfo
   ]);
 end;
 

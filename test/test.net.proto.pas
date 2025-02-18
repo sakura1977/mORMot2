@@ -23,6 +23,7 @@ uses
   mormot.core.test,
   mormot.core.perf,
   mormot.core.threads,
+  mormot.core.search,
   mormot.crypt.core,
   mormot.crypt.secure,
   mormot.net.sock,
@@ -30,6 +31,7 @@ uses
   mormot.net.client,
   mormot.net.server,
   mormot.net.async,
+  mormot.net.ws.core,
   mormot.net.openapi,
   mormot.net.ldap,
   mormot.net.dns,
@@ -64,8 +66,14 @@ type
     // this is the main method called by RtspOverHttp[BufferedWrite]
     procedure DoRtspOverHttp(options: TAsyncConnectionsOptions);
   published
+    /// Engine.IO and Socket.IO regression tests
+    procedure _SocketIO;
     /// validate mormot.net.openapi unit
     procedure OpenAPI;
+    /// some HTTP shared/low-level process
+    procedure HTTP;
+    /// validate THttpProxyCache process
+    procedure _THttpProxyCache;
     /// validate TUriTree high-level structure
     procedure _TUriTree;
     /// validate DNS and LDAP clients (and NTP/SNTP)
@@ -84,6 +92,101 @@ type
 
 
 implementation
+
+procedure TNetworkProtocols._SocketIO;
+var
+  m: TSocketIOMessage;
+begin
+  // validate low-level Socket.IO message decoder
+  Check(not m.Init(''));
+  Check(not m.Init('z'));
+  Check(m.Init('0'));
+  Check(m.PacketType = sioConnect);
+  Check(m.NameSpaceIs('/'));
+  Check(m.DataIs(''));
+  CheckEqual(m.ID, 0);
+  CheckEqual(m.BinaryAttachment, 0);
+  Check(m.Init('0/test,{}'));
+  Check(m.PacketType = sioConnect);
+  Check(m.NameSpaceIs('/test'));
+  Check(m.DataIs('{}'));
+  CheckEqual(m.ID, 0);
+  CheckEqual(m.BinaryAttachment, 0);
+  Check(m.Init('1'));
+  Check(m.PacketType = sioDisconnect);
+  Check(m.NameSpaceIs('/'));
+  Check(m.DataIs(''));
+  CheckEqual(m.ID, 0);
+  CheckEqual(m.BinaryAttachment, 0);
+  Check(m.Init('1/admin,'));
+  Check(m.PacketType = sioDisconnect);
+  Check(m.NameSpaceIs('/admin'));
+  Check(not m.NameSpaceIs('/admi'));
+  Check(not m.NameSpaceIs('/admiN'));
+  Check(m.DataIs(''));
+  CheckEqual(m.ID, 0);
+  CheckEqual(m.BinaryAttachment, 0);
+  Check(m.Init('0/admin,{"sid":"oSO0OpakMV_3jnilAAAA"}'));
+  Check(m.PacketType = sioConnect);
+  Check(m.NameSpaceIs('/admin'));
+  Check(m.DataIs('{"sid":"oSO0OpakMV_3jnilAAAA"}'));
+  CheckEqual(m.ID, 0);
+  CheckEqual(m.BinaryAttachment, 0);
+  Check(m.Init('4{"message":"Not authorized"}'));
+  Check(m.PacketType = sioConnectError);
+  Check(m.NameSpaceIs('/'));
+  Check(m.DataIs('{"message":"Not authorized"}'));
+  CheckEqual(m.ID, 0);
+  CheckEqual(m.BinaryAttachment, 0);
+  Check(m.Init('2["foo"]'));
+  Check(m.PacketType = sioEvent);
+  Check(m.NameSpaceIs('/'));
+  Check(m.DataIs('["foo"]'));
+  CheckEqual(m.ID, 0);
+  CheckEqual(m.BinaryAttachment, 0);
+  Check(m.Init('2/admin,["bar"]'));
+  Check(m.PacketType = sioEvent);
+  Check(m.NameSpaceIs('/admin'));
+  Check(m.DataIs('["bar"]'));
+  CheckEqual(m.ID, 0);
+  CheckEqual(m.BinaryAttachment, 0);
+  Check(m.Init('212["foo"]'));
+  Check(m.PacketType = sioEvent);
+  Check(m.NameSpaceIs('/'));
+  Check(m.DataIs('["foo"]'));
+  CheckEqual(m.ID, 12);
+  CheckEqual(m.BinaryAttachment, 0);
+  Check(m.Init('3/admin,13["bar"]'));
+  Check(m.PacketType = sioAck);
+  Check(m.NameSpaceIs('/admin'));
+  Check(m.DataIs('["bar"]'));
+  CheckEqual(m.ID, 13);
+  CheckEqual(m.BinaryAttachment, 0);
+  Check(m.Init('51-["baz",{"_placeholder":true,"num":0}]'));
+  Check(m.PacketType = sioBinaryEvent);
+  Check(m.NameSpaceIs('/'));
+  Check(m.DataIs('["baz",{"_placeholder":true,"num":0}]'));
+  CheckEqual(m.ID, 0);
+  CheckEqual(m.BinaryAttachment, 1);
+  Check(m.Init('52-/admin,["baz",{"_placeholder":true,"num":0},{"_placeholder":true,"num":1}]'));
+  Check(m.PacketType = sioBinaryEvent);
+  Check(m.NameSpaceIs('/admin'));
+  Check(m.DataIs('["baz",{"_placeholder":true,"num":0},{"_placeholder":true,"num":1}]'));
+  CheckEqual(m.ID, 0);
+  CheckEqual(m.BinaryAttachment, 2);
+  Check(m.Init('61-15["bar",{"_placeholder":true,"num":0}]'));
+  Check(m.PacketType = sioBinaryAck);
+  Check(m.NameSpaceIs('/'));
+  Check(m.DataIs('["bar",{"_placeholder":true,"num":0}]'));
+  CheckEqual(m.ID, 15);
+  CheckEqual(m.BinaryAttachment, 1);
+  Check(m.Init('61-/admin,1[{"_placeholder":true,"num":0}]'));
+  Check(m.PacketType = sioBinaryAck);
+  Check(m.NameSpaceIs('/admin'));
+  Check(m.DataIs('[{"_placeholder":true,"num":0}]'));
+  CheckEqual(m.ID, 1);
+  CheckEqual(m.BinaryAttachment, 1);
+end;
 
 type
    TMyEnum = (eNone, e1, e2);
@@ -535,7 +638,7 @@ begin
   finally
     tree.Free;
   end;
-  ctxt := THttpServerRequest.Create(nil, 0, nil, [], nil);
+  ctxt := THttpServerRequest.Create(nil, 0, nil, 0, [], nil);
   router := TUriRouter.Create(TUriTreeNode);
   try
     Call('/plaintext', '', '', false, -1, 0);
@@ -669,18 +772,18 @@ end;
 
 procedure TNetworkProtocols.DNSAndLDAP;
 var
-  ip, u, v, sid: RawUtf8;
+  ip, rev, u, v, json, sid: RawUtf8;
   o: TAsnObject;
   c: cardinal;
   withntp: boolean;
   guid: TGuid;
-  i, j, k: PtrInt;
+  i, j, k, n: PtrInt;
   dns, clients, a: TRawUtf8DynArray;
   le: TLdapError;
   rl, rl2: TLdapResultList;
   r: TLdapResult;
   at: TLdapAttributeType;
-  ats: TLdapAttributeTypes;
+  ats, ats2: TLdapAttributeTypes;
   sat: TSamAccountType;
   gt: TGroupType;
   gts: TGroupTypes;
@@ -695,16 +798,16 @@ var
   ntp, usr, pwd, ku, main, txt: RawUtf8;
   dn: TNameValueDNs;
   hasinternet: boolean;
+  endtix: Int64;
 begin
   // validate NTP/SNTP client using NTP_DEFAULT_SERVER = time.google.com
   if not Executable.Command.Get('ntp', ntp) then
     ntp := NTP_DEFAULT_SERVER;
   withntp := not Executable.Command.Option('nontp');
-  hasinternet := DnsLookups('yahoo.com') <> nil; // avoid waiting for nothing
+  hasinternet := DnsLookups('yahoo.com', '', 500) <> nil; // avoid abusive wait
   if hasinternet then
   begin
     utc1 := GetSntpTime(ntp);
-    //writeln(DateTimeMSToString(utc), ' = ', DateTimeMSToString(NowUtc));
     if utc1 <> 0 then
     begin
       utc2 := NowUtc;
@@ -745,11 +848,32 @@ begin
   CheckEqual(DnsLookup('1.2.3.4'), '1.2.3.4');
   if hasinternet then
   begin
-    ip := DnsLookup('synopse.info');
-    CheckEqual(ip, '62.210.254.173', 'dns1');
-    ip := DnsLookup('blog.synopse.info');
-    CheckEqual(ip, '62.210.254.173', 'dns2');
-    CheckEqual(DnsReverseLookup(ip), '62-210-254-173.rev.poneytelecom.eu', 'rev');
+    endtix := GetTickCount64 + 2000; // never wait forever
+    repeat
+      inc(fAssertions);
+      ip := DnsLookup('synopse.info');
+      if ip <> '' then
+        break;
+      Sleep(100); // some DNS servers may fail at first: wait a little
+    until GetTickCount64 > endtix;
+    rev := '62.210.254.173';
+    CheckEqual(ip, rev, 'dns1');
+    repeat
+      inc(fAssertions);
+      ip := DnsLookup('blog.synopse.info');
+      if ip <> '' then
+        break;
+      Sleep(100); // some DNS servers may fail at first: wait a little
+    until GetTickCount64 > endtix;
+    CheckEqual(ip, rev, 'dns2');
+    repeat
+      inc(fAssertions);
+      rev := DnsReverseLookup(ip);
+      if rev <> '' then
+        break; // success
+      Sleep(100); // wait a little and retry up to 2 seconds
+    until GetTickCount64 > endtix;
+    CheckEqual(rev, '62-210-254-173.rev.poneytelecom.eu');
   end;
   // validate LDAP distinguished name conversion (no client)
   CheckEqual(DNToCN('CN=User1,OU=Users,OU=London,DC=xyz,DC=local'),
@@ -823,6 +947,44 @@ begin
   Check(not LdapSafe('abc)'));
   Check(not LdapSafe('*'));
   Check(not LdapSafe('()'));
+  // validate LDIF format
+  Check(IsLdifSafe(nil, 0));
+  Check(IsLdifSafe('toto', 0));
+  Check(IsLdifSafe(nil, -1));
+  Check(IsLdifSafe('toto', -1));
+  Check(IsLdifSafe('toto', 1));
+  Check(IsLdifSafe('toto', 2));
+  Check(IsLdifSafe('toto', 3));
+  Check(IsLdifSafe('toto', 4));
+  Check(not IsLdifSafe('toto', 5), 'ending #0');
+  Check(not IsLdifSafe(':oto', 4));
+  Check(IsLdifSafe('t:to', 4));
+  Check(IsLdifSafe('tot:', 4));
+  Check(not IsLdifSafe(' oto', 4));
+  Check(IsLdifSafe('t to', 4));
+  Check(not IsLdifSafe('tot ', 4));
+  Check(not IsLdifSafe('<oto', 4));
+  Check(IsLdifSafe('t<to', 4));
+  Check(IsLdifSafe('tot<', 4));
+  Check(not IsLdifSafe(#0'oto', 4));
+  Check(not IsLdifSafe('t'#0'to', 4));
+  Check(not IsLdifSafe('tot', 4));
+  Check(IsLdifSafe(#1'oto', 4));
+  Check(IsLdifSafe('t'#1'to', 4));
+  Check(IsLdifSafe('tot'#1'', 4));
+  Check(not IsLdifSafe(#10'oto', 4));
+  Check(not IsLdifSafe('t'#10'to', 4));
+  Check(not IsLdifSafe('tot'#10'', 4));
+  Check(not IsLdifSafe(#13'oto', 4));
+  Check(not IsLdifSafe('t'#13'to', 4));
+  Check(not IsLdifSafe('tot'#13'', 4));
+  k := 100;
+  u := RandomIdentifier(k);
+  for i := 0 to k + 1 do
+    Check(IsLdifSafe(pointer(u), i) = (i <= k));
+  Append(u, ' '); // trailing space is unsafe
+  for i := 0 to k + 2 do
+    Check(IsLdifSafe(pointer(u), i) = (i <= k));
   // validate LDAP filter text parsing
   // against https://ldap.com/ldapv3-wire-protocol-reference-search reference
   CheckEqual(RawLdapTranslateFilter('', {noraise=}true), '');
@@ -901,10 +1063,21 @@ begin
   CheckEqual(RawLdapTranslateFilter('(toto)', {noraise=}true), '');
   CheckEqual(RawLdapTranslateFilter('x', {noraise=}true), '');
   // validate LDAP attributes definitions
+  n := 0;
+  ats2 := [];
   for at := low(at) to high(at) do
   begin
     CheckEqual(ToText(at), AttrTypeName[at]);
-    CheckUtf8(AttributeNameType(AttrTypeName[at]) = at, ToText(at));
+    CheckUtf8(AttributeNameType(AttrTypeName[at]) = at, AttrTypeName[at]);
+    u := AttrTypeName[at];
+    CheckEqual(u, AttrTypeName[at]);
+    Check(pointer(u) = pointer(AttrTypeName[at]));
+    UpperCaseSelf(u);
+    Check(IdemPropNameU(u, AttrTypeName[at]));
+    Check((u = '') or (pointer(u) <> pointer(AttrTypeName[at])));
+    AttributeNameNormalize(u);
+    CheckEqual(u, AttrTypeName[at]);
+    Check(pointer(u) = pointer(AttrTypeName[at]));
     ats := [at];
     a := ToText(ats);
     if at = low(at) then
@@ -913,6 +1086,12 @@ begin
     begin
       CheckEqual(length(a), 1);
       CheckEqual(a[0], ToText(at));
+      include(ats2, at);
+      inc(n);
+      a := ToText(ats2);
+      CheckEqual(length(a), n);
+      for i := 0 to n - 1 do
+        CheckEqual(a[i], ToText(TLdapAttributeType(i + 1)));
     end;
   end;
   for i := low(AttrTypeNameAlt) to high(AttrTypeNameAlt) do
@@ -988,10 +1167,12 @@ begin
     r.Attributes[atObjectClass] := 'person';
     CheckEqual(r.Attributes.Count, 1);
     r.Attributes.AddPairs(['cn', 'John Doe',
-                           'cn', v,
-                           'sn', 'Doe']);
+                           'CN', v,           // CN will be identified as cn
+                           'Sn', 'Doe']);     // Sn will be normalized as sn
     CheckEqual(r.Attributes.Count, 3);
-    CheckHash(rl.GetJson([]), $8AAB69D2);
+    json := rl.GetJson([]);
+// '{"bar":{"foo":{"objectName":"CN=foo,OU=bar","objectClass":"person","cn":["John Doe",v],"sn":"Doe"}}}'
+    CheckHash(json, $8AAB69D2);
     CheckHash(rl.GetJson([roRawValues]), $8AAB69D2);
     CheckHash(rl.GetJson([roNoDCAtRoot]), $8AAB69D2);
     CheckHash(rl.GetJson([roNoObjectName]), $6A4853FA);
@@ -1142,7 +1323,7 @@ begin
               end;
             Check(one.NetbiosDN <> '', 'NetbiosDN');
             Check(one.ConfigDN <> '', 'ConfigDN');
-            Check(one.Search(one.WellKnownObjects[lkoUsers], {typesonly=}false,
+            Check(one.Search(one.WellKnownObject(lkoUsers), {typesonly=}false,
                   '(cn=users)', ['*']), 'Search');
             Check(one.SearchResult.Count <> 0, 'SeachResult');
             AddConsole('%% = % search=%', [one.Settings.TargetHost, txt,
@@ -1156,7 +1337,7 @@ begin
               if res.CopyObjectSid(sid) then
                 Check(sid <> '');
               FillZero(guid);
-              Check(res.CopyObjectGUID(guid), 'objectGUID');
+              Check(res.CopyObjectGuid(guid), 'objectGUID');
               Check(not IsNullGuid(guid));
               CheckEqual(res.CanonicalName, DNToCN(res.ObjectName));
               Check(IdemPropNameU(res.Attributes[atCommonName], 'users'), 'cn');
@@ -1242,8 +1423,8 @@ begin
     CheckEqual(serverinstance.Thread.Sent, 0);
     for i := 1 to 100 do
     begin
-      sent := RandomString(Random32(200) + 1);
-      sent2 := RandomString(Random32(200) + 1);
+      sent := RandomWinAnsi(Random32(200) + 1);
+      sent2 := RandomWinAnsi(Random32(200) + 1);
       Check(clientsock.SendAll(pointer(sent), length(sent)) = nrOk);
       Check(serversock.RecvWait(1000, received) = nrOk);
       CheckEqual(sent, received);
@@ -1390,10 +1571,15 @@ var
   hpc2: THttpPeerCryptHook; // another instance to validate remote decoding
   hps: THttpPeerCacheSettings;
   msg, msg2: THttpPeerCacheMessage;
+  m, m2: RawUtf8;
+  res: THttpPeerCryptMessageDecode;
   i, n, alter: integer;
   tmp: RawByteString;
+  dUri, dBearer, dTok: RawUtf8;
+  decoded: TUri;
   timer: TPrecisionTimer;
 begin
+  CheckEqual(SizeOf(THttpPeerCacheMessage), 192);
   // for further tests, use the dedicated "mORMot GET" (mget) sample
   hps := THttpPeerCacheSettings.Create;
   try
@@ -1404,40 +1590,88 @@ begin
     try
       hpc := THttpPeerCacheHook.Create(hps, 'secret');
       try
-        hpc2 := THttpPeerCryptHook.Create('secret');
+        hpc2 := THttpPeerCryptHook.Create('secret', nil, nil);
         try
           hpc2.fSettings := hps;
           hpc2.AfterSettings;
           hpc.MessageInit(pcfBearer, 0, msg);
           msg.Hash.Algo := hfSHA256;
+          RandomBytes(@msg.Hash.Bin, HASH_SIZE[msg.Hash.Algo]);
+          // validate UDP messages encoding/decoding
           timer.Start;
           n := 1000;
           for i := 1 to n do
           begin
             msg.Size := i;
-            msg.Hash.Hash.i0 := i;
+            msg.Hash.Bin.i0 := i;
             tmp := hpc.MessageEncode(msg);
             Check(tmp <> '');
-            Check(hpc2.MessageDecode(pointer(tmp), length(tmp), msg2), 'hpc2');
+            res := hpc2.MessageDecode(pointer(tmp), length(tmp), msg2);
+            Check(res = mdOk, 'hpc2');
             CheckEqual(msg2.Size, i);
             Check(CompareMem(@msg, @msg2, SizeOf(msg)));
           end;
           NotifyTestSpeed('messages', n * 2, n * 2 * SizeOf(msg), @timer);
-          Check(ToText(msg) = ToText(msg2));
+          m := RawUtf8(ToText(msg));
+          m2 := RawUtf8(ToText(msg2));
+          CheckEqual(m, m2);
+          // validate UDP messages alteration (quick CRC identification)
           timer.Start;
           n := 10000;
           for i := 1 to n do
           begin
             alter := Random32(length(tmp));
             inc(PByteArray(tmp)[alter]); // should be detected at crc level
-            Check(not hpc2.MessageDecode(pointer(tmp), length(tmp), msg2), 'alt');
+            res := hpc2.MessageDecode(pointer(tmp), length(tmp), msg2);
+            if CheckFailed(res = mdCrc, 'alt') then
+              TestFailed('alt=%', [ToText(res)^]);
             dec(PByteArray(tmp)[alter]); // restore
           end;
           NotifyTestSpeed('altered', n, n * SizeOf(msg), @timer);
-          Check(hpc.MessageDecode(pointer(tmp), length(tmp), msg2), 'hpc');
+          res := hpc.MessageDecode(pointer(tmp), length(tmp), msg2);
+          Check(res = mdOk, 'hpc');
           Check(CompareMem(@msg, @msg2, SizeOf(msg)));
+          // validate the UDP client/server stack is running
           for i := 1 to 10 do
             Check(hpc.Ping = nil);
+          // validate THttpPeerCrypt.HttpDirectUri request encoding/decoding
+          Check(THttpPeerCrypt.HttpDirectUri('secret',
+            'https://synopse.info/forum', ToText(msg.Hash), dUri, dBearer));
+          CheckEqual(dUri, '/https/synopse.info/forum');
+          Check(THttpPeerCrypt.HttpDirectUriReconstruct(pointer(dUri), decoded), 'reconst');
+          CheckEqual(decoded.URI, 'https://synopse.info/forum');
+          Check(dBearer <> '', 'dBearer');
+          FillCharFast(msg2, SizeOf(msg2), 0);
+          Check(msg2.Hash.Algo <> hfSHA256);
+          Check(not CompareMem(@msg.Hash.Bin, @msg2.Hash.Bin, HASH_SIZE[hfSHA256]));
+          Check(not HashDigestEqual(msg.Hash, msg2.Hash), 'hde0');
+          res := hpc2.BearerDecode(dBearer, pcfBearerDirect, msg2);
+          Check(res = mdB64, 'directB64');
+          Check(FindNameValue(PAnsiChar(pointer(dBearer)), HEADER_BEARER_UPPER, dTok));
+          FillCharFast(msg2, SizeOf(msg2), 0);
+          res := hpc2.BearerDecode(dTok, pcfBearer, msg2);
+          Check(res = mdBearer, 'directKo');
+          FillCharFast(msg2, SizeOf(msg2), 0);
+          res := hpc2.BearerDecode(dTok, pcfBearerDirect, msg2);
+          Check(res = mdOk, 'directOk');
+          Check(not CompareMem(@msg, @msg2, SizeOf(msg)), 'cm');
+          Check(CompareMem(@msg.Hash.Bin, @msg2.Hash.Bin, HASH_SIZE[hfSHA256]));
+          Check(HashDigestEqual(msg.Hash, msg2.Hash), 'hde1');
+          Check(msg2.Kind = pcfBearerDirect);
+          CheckEqual(msg2.Opaque, 7142701337754149600, 'Opaque');
+          Check(msg2.Hash.Algo = hfSHA256);
+          Check(CompareMem(@msg.Hash.Bin, @msg2.Hash.Bin, HASH_SIZE[hfSHA256]));
+          Check(HashDigestEqual(msg.Hash, msg2.Hash), 'hde2');
+          FillCharFast(msg2, SizeOf(msg2), 0);
+          inc(dTok[10]);
+          res := hpc2.BearerDecode(dTok, pcfBearer, msg2);
+          Check(res in [mdCrc, mdB64], 'altered');
+          Check(THttpPeerCrypt.HttpDirectUri('secret',
+            'https://synopse.info:123/forum', ToText(msg.Hash), dUri, dBearer));
+          CheckEqual(dUri, '/https/synopse.info_123/forum');
+          Check(THttpPeerCrypt.HttpDirectUriReconstruct(pointer(dUri), decoded), 'reconst');
+          CheckEqual(decoded.URI, 'https://synopse.info:123/forum');
+          //write('running'); ConsoleWaitForEnterKey;
         finally
           hpc2.Free;
         end;
@@ -1451,6 +1685,183 @@ begin
     hps.Free;
   end;
 end;
+
+procedure TNetworkProtocols.HTTP;
+var
+  met: TUriMethod;
+  s: RawUtf8;
+  hc: THttpCookies;
+  U: TUri;
+
+  procedure Check4;
+  begin
+    CheckEqual(hc.Cookies[0].Name, 'name');
+    CheckEqual(hc.Cookies[0].Value, 'value');
+    CheckEqual(hc.Cookies[1].Name, 'name 1');
+    CheckEqual(hc.Cookies[1].Value, 'value1');
+    CheckEqual(hc.Cookies[2].Name, 'name 2');
+    CheckEqual(hc.Cookies[2].Value, 'value 2');
+    CheckEqual(hc.Cookies[3].Name, 'name3');
+    CheckEqual(hc.Cookies[3].Value, 'value3');
+  end;
+
+begin
+  // validate method names and HTTP status codes or schemes
+  Check(ToMethod('') = mNone);
+  Check(ToMethod('toto') = mNone);
+  Check(ToMethod('get') = mGET);
+  Check(ToMethod('Patch') = mPATCH);
+  Check(ToMethod('OPTIONS') = mOPTIONS);
+  Check(not IsGet('get'));
+  Check(IsGet('GET'));
+  Check(not IsPost('Post'));
+  Check(IsPost('POST'));
+  for met := low(met) to high(met) do
+  begin
+    s := RawUtf8(ToText(met));
+    Check(ToMethod(s) = met);
+    LowerCaseSelf(s);
+    Check(ToMethod(s) = met);
+  end;
+  Check(IsOptions('OPTIONS'));
+  Check(not IsOptions('opTIONS'));
+  Check(IsUrlFavIcon('/favicon.ico'));
+  Check(not IsUrlFavIcon('/favicon.ice'));
+  Check(not IsHttp('http:'));
+  Check(IsHttp('https:'));
+  Check(IsHttp('http://toto'));
+  Check(IsHttp('https://titi'));
+  Check(not IsHttp('c:\'));
+  Check(not IsHttp('c:\toto'));
+  Check(not IsHttp('file://toto'));
+  CheckEqual(StatusCodeToText(100)^, 'Continue');
+  CheckEqual(StatusCodeToText(200)^, 'OK');
+  CheckEqual(StatusCodeToText(206)^, 'Partial Content');
+  CheckEqual(StatusCodeToText(300)^, 'Multiple Choices');
+  CheckEqual(StatusCodeToText(503)^, 'Service Unavailable');
+  CheckEqual(StatusCodeToText(513)^, 'Invalid Request');
+  CheckEqual(StatusCodeToText(514)^, 'Invalid Request');
+  CheckEqual(StatusCodeToText(499)^, 'Invalid Request');
+  CheckEqual(StatusCodeToText(666)^, 'Client Side Connection Error');
+  // validate TUri data structure
+  Check(U.From('toto.com'));
+  CheckEqual(U.Uri, 'http://toto.com/');
+  Check(not U.Https);
+  Check(U.From('toto.com:123'));
+  CheckEqual(U.Uri, 'http://toto.com:123/');
+  Check(not U.Https);
+  Check(U.From('https://toto.com:123/tata/titi'));
+  CheckEqual(U.Uri, 'https://toto.com:123/tata/titi');
+  Check(U.Https);
+  CheckEqual(U.Address, 'tata/titi');
+  Check(U.From('https://toto.com:123/tata/tutu:tete'));
+  CheckEqual(U.Address, 'tata/tutu:tete');
+  CheckEqual(U.Uri, 'https://toto.com:123/tata/tutu:tete');
+  Check(U.From('http://user:password@server:port/address'));
+  Check(not U.Https);
+  CheckEqual(U.Uri, 'http://server:port/address');
+  CheckEqual(U.User, 'user');
+  CheckEqual(U.Password, 'password');
+  CheckEqual(U.Address, 'address');
+  Check(U.From('https://user@server:port/address'));
+  Check(U.Https);
+  CheckEqual(U.Uri, 'https://server:port/address');
+  CheckEqual(U.User, 'user');
+  CheckEqual(U.Password, '');
+  Check(U.From('toto.com/tata/tutu:tete'));
+  CheckEqual(U.Uri, 'http://toto.com/tata/tutu:tete');
+  CheckEqual(U.User, '');
+  CheckEqual(U.Password, '');
+  Check(U.From('file://server/path/to%20image.jpg'));
+  CheckEqual(U.Scheme, 'file');
+  CheckEqual(U.Server, 'server');
+  CheckEqual(U.Address, 'path/to%20image.jpg');
+  Check(not U.From('file:///path/to%20image.jpg'), 'false if valid');
+  CheckEqual(U.Scheme, 'file');
+  CheckEqual(U.Server, '');
+  CheckEqual(U.Address, 'path/to%20image.jpg');
+  // validate THttpCookies
+  hc.ParseServer('');
+  CheckEqual(length(hc.Cookies), 0);
+  hc.ParseServer('one: value'#13#10'cookie: name=value');
+  CheckEqual(length(hc.Cookies), 1);
+  CheckEqual(hc.Cookies[0].Name, 'name');
+  CheckEqual(hc.Cookies[0].Value, 'value');
+  hc.Clear;
+  CheckEqual(length(hc.Cookies), 0);
+  hc.ParseServer('one: value'#13#10'cookie: name = value ');
+  CheckEqual(length(hc.Cookies), 1);
+  CheckEqual(hc.Cookies[0].Name, 'name');
+  CheckEqual(hc.Cookies[0].Value, 'value');
+  hc.ParseServer('cookie: name=value'#13#10 +
+    'Cookie: name 1=value1; name 2 = value 2; name3=value3'#13#10 +
+    'cookone: value'#13#10);
+  CheckEqual(length(hc.Cookies), 4);
+  Check4;
+  hc.ParseServer('cookie: name=value'#10'toto: titi'#10#10 +
+    'Cookie: name 1=value1; name 2 = value 2; name3=value3'#13#10 +
+    'cookone: value'#13#10#13#10);
+  CheckEqual(length(hc.Cookies), 4, 'malformatted CRLF');
+  Check4;
+end;
+
+procedure TNetworkProtocols._THttpProxyCache;
+
+  procedure TryOne(const force, ignore: RawUtf8;
+    const v: array of RawUtf8; const k: array of THttpProxyCacheKind);
+  var
+    m: THttpProxyMem;
+    n: TUriMatchName;
+    i: PtrInt;
+    r: THttpProxyCacheKind;
+  begin
+    m := THttpProxyMem.Create;
+    try
+      m.ForceCsv := force;
+      m.IgnoreCsv := ignore;
+      for i := 0 to high(v) do
+      begin
+        n.Path.Text := pointer(v[i]);
+        n.Path.Len := length(v[i]);
+        n.ParsePath;
+        r := [];
+        if i <= high(k) then
+          r := k[i];
+        Check(m.FromUri(n) = r);
+      end;
+    finally
+      m.Free;
+    end;
+  end;
+
+begin
+  TryOne('', '', ['', 'p', 'p/2', '/2'], []);
+  TryOne('*', '', ['', 'p', 'p/2', '/2'], [[], [pckForce], [pckForce], [pckForce]]);
+  TryOne('*2', '', ['', 'p', 'p/2', '/2'], [[], [], [pckForce], [pckForce]]);
+  TryOne('p*', '', ['', 'p', 'p/2', '/2'], [[], [pckForce]]);
+  TryOne('*', '', ['', 'pas', 'pas/12', '/12'], [[], [pckForce], [pckForce], [pckForce]]);
+  TryOne('*2', '', ['', 'pas', 'pas/12', '/12'], [[], [], [pckForce], [pckForce]]);
+  TryOne('p*', '', ['', 'pas', 'pas/12', '/12'], [[], [pckForce]]);
+  TryOne('', '*', ['', 'p', 'p/2', '/2'], [[], [pckIgnore], [pckIgnore], [pckIgnore]]);
+  TryOne('', '*2', ['', 'p', 'p/2', '/2'], [[], [], [pckIgnore], [pckIgnore]]);
+  TryOne('', 'p*', ['', 'p', 'p/2', '/2'], [[], [pckIgnore]]);
+  TryOne('', '*', ['', 'pas', 'pas/12', '/12'], [[], [pckIgnore], [pckIgnore], [pckIgnore]]);
+  TryOne('', '*2', ['', 'pas', 'pas/12', '/12'], [[], [], [pckIgnore], [pckIgnore]]);
+  TryOne('', 'p*', ['', 'pas', 'pas/12', '/12'], [[], [pckIgnore]]);
+  TryOne('*', '*', ['', 'p', 'p/2', '/2'], [[],
+    [pckForce, pckIgnore], [pckForce, pckIgnore], [pckForce, pckIgnore]]);
+  TryOne('*2', '*2', ['', 'p', 'p/2', '/2'],
+    [[], [], [pckForce, pckIgnore], [pckForce, pckIgnore]]);
+  TryOne('p*', 'p*', ['', 'p', 'p/2', '/2'],
+    [[], [pckForce, pckIgnore]]);
+  TryOne('*', '*', ['', 'pas', 'pas/12', '/12'],
+    [[], [pckForce, pckIgnore], [pckForce, pckIgnore], [pckForce, pckIgnore]]);
+  TryOne('*2', '*2', ['', 'pas', 'pas/12', '/12'],
+    [[], [], [pckForce, pckIgnore], [pckForce, pckIgnore]]);
+  TryOne('p*', 'p*', ['', 'pas', 'pas/12', '/12'],
+    [[], [pckForce, pckIgnore]]);
+end;
+
 
 end.
 

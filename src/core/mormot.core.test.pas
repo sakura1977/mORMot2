@@ -19,6 +19,7 @@ interface
 
 uses
   sysutils,
+  classes,
   mormot.core.base,
   mormot.core.data,
   mormot.core.os,
@@ -28,7 +29,8 @@ uses
   mormot.core.datetime,
   mormot.core.rtti,
   mormot.core.perf,
-  mormot.core.log;
+  mormot.core.log,
+  mormot.core.threads;
 
 
 { ************ Unit-Testing classes and functions }
@@ -152,6 +154,7 @@ type
     fAssertionsFailed: integer;
     fAssertionsBeforeRun: integer;
     fAssertionsFailedBeforeRun: integer;
+    fBackgroundRun: TLoggedWorker;
     /// any number not null assigned to this field will display a "../s" stat
     fRunConsoleOccurrenceNumber: cardinal;
     /// any number not null assigned to this field will display a "using .. MB" stat
@@ -191,7 +194,7 @@ type
     // - condition must equals TRUE to pass the test
     // - function return TRUE if the condition failed, in order to allow the
     // caller to stop testing with such code:
-    // ! if CheckFailed(A=10) then exit;
+    // ! if CheckFailed(A = 10) then exit;
     function CheckFailed(condition: boolean; const msg: string = ''): boolean;
       {$ifdef HASSAFEINLINE}inline;{$endif}
     /// used by the published methods to run a test assertion
@@ -205,12 +208,13 @@ type
     // - if a<>b, will fail and include '#<>#' text before the supplied msg
     function CheckEqual(a, b: Int64; const msg: RawUtf8 = ''): boolean; overload;
       {$ifdef HASSAFEINLINE}inline;{$endif}
-    /// used by the published methods to run test assertion against UTF-8 strings
+    /// used by the published methods to run test assertion against UTF-8/Ansi strings
+    // - will ignore the a+b string codepages, and call SortDynArrayRawByteString()
     // - if a<>b, will fail and include '#<>#' text before the supplied msg
-    function CheckEqual(const a, b: RawUtf8; const msg: RawUtf8 = ''): boolean; overload;
-    /// used by the published methods to run test assertion against UTF-8 strings
+    function CheckEqual(const a, b: RawByteString; const msg: RawUtf8 = ''): boolean; overload;
+    /// used by the published methods to run test assertion against UTF-8/Ansi strings
     // - if Trim(a)<>Trim(b), will fail and include '#<>#' text before the supplied msg
-    function CheckEqualTrim(const a, b: RawUtf8; const msg: RawUtf8 = ''): boolean;
+    function CheckEqualTrim(const a, b: RawByteString; const msg: RawUtf8 = ''): boolean;
     /// used by the published methods to run test assertion against pointers/classes
     // - if a<>b, will fail and include '#<>#' text before the supplied msg
     function CheckEqual(a, b: pointer; const msg: RawUtf8 = ''): boolean; overload;
@@ -268,7 +272,11 @@ type
     procedure CheckHash(const data: RawByteString; expectedhash32: cardinal;
       const msg: RawUtf8 = '');
     /// create a temporary string random content, WinAnsi (code page 1252) content
+    class function RandomWinAnsi(CharCount: integer): WinAnsiString;
+    {$ifndef PUREMORMOT2}
     class function RandomString(CharCount: integer): WinAnsiString;
+      {$ifdef HASINLINE}inline;{$endif}
+    {$endif PUREMORMOT2}
     /// create a temporary UTF-8 string random content, using WinAnsi
     // (code page 1252) content
     class function RandomUtf8(CharCount: integer): RawUtf8;
@@ -288,8 +296,22 @@ type
     class procedure AddRandomTextParagraph(WR: TTextWriter; WordCount: integer;
       LastPunctuation: AnsiChar = '.'; const RandomInclude: RawUtf8 = '';
       NoLineFeed: boolean = false);
+    /// execute a method possibly in a dedicated TLoggedWorkThread
+    // - OnTask() should take some time running, to be worth a thread execution
+    // - won't create more background threads than currently available CPU cores,
+    // to avoid resource exhaustion and unexpected timeouts on smaller computers,
+    // unless ForcedThreaded is used and then an internal queue is used to
+    // force all taks to be executed in their own thread
+    procedure Run(const OnTask: TNotifyEvent; Sender: TObject;
+      const TaskName: RawUtf8; Threaded: boolean = true; NotifyTask: boolean = true;
+      ForcedThreaded: boolean = false);
+    /// wait for background thread started by Run() to finish
+    procedure RunWait(NotifyThreadCount: boolean = true; TimeoutSec: integer = 60;
+      CallSynchronize: boolean = false);
     /// this method is triggered internally - e.g. by Check() - when a test failed
-    procedure TestFailed(const msg: string);
+    procedure TestFailed(const msg: string); overload;
+    /// this method can be triggered directly - e.g. after CheckFailed() = true
+    procedure TestFailed(const msg: RawUtf8; const args: array of const); overload;
     /// will add to the console a message with a speed estimation
     // - speed is computed from the method start or supplied local Timer
     // - returns the number of microsec of the (may be specified) timer
@@ -356,13 +378,13 @@ type
   /// a class used to run a suit of test cases
   TSynTests = class(TSynTest)
   protected
-    /// any number not null assigned to this field will display a "../sec" stat
     fTestCaseClass: array of TSynTestCaseClass;
     fAssertions: integer;
     fAssertionsFailed: integer;
+    fSafe: TSynLocker;
+    /// any number not null assigned to this field will display a "../sec" stat
     fRunConsoleOccurrenceNumber: cardinal;
     fCurrentMethodInfo: PSynTestMethodInfo;
-    fSafe: TSynLocker;
     fFailed: TSynTestFaileds;
     fFailedCount: integer;
     fNotifyProgressLineLen: integer;
@@ -651,6 +673,7 @@ end;
 destructor TSynTestCase.Destroy;
 begin
   CleanUp;
+  fBackgroundRun.Free;
   inherited;
 end;
 
@@ -760,7 +783,7 @@ begin
     DoCheckUtf8(result, EQUAL_MSG, [a, b, msg]);
 end;
 
-function TSynTestCase.CheckEqual(const a, b, msg: RawUtf8): boolean;
+function TSynTestCase.CheckEqual(const a, b: RawByteString; const msg: RawUtf8): boolean;
 begin
   inc(fAssertions);
   result := SortDynArrayRawByteString(a, b) = 0;
@@ -769,7 +792,7 @@ begin
     DoCheckUtf8(result, EQUAL_MSG, [a, b, msg]);
 end;
 
-function TSynTestCase.CheckEqualTrim(const a, b, msg: RawUtf8): boolean;
+function TSynTestCase.CheckEqualTrim(const a, b: RawByteString; const msg: RawUtf8): boolean;
 begin
   result := CheckEqual(TrimU(a), TrimU(b), msg);
 end;
@@ -885,7 +908,7 @@ begin
     [CardinalToHexShort(crc), CardinalToHexShort(expectedhash32), msg]);
 end;
 
-class function TSynTestCase.RandomString(CharCount: integer): WinAnsiString;
+class function TSynTestCase.RandomWinAnsi(CharCount: integer): WinAnsiString;
 var
   i: PtrInt;
   R: PByteArray;
@@ -898,6 +921,13 @@ begin
   tmp.Done;
 end;
 
+{$ifndef PUREMORMOT2}
+class function TSynTestCase.RandomString(CharCount: integer): WinAnsiString;
+begin
+  result := RandomWinAnsi(CharCount);
+end;
+{$endif PUREMORMOT2}
+
 class function TSynTestCase.RandomAnsi7(CharCount: integer): RawByteString;
 var
   i: PtrInt;
@@ -907,7 +937,7 @@ begin
   R := tmp.InitRandom(CharCount);
   FastSetString(RawUtf8(result), CharCount);
   for i := 0 to CharCount - 1 do
-    PByteArray(result)[i] := 32 + R[i] mod 94;
+    PByteArray(result)[i] := 32 + R[i] mod 95; // may include tilde #$7e char
   tmp.Done;
 end;
 
@@ -942,12 +972,12 @@ end;
 
 class function TSynTestCase.RandomUtf8(CharCount: integer): RawUtf8;
 begin
-  result := WinAnsiToUtf8(RandomString(CharCount));
+  result := WinAnsiToUtf8(RandomWinAnsi(CharCount));
 end;
 
 class function TSynTestCase.RandomUnicode(CharCount: integer): SynUnicode;
 begin
-  result := WinAnsiConvert.AnsiToUnicodeString(RandomString(CharCount));
+  result := WinAnsiConvert.AnsiToUnicodeString(RandomWinAnsi(CharCount));
 end;
 
 class function TSynTestCase.RandomTextParagraph(WordCount: integer;
@@ -1048,6 +1078,33 @@ begin
   end;
 end;
 
+procedure TSynTestCase.Run(const OnTask: TNotifyEvent; Sender: TObject;
+  const TaskName: RawUtf8; Threaded, NotifyTask, ForcedThreaded: boolean);
+begin
+  if NotifyTask then
+    NotifyProgress([TaskName]);
+  if Assigned(OnTask) then
+    if not Threaded then
+      OnTask(Sender) // run in main thread
+    else
+    begin
+      if fBackgroundRun = nil then
+        fBackgroundRun := TLoggedWorker.Create(TSynLogTestLog);
+      fBackgroundRun.Run(Ontask, Sender, TaskName, ForcedThreaded);
+    end;
+end;
+
+procedure TSynTestCase.RunWait(NotifyThreadCount: boolean; TimeoutSec: integer;
+  CallSynchronize: boolean);
+begin
+  if not fBackgroundRun.Waiting then
+    exit;
+  if NotifyThreadCount then
+    NotifyProgress(['(waiting for ', Plural('thread', fBackgroundRun.Running), ')']);
+  if not fBackgroundRun.RunWait(TimeoutSec, CallSynchronize) then
+    TestFailed('RunWait timeout after % sec', [TimeoutSec]);
+end;
+
 procedure TSynTestCase.TestFailed(const msg: string);
 begin
   fOwner.fSafe.Lock; // protect when Check() is done from multiple threads
@@ -1059,6 +1116,11 @@ begin
   finally
     fOwner.fSafe.UnLock;
   end;
+end;
+
+procedure TSynTestCase.TestFailed(const msg: RawUtf8; const args: array of const);
+begin
+  fOwner.DoLog(sllFail, msg, Args);
 end;
 
 procedure TSynTestCase.AddConsole(const msg: string; OnlyLog: boolean);
@@ -1359,6 +1421,8 @@ begin
           end;
           if not started then
             continue;
+          if C.fBackgroundRun.Waiting then
+            C.fBackgroundRun.Terminate({andwait=}true); // paranoid
           C.CleanUp; // should be done before Destroy call
           if C.AssertionsFailed = 0 then
             DoColor(ccLightGreen)
