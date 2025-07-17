@@ -621,7 +621,7 @@ begin
   sn := fService.Name;
   se := fService.AbortExitCodes;
   notifytix := false;
-  SetCurrentThreadName('run %', [sn]);
+  SetCurrentThreadName('=run %', [sn]);
   try
     lastunstable := 0;
     repeat
@@ -706,7 +706,7 @@ begin
   end;
   if fService <> nil then
     fService.fRunner := nil; // notify ended
-  log.NotifyThreadEnded; // as needed by TSynLog
+  TSynLog.NotifyThreadEnded; // as needed by TSynLog
 end;
 
 procedure TSynAngelizeRunner.PerformRotation;
@@ -785,7 +785,7 @@ begin
         for i := textlen downto 1 do
           if PByteArray(text)[i - 1] in [10, 13] then
           begin
-            fRedirect.Write(pointer(text)^, i); // write up to last LF
+            fRedirect.WriteBuffer(pointer(text)^, i); // write up to last LF
             textstart := i;
             dec(textlen, i);
             break;
@@ -796,7 +796,7 @@ begin
           result := true; // aborted during rotation
       end;
       // text output to log file
-      fRedirect.Write(PByteArray(text)[textstart], textlen);
+      fRedirect.WriteBuffer(PByteArray(text)[textstart], textlen);
       //TODO: optional TSynLog format with timestamps
     except
       on E: Exception do
@@ -957,14 +957,16 @@ begin
     else
     begin
       Utf8ToFileName(ExtractExecutableName(n), fn);
-      if FileIsExecutable(fn) then
+      if fn = '' then
+        res := -1 // this parametr seems invalid
+      else if FileIsExecutable(fn) then
         res := RunCommand(Utf8ToString(n), {waitfor=}true)
       else
-      begin
+      begin // append to text log file
         GetMemoryInfo(mem, false);
-        res := ord(AppendToTextFile(FormatUtf8('% %: % [mem=%/%] %',
+        res := ord(AppendToTextFile(FormatUtf8('% %: % [mem=%/%] [cpu=%]',
           [w, Name, msg, KBNoSpace(mem.memfree), KBNoSpace(mem.memtotal),
-           RetrieveLoadAvg]), fn));
+           RetrieveLoadAvg]), fn)); // POSIX loadavg or Windows 'U:xx K:xx' %
       end;
     end;
     fOwner.fSettings.LogClass.Add.Log(sllTrace,
@@ -1090,7 +1092,7 @@ constructor TSynAngelizeSettings.Create;
 begin
   inherited Create;
   fHttpTimeoutMS := 200;
-  fFolder := IncludeTrailingPathDelimiter(Executable.ProgramFilePath + 'services');
+  fFolder := MakePath([Executable.ProgramFilePath, 'services'], true);
   fExt := '.service';
   fCommandFile := 'cmd';
 end;
@@ -1121,11 +1123,11 @@ begin
   if fSas.StateFile = '' then
     // if no StateFile supplied, set something
     if fsoDisableSaveIfNeeded in fSas.SettingsOptions then
-      // this random file name will be persisted in the settings
-      fSas.StateFile := TemporaryFileName
-    else
       // if no name can be persisted, use something consistent between calls
       fSas.StateFile := FormatString('%%-state', [fWorkFolderName, fSas.ServiceName])
+    else
+      // this random file name will be persisted in the settings
+      fSas.StateFile := TemporaryFileName
   else
     fSas.StateFile := ExpandFileName(FileNameExpand(fSas.StateFile)); // with %agl.xx%
   // validate command file name used e.g. for /reload
@@ -1654,7 +1656,8 @@ function TSynAngelize.DoHttpGet(const aUri: RawUtf8): integer;
 begin
   result := 0;
   try
-    HttpGet(aUri, nil, false, @result, fSas.HttpTimeoutMS, {forcesocket:}true);
+    HttpGet(aUri, nil, false, @result, fSas.HttpTimeoutMS,
+      {forcesocket:}true, {ignoretlserror:}true);
   except
     result := -500; // e.g. on TCP or TLS connection error
   end;
@@ -1737,7 +1740,7 @@ begin
 end;
 
 const
-  ENDI: array[boolean] of string[3] = ('en', 'dis');
+  ENDI: array[boolean] of TShort3 = ('en', 'dis');
 
 procedure TSynAngelize.ServiceChangeState(disable: boolean);
 var
@@ -1747,7 +1750,7 @@ var
   log: ISynLog;
 begin
   // /enable <servicename>   or  /disable <servicename>
-  log := fSettings.LogClass.Enter(self, 'ServiceChangeState');
+  fSettings.LogClass.EnterLocal(log, self, 'ServiceChangeState');
   WriteCopyright;
   if ParamCount < 2 then
     ESynAngelize.RaiseUtf8('Syntax is % /%able "<servicename>"',
@@ -1783,7 +1786,7 @@ var
   log: ISynLog;
 begin
   // mimics nssm install <servicename> <executable> [<params>]
-  log := fSettings.LogClass.Enter(self, 'NewService');
+  fSettings.LogClass.EnterLocal(log, self, 'NewService');
   WriteCopyright;
   if ParamCount < 3 then
     ESynAngelize.RaiseUtf8(
@@ -1848,7 +1851,7 @@ var
   one: TSynLog;
 begin
   one := nil;
-  log := fSettings.LogClass.Enter(self, 'StartServices');
+  fSettings.LogClass.EnterLocal(log, self, 'StartServices');
   if Assigned(log) then // log=nil if LogClass=nil or sllEnter is not enabled
     one := log.Instance;
   {$ifdef OSWINDOWS}
@@ -1922,7 +1925,7 @@ var
   one: TSynLog;
 begin
   one := nil;
-  log := fSas.LogClass.Enter(self, 'StopServices');
+  fSas.LogClass.EnterLocal(log, self, 'StopServices');
   if Assigned(log) then // log=nil if LogClass=nil or sllEnter is not enabled
     one := log.Instance;
   // stop sub-services following their reverse Level order
@@ -1972,11 +1975,11 @@ var
   log: ISynLog;
   one: TSynLog;
 
-  procedure GetLog;
+  procedure EnsureLogExists;
   begin
     if {%H-}log <> nil then
       exit;
-    log := fSettings.LogClass.Enter(self, 'WatchEverySecond');
+    fSettings.LogClass.EnterLocal(log, self, 'WatchEverySecond');
     if Assigned(log) then
       one := log.Instance;
   end;
@@ -1995,7 +1998,7 @@ begin
        (s.fNextWatch = 0) or
        (tix < s.fNextWatch) then
       continue;
-    GetLog;
+    EnsureLogExists;
     // execute all "Watch":[...,...,...] actions
     for a := 0 to high(s.fWatch) do
       try
@@ -2012,7 +2015,7 @@ begin
   if FileExists(fSas.CommandFile) then
   try
     cmd := TrimU(StringFromFile(fSas.CommandFile));
-    GetLog;
+    EnsureLogExists;
     one.Log(sllTrace, 'WatchEverySecond: [%] from %', [cmd, fSas.CommandFile], self);
     case FindPropName(['reload'], cmd) of
       0: // --reload

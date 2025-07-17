@@ -816,7 +816,7 @@ begin
   if (NewType in [ftUnknown, ftNull]) or
      (fConnection.Properties.BatchSendingAbilities *
        [cCreate, cUpdate, cDelete] = []) then
-    ESqlDBException.RaiseUtf8(
+    EOleDBException.RaiseUtf8(
       'Invalid call to %s.BindArray(Param=%d,Type=%s)',
       [self, Param, TSqlDBFieldTypeToString(NewType)]);
   SetLength(result^.VArray, ArrayCount);
@@ -842,14 +842,10 @@ type
     Status: PtrInt;
     Length: PtrUInt; // ignored for alignment
     case integer of
-      0:
-        (Int64: Int64);
-      1:
-        (Double: double);
-      2:
-        (ValueInlined: byte); // for TSqlDBColumnProperty.ColumnValueInlined
-      3:
-        (ByRef: pointer); // DBTYPE_BYREF PWideChar/PAnsiChar
+      0: (Int64: Int64);
+      1: (Double: double);
+      2: (ValueInlined: byte); // for TSqlDBColumnProperty.ColumnValueInlined
+      3: (ByRef: pointer); // DBTYPE_BYREF PWideChar/PAnsiChar
   end;
 
   PColumnValue = ^TColumnValue;
@@ -1731,7 +1727,7 @@ var
   unknown: IUnknown;
   {%H-}log: ISynLog;
 begin
-  Log := SynDBLog.Enter(self, 'Connect');
+  SynDBLog.EnterLocal(log, self, 'Connect');
   // check context
   if Connected then
     Disconnect;
@@ -1771,7 +1767,7 @@ constructor TSqlDBOleDBConnection.Create(aProperties: TSqlDBConnectionProperties
 var
   {%H-}log: ISynLog;
 begin
-  log := SynDBLog.Enter(self, 'Create');
+  SynDBLog.EnterLocal(log, self, 'Create');
   if not aProperties.InheritsFrom(TSqlDBOleDBConnectionProperties) then
     EOleDBException.RaiseUtf8('Invalid %.Create(%)', [self, aProperties]);
   fOleDBProperties := TSqlDBOleDBConnectionProperties(aProperties);
@@ -1784,7 +1780,7 @@ destructor TSqlDBOleDBConnection.Destroy;
 var
   log: ISynLog;
 begin
-  log := SynDBLog.Enter(self, 'Destroy');
+  SynDBLog.EnterLocal(log, self, 'Destroy');
   try
     inherited Destroy; // call Disconnect;
     fMalloc := nil;
@@ -1800,7 +1796,7 @@ procedure TSqlDBOleDBConnection.Disconnect;
 var
   {%H-}log: ISynLog;
 begin
-  log := SynDBLog.Enter(self, 'Disconnect');
+  SynDBLog.EnterLocal(log, self, 'Disconnect');
   try
     inherited Disconnect; // flush any cached statement
   finally
@@ -1909,8 +1905,8 @@ procedure TSqlDBOleDBConnection.Commit;
 var
   {%H-}log: ISynLog;
 begin
-  Log := SynDBLog.Enter(self, 'Commit');
-  if assigned(fTransaction) then
+  SynDBLog.EnterLocal(log, self, 'Commit');
+  if Assigned(fTransaction) then
   begin
     inherited Commit;
     try
@@ -1926,8 +1922,8 @@ procedure TSqlDBOleDBConnection.Rollback;
 var
   {%H-}log: ISynLog;
 begin
-  log := SynDBLog.Enter(self, 'Rollback');
-  if assigned(fTransaction) then
+  SynDBLog.EnterLocal(log, self, 'Rollback');
+  if Assigned(fTransaction) then
   begin
     inherited Rollback;
     OleDbCheck(nil, fTransaction.Abort(nil, false, false));
@@ -1938,8 +1934,8 @@ procedure TSqlDBOleDBConnection.StartTransaction;
 var
   {%H-}log: ISynLog;
 begin
-  log := SynDBLog.Enter(self, 'StartTransaction');
-  if assigned(fTransaction) then
+  SynDBLog.EnterLocal(log, self, 'StartTransaction');
+  if Assigned(fTransaction) then
   begin
     inherited StartTransaction;
     OleDbCheck(nil,
@@ -1960,7 +1956,7 @@ var
   tmp: PWideChar;
   log: ISynLog;
 begin
-  log := SynDBLog.Enter(self, 'ConnectionStringDialog');
+  SynDBLog.EnterLocal(log, self, 'ConnectionStringDialog');
   result := false;
   if self <> nil then
   try

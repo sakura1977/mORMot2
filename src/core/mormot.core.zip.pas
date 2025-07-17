@@ -199,7 +199,7 @@ function GZFile(buf: pointer; len: PtrInt; const destgz: TFileName;
 
 { ************  .ZIP Archive File Support }
 
-{$A-}
+{$A-} // all internal record/object data structures are packed from now on
 
 type
   PFileInfo = ^TFileInfo;
@@ -212,7 +212,7 @@ type
   TFileInfo = object
   {$endif USERECORDWITHMETHODS}
   public
-    /// ZIP_VERSION[] is either 20 for regular .zip or 45 for Zip64/4.5
+    /// ZIP_VERSION[] is either 20 for regular .zip or 45 for zip64/4.5
     // - use ToByte() for the format version - high 8-bit may identify the OS
     neededVersion: word;
     /// 0
@@ -223,9 +223,9 @@ type
     zlastMod: integer;
     /// crc32 checksum of uncompressed data
     zcrc32: cardinal;
-    /// 32-bit size of compressed data - may equal ZIP32_MAXSIZE on Zip64
+    /// 32-bit size of compressed data - may equal ZIP32_MAXSIZE on zip64
     zzipSize: cardinal;
-    /// 32-bit size of uncompressed data - may equal ZIP32_MAXSIZE on Zip64
+    /// 32-bit size of uncompressed data - may equal ZIP32_MAXSIZE on zip64
     zfullSize: cardinal;
     /// length(name) as appended just after this block
     nameLen: word;
@@ -235,17 +235,18 @@ type
     function SameAs(aInfo: PFileInfo): boolean;
     /// set the the UTF-Language encoding flag (EFS)
     procedure SetUtf8FileNameFlag;
-      {$ifdef HASINLINE}inline;{$endif}
+      {$ifdef HASINLINEFPC}inline;{$endif}
     /// remove the the UTF-Language encoding flag (EFS)
     procedure UnSetUtf8FileNameFlag;
-      {$ifdef HASINLINE}inline;{$endif}
+      {$ifdef HASINLINEFPC}inline;{$endif}
     /// check if flags contains the UTF-Language encoding flag (EFS)
     function GetUtf8FileNameFlag: boolean;
-      {$ifdef HASINLINE}inline;{$endif}
-    /// set our custom proprietary algorithm used
-    // - 1..15  (1=SynLZ e.g.) from flags bits 7..10 and method=Z_STORED
+      {$ifdef HASINLINEFPC}inline;{$endif}
+    /// used by mORMot 1 with method=Z_STORED, to store our TAlgoCompress.AlgoID
+    // - set 0..15 from flags bits 7..10 (marked as unused in PKware appnote)
     procedure SetAlgoID(Algorithm: integer);
-    /// retrieve our custom proprietary algorithm used
+    /// used by mORMot 1 with method=Z_STORED, to store our TAlgoCompress.AlgoID
+    // - return 0..15 from flags bits 7..10 (marked as unused in PKware appnote)
     function GetAlgoID: integer;
       {$ifdef HASINLINE}inline;{$endif}
     /// check if neededVersion was created from ZIP_VERSION[{zip64=}true]
@@ -281,7 +282,7 @@ type
 
   //// extra file information structure, storing UTF-8 path name
   // - as generated e.g. by the build-in zip on latest Windows 10 Home
-  // - see 'Unicode Path Extra Field' in Info-ZIP APPNOTE.TXT
+  // - see 'Unicode Path Extra Field' in PKware appnote
   TFileInfoExtraName = record
     /// contains UNICODEPATH_EXTRA_ID = $7075
     id: word;
@@ -318,7 +319,7 @@ type
   public
     /// $02014b50 PK#1#2 = ENTRY_SIGNATURE_INC - 1
     signature: cardinal;
-    /// ZIP_VERSION[] is either 20 for regular .zip or 45 for Zip64/4.5
+    /// ZIP_VERSION[] is either 20 for regular .zip or 45 for zip64/4.5
     madeBy: word;
     /// file information - copied from the TLocalFileHeader before each data
     fileInfo: TFileInfo;
@@ -381,9 +382,9 @@ type
     thisDisk: word;
     /// 0
     headerDisk: word;
-    /// 1
+    /// 1 - may equal ZIP32_MAXFILE on zip64
     thisFiles: word;
-    /// 1
+    /// 1 - may equal ZIP32_MAXFILE on zip64
     totalFiles: word;
     /// SizeOf(TFileHeaders + names)
     headerSize: cardinal;
@@ -401,9 +402,9 @@ type
     signature: cardinal;
     /// length in bytes of this header
     recordsize: QWord;
-    /// ZIP_VERSION[true] i.e. 45 for Zip64/4.5
+    /// ZIP_VERSION[true] i.e. 45 for zip64/4.5
     madeBy: word;
-    /// ZIP_VERSION[true] i.e. 45 for Zip64/4.5
+    /// ZIP_VERSION[true] i.e. 45 for zip64/4.5
     neededVersion: word;
     /// 0
     thisDisk: cardinal;
@@ -421,7 +422,7 @@ type
   PLastHeader64 = ^TLastHeader64;
 
   /// locator structure, as used in zip64 file format
-  // - this header ends the file and is used to find the TFileHeader entries
+  // - this header ends the file and is used to find the TLastHeader64 position
   TLocator64 = record
     /// $07064b50 PK#6#7 = LASTHEADERLOCATOR64_SIGNATURE_INC - 1
     signature: cardinal;
@@ -448,23 +449,23 @@ type
     dir64: PFileInfoExtra64;
     /// points to the local file header in the .zip archive, stored in memory
     // - local^.data points to the stored/deflated data
-    // - may be nil if the file size is bigger than WorkingMem
+    // - may be nil if the file size is bigger than TZipRead.Create WorkingMem
     local: PLocalFileHeader;
-    /// parsed file information, zip64-ready
+    /// name of the file inside the .zip archive
+    // - converted from DOS/OEM or UTF-8 into generic (Unicode) string
+    zipName: TFileName;
+    /// decoded file information, zip64-ready
     fileinfo: TFileInfoExtra64;
     /// name of the file inside the .zip archive
     // - not ASCIIZ: length = dir^.fileInfo.nameLen
     storedName: PAnsiChar;
     /// points to the next local file header in the archive, stored in memory
     // - may be a folder, which do not appear with regular Entry[]
-    // - only used for "data descriptor" files (MacOS)
+    // - only used for FLAG_DATADESCRIPTOR files (MacOS)
     nextlocal: PLocalFileHeader;
     /// offset to the next local file header in the .zip archive
-    // - only used for "data descriptor" files (MacOS)
+    // - only used for FLAG_DATADESCRIPTOR files (MacOS)
     nextlocaloffs: QWord;
-    /// name of the file inside the .zip archive
-    // - converted from DOS/OEM or UTF-8 into generic (Unicode) string
-    zipName: TFileName;
   end;
   PZipReadEntry = ^TZipReadEntry;
   TZipReadEntryDynArray = array of TZipReadEntry;
@@ -518,9 +519,11 @@ type
     fSource: TStream; // if .zip is a file bigger than 1MB
     fSourceOffset: QWord; // where the .zip start in fSource (if appended)
     fSourceBuffer: RawByteString; // last 1MB of fSource (central dir)
-    fCentralDirectoryOffset: Int64;
+    fCentralDirectoryOffset, fCentralDirectoryTotalFiles: Int64;
     fCentralDirectory: PFileHeader;
     fResource: TExecutableResource;
+    procedure LocateCentralDirectory(BufZip: PByteArray;
+      var Size: PtrInt; Offset: Int64);
     function UnZipStream(aIndex: integer; const aInfo: TFileInfoFull;
       aDest: TStream): boolean;
   public
@@ -548,8 +551,8 @@ type
     /// get the index of a file inside the .zip archive
     function NameToIndex(const aName: TFileName): integer;
     /// uncompress a file stored inside the .zip archive into memory
-    // - will refuse to uncompress more than aMaxSize - i.e. 128 MB of content
-    function UnZip(aIndex: integer; aMaxSize: Int64 = 128 shl 20): RawByteString; overload;
+    // - will refuse to uncompress more than aMaxSize - i.e. 256 MB of content
+    function UnZip(aIndex: integer; aMaxSize: Int64 = 256 shl 20): RawByteString; overload;
     /// uncompress a file stored inside the .zip archive into a stream
     function UnZip(aIndex: integer; aDest: TStream): boolean; overload;
     /// uncompress a file stored inside the .zip archive into a destination directory
@@ -766,6 +769,12 @@ type
   TZipWriteToStream = TZipWrite;
 {$endif PUREMORMOT2}
 
+/// wrap TZipRead.Create + UnZipAll + Free over a memory buffer containing a .zip
+function UnZipMemAll(const ZipMem: RawByteString; const DestFolder: TFileName): boolean;
+
+/// wrap TZipRead.Create + UnZipAll + Free over a .zip file
+function UnZipAll(const ZipFile: TFileName; const DestFolder: TFileName): boolean;
+
 var
   /// the default compression level to be applied to EventArchiveZip()
   // - you may set Z_BEST_SPEED (1) for faster process (and lower compression)
@@ -814,14 +823,14 @@ procedure ZipAppendFiles(const MainFile, NewFile: TFileName;
 
 
 /// (un)compress a data content using the gzip algorithm
-// - as expected by THttpSocket.RegisterCompress for 'Content-Encoding: gzip'
+// - as expected by THttpClientSocket/THttpServerGeneric.RegisterCompress
 // - use internally a level compression of 1, i.e. fastest available (content of
 // 4803 bytes is compressed into 700, and request is 440 us instead of 220 us)
 // - can use faster libdeflate instead of plain zlib if available
 function CompressGZip(var Data: RawByteString; Compress: boolean): RawUtf8;
 
 /// (un)compress a data content using the Deflate algorithm (i.e. "raw deflate")
-// - as expected by THttpSocket.RegisterCompress
+// - as expected by THttpClientSocket/THttpServerGeneric.RegisterCompress
 // - use internally a level compression of 1, i.e. fastest available
 // - HTTP 'Content-Encoding: deflate' is pretty inconsistent in practice on client
 // side, so use CompressGZip() instead - https://stackoverflow.com/a/5186177
@@ -829,7 +838,7 @@ function CompressGZip(var Data: RawByteString; Compress: boolean): RawUtf8;
 function CompressDeflate(var Data: RawByteString; Compress: boolean): RawUtf8;
 
 /// (un)compress a data content using the zlib algorithm
-// - as expected by THttpSocket.RegisterCompress
+// - as expected by THttpClientSocket/THttpServerGeneric.RegisterCompress
 // - use internally a level compression of 1, i.e. fastest available
 // - HTTP 'Content-Encoding: zlib' is pretty inconsistent in practice on client
 // side, so use CompressGZip() instead - https://stackoverflow.com/a/5186177
@@ -1193,14 +1202,10 @@ end;
 
 function TGZRead.ToMem: RawByteString;
 begin
-  result := '';
   if (comp = nil) or
      ((uncomplen32 = 0) and
-      (crc32 = 0)) then
-    // 0 length stream
-    exit;
-  FastSetString(RawUtf8(result), uncomplen32); // use CP_UTF8 for FPC
-  if not ToBuffer(pointer(result)) then
+      (crc32 = 0)) or
+     not ToBuffer(FastSetString(RawUtf8(result), uncomplen32)) then
     result := ''; // invalid CRC or truncated uncomplen32
 end;
 
@@ -1344,10 +1349,7 @@ end;
 function GZWrite(buf: pointer; len, level: PtrInt): RawByteString;
 begin
   if len > 0 then
-  begin
-    FastNewRawByteString(result, GZWriteLen(len));
-    len := GZWrite(buf, pointer(result), len, level);
-  end;
+    len := GZWrite(buf, FastNewRawByteString(result, GZWriteLen(len)), len, level);
   if len <= 0 then
     result := '' // error
   else
@@ -1462,13 +1464,17 @@ end;
 { ************  .ZIP Archive File Support }
 
 const
-  // those constants have +1 to avoid finding it in the exe
-  ENTRY_SIGNATURE_INC = $02014b50 + 1;                 // PK#1#2
-  FIRSTHEADER_SIGNATURE_INC = $04034b50 + 1;           // PK#3#4
-  LASTHEADER_SIGNATURE_INC = $06054b50 + 1;            // PK#5#6
-  LASTHEADER64_SIGNATURE_INC = $06064b50 + 1;          // PK#6#6
-  LASTHEADERLOCATOR64_SIGNATURE_INC = $07064b50 + 1;   // PK#6#7
-  FILEAPPEND_SIGNATURE_INC = $a5ababa5 + 1; // as marked by FileAppendSignature
+  // those PK## constants have +1 to avoid finding it in the exe
+  ENTRY_SIGNATURE_INC               = $02014b50 + 1; // PK#1#2
+  FIRSTHEADER_SIGNATURE_INC         = $04034b50 + 1; // PK#3#4
+  LASTHEADER_SIGNATURE_INC          = $06054b50 + 1; // PK#5#6
+  LASTHEADER64_SIGNATURE_INC        = $06064b50 + 1; // PK#6#6
+  LASTHEADERLOCATOR64_SIGNATURE_INC = $07064b50 + 1; // PK#6#7
+  DATADESCRIPTOR_SIGNATURE_INC      = $08074b50 + 1; // PK#7#8
+  SPANHEADER_SIGNATURE_INC          = $30304b50 + 1; // PK00
+
+  // custom marker (+1) as written by FileAppend/FileAppendSignature()
+  FILEAPPEND_SIGNATURE_INC = $a5ababa5 + 1;
 
   // identify the OS used to forge the .zip - see PKware appnote 4.4.2
   ZIP_OS = (
@@ -1483,26 +1489,30 @@ const
       {$endif OSWINDOWS}
       {$endif OSDARWIN}) shl 8;
 
-  // regular .zip format is version 2.0, Zip64 format has version 4.5
+  // regular .zip format is version 2.0, zip64 format has version 4.5
   ZIP_VERSION: array[{zip64:}boolean] of cardinal = (
     20 + ZIP_OS,
     45 + ZIP_OS);
 
-  // some tools (e.g. MacOS) have local size+crc=0 and append a descriptor
-  FLAG_DATADESCRIPTOR = 8;
-  SIGNATURE_DATADESCRIPTOR = $08074b50;
+  // from PKware appnote, Bit 3: sizes and crc are 0 and a data descriptor
+  // follows the compressed data - generated by some tools, mainly MacOS itself
+  FLAG_DATADESCRIPTOR = 1 shl 3;
+  // from PKware appnote, Bit 11: Language encoding flag (EFS)
+  FLAG_UTF8ENCODING   = 1 shl 11;
 
-  ZIP64_EXTRA_ID       = $0001; // Zip64 extended information
+  ZIP64_EXTRA_ID       = $0001; // zip64 extended information
   NTFS_EXTRA_ID        = $000a; // NTFS
   UNIX_EXTRA_ID        = $000d; // UNIX
   EXT_TIME_EXTRA_ID    = $5455; // Extended timestamp
   INFOZIP_UNIX_EXTRAID = $5855; // Info-ZIP Unix extension
   UNICODEPATH_EXTRA_ID = $7075; // Unicode Path extended information
 
-  ZIP_MINSIZE_DEFLATE = 256; // size < 256 bytes -> Z_STORED
+  ZIP_MAXNAMELEN = 2048; // support file names up to 2048 bytes long (with path)
 
-  ZIP32_MAXSIZE = cardinal(-1);   // > trigger size for ZIP64 format
-  ZIP32_MAXFILE = (1 shl 16) - 1; // > trigger file count for ZIP64 format
+  ZIP_MINSIZE_DEFLATE = 256; // size < 256 bytes -> always Z_STORED
+
+  ZIP32_MAXSIZE = cardinal(-1);   // > 4GB trigger size for ZIP64 format
+  ZIP32_MAXFILE = (1 shl 16) - 1; // > 64K trigger file count for ZIP64 format
 
 
 { TLocalFileHeader }
@@ -1521,11 +1531,11 @@ end;
 procedure TLocalFileHeader.Load(Source: TStream; LocalOffset: Int64);
 begin
   if Source = nil then
-    raise ESynZip.Create('Zip: LoadAndDataSeek with Source=nil');
+    ESynZip.RaiseU('Zip: LoadAndDataSeek with Source=nil');
   // we read the real local header content before calling Size for its offset
   Source.Seek(LocalOffset, soBeginning);
   if Source.Read(self, SizeOf(self)) <> SizeOf(self) then
-    raise ESynZip.Create('Zip: LoadAndDataSeek reading error');
+    ESynZip.RaiseU('Zip: LoadAndDataSeek reading error');
 end;
 
 procedure TLocalFileHeader.LoadAndDataSeek(Source: TStream; LocalOffset: Int64);
@@ -1578,19 +1588,13 @@ end;
 
 { TFileInfo }
 
-function TFileInfo.GetAlgoID: integer;
-begin
-  // in PKware appnote, bits 7..10 of general purpose bit flag are not used
-  result := (flags shr 7) and 15; // proprietary flag for mormot.core.zip.pas
-end;
-
 function TFileInfo.SameAs(aInfo: PFileInfo): boolean;
 begin
   // checking 32-bit sizes (which may be -1 for zip64) + zcrc32 seems enough
   // (i.e. tolerate a time change through a network)
   if (zzipSize = 0) or
      (aInfo.zzipSize = 0) then
-    raise ESynZip.Create('SameAs() with crc+sizes in "data descriptor"');
+    ESynZip.RaiseU('SameAs() with crc+sizes in FLAG_DATADESCRIPTOR');
   result := (zzipMethod = aInfo.zzipMethod) and
             (flags = aInfo.flags) and
             (zzipSize = aInfo.zzipSize) and    // =cardinal(-1) if zip64
@@ -1598,28 +1602,33 @@ begin
             (zcrc32 = aInfo.zcrc32);
 end;
 
+function TFileInfo.GetAlgoID: integer;
+begin
+  // in PKware appnote, bits 7..10 of general purpose bit flags are not used
+  result := (flags shr 7) and 15; // mORMot 1 proprietary flag
+end;
+
 procedure TFileInfo.SetAlgoID(Algorithm: integer);
 begin
   zzipMethod := Z_STORED; // file is stored, accorging to .ZIP standard
   // in PKware appnote, bits 7..10 of general purpose bit flag are not used
   flags := (flags and $F87F) or
-           (Algorithm and 15) shl 7; // proprietary flag for mormot.core.zip.pas
+           (Algorithm and 15) shl 7; // mORMot 1 proprietary flag
 end;
 
 function TFileInfo.GetUtf8FileNameFlag: boolean;
 begin
-  // from PKware appnote, Bit 11: Language encoding flag (EFS)
-  result := (flags and (1 shl 11)) <> 0;
+  result := (flags and FLAG_UTF8ENCODING) <> 0;
 end;
 
 procedure TFileInfo.SetUtf8FileNameFlag;
 begin
-  flags := flags or (1 shl 11);
+  flags := flags or FLAG_UTF8ENCODING;
 end;
 
 procedure TFileInfo.UnSetUtf8FileNameFlag;
 begin
-  flags := flags and not (1 shl 11);
+  flags := flags and not FLAG_UTF8ENCODING;
 end;
 
 function TFileInfo.IsZip64: boolean;
@@ -1707,7 +1716,7 @@ begin
       [self, {%H-}pointer(aDest), aDestFileName]);
   fFileName := aDestFileName;
   fDestOwned := true;
-  Create(TFileStreamFromHandle.Create(aDest));
+  Create(TFileStreamEx.CreateFromHandle(aDest, aDestFileName));
 end;
 
 constructor TZipWrite.Create(const aDestFileName: TFileName);
@@ -1789,7 +1798,7 @@ begin
                 // read and move the file by 1MB chunks
                 InfoStart(len, 'Read ', s^.zipName);
                 if tmp = '' then
-                  FastNewRawByteString(tmp, 1 shl 20);
+                  pointer(tmp) := FastNewString(1 shl 20);
                 readpos := Int64(s^.fileinfo.offset) + info.localsize;
                 repeat
                   FileSeek64(h, readpos);
@@ -1906,28 +1915,28 @@ begin
     // and h32.zzipMethod/zcrc32/zlastMod - e.g. with NewEntry()
     h64.offset := QWord(fDest.Position) - fAppendOffset;
     if ForceZip64 or
-       (h64.zzipSize >= ZIP32_MAXSIZE) or
+       (h64.zzipSize  >= ZIP32_MAXSIZE) or
        (h64.zfullSize >= ZIP32_MAXSIZE) or
-       (h64.offset >= ZIP32_MAXSIZE) then
+       (h64.offset    >= ZIP32_MAXSIZE) then
       // big files requires the zip64 format with h64 extra information
       include(flags, zweZip64);
     h32.SetVersion(zweZip64 in flags);
     if zweZip64 in flags then
     begin
       fNeedZip64 := true;
-      h32.fileInfo.zzipSize := ZIP32_MAXSIZE;
+      h32.fileInfo.zzipSize  := ZIP32_MAXSIZE;
       h32.fileInfo.zfullSize := ZIP32_MAXSIZE;
-      h32.fileInfo.extraLen := SizeOf(h64) - SizeOf(h64.offset);
-      h32.localHeadOff := ZIP32_MAXSIZE;
+      h32.fileInfo.extraLen  := SizeOf(h64) - SizeOf(h64.offset);
+      h32.localHeadOff       := ZIP32_MAXSIZE;
       h64.zip64id := ZIP64_EXTRA_ID;
-      h64.size := SizeOf(h64.zzipSize) + SizeOf(h64.zfullSize);
+      h64.size    := SizeOf(h64.zzipSize) + SizeOf(h64.zfullSize);
     end
     else
     begin
-      h32.fileInfo.zzipSize := h64.zzipSize;
+      h32.fileInfo.zzipSize  := h64.zzipSize;
       h32.fileInfo.zfullSize := h64.zfullSize;
-      h32.localHeadOff := h64.offset;
-      h32.fileInfo.extraLen := 0; // AddFromZip() source may have something here
+      h32.localHeadOff       := h64.offset;
+      h32.fileInfo.extraLen  := 0; // AddFromZip() source may have something here
     end;
     {$ifdef UNICODE}
     if IsAnsiCompatibleW(pointer(zipName)) then
@@ -2075,7 +2084,7 @@ begin
          (Int64(todo) <= LIBDEFLATE_MAXSIZE) then
       begin
         // files up to 64MB/128MB will be loaded into memory and call libdeflate
-        FastNewRawByteString(tmp, todo);
+        pointer(tmp) := FastNewString(todo);
         if not FileReadAll(f, pointer(tmp), todo) then
           ESynZip.RaiseUtf8('%.AddDeflated: failed to read % [%]',
             [self, aFileName, GetLastError]);
@@ -2101,7 +2110,7 @@ begin
         len := 1 shl 20;
         if todo < len then
           len := todo;
-        FastNewRawByteString(tmp, len); // 1MB temporary chunk for reading
+        pointer(tmp) := FastNewString(len); // 1MB temporary chunk for reading
         deflate := nil;
         if met = Z_DEFLATED then
           deflate := TSynZipCompressor.Create(fDest, CompressLevel, szcfRaw);
@@ -2134,7 +2143,7 @@ begin
             h32.fileInfo.zcrc32 := deflate.CRC;
           end;
           if h32.fileInfo.extraLen = 0 then
-            h32.fileInfo.zzipSize := h64.zzipSize; // Zip64 store ZIP32_MAXSIZE
+            h32.fileInfo.zzipSize := h64.zzipSize; // zip64 store ZIP32_MAXSIZE
         finally
           deflate.Free;
         end;
@@ -2171,15 +2180,15 @@ begin
   // set final zip entry state
   with fOwner.Entry[fOwner.Count] do
   begin
-    if h32.fileInfo.extraLen = 0 then // not Zip64 format
+    if h32.fileInfo.extraLen = 0 then // not zip64 format
     begin
       if (fSizeIn shr 32 <> 0) or
          (fSizeOut shr 32 <> 0) then
         ESynZip.RaiseUtf8(
           '%.AddDeflatedStream: too much data in % - try ForceZip64=true',
           [fOwner, intName]);
-      h32.fileInfo.zfullSize := fSizeIn; // Zip64 store ZIP32_MAXSIZE here
-      h32.fileInfo.zzipSize := fSizeOut;
+      h32.fileInfo.zfullSize := fSizeIn; // zip64 store ZIP32_MAXSIZE here
+      h32.fileInfo.zzipSize  := fSizeOut;
     end;
     h32.fileInfo.zcrc32 := fCrc;
     h64.zfullSize := fSizeIn; // h64 is always set
@@ -2292,7 +2301,7 @@ begin
       if (z^.dir64 = nil) and
          (h32.fileInfo.flags and FLAG_DATADESCRIPTOR <> 0) then
         ESynZip.RaiseUtf8('%.AddFromZip failed on %: unexpected ' +
-          'data descriptor (MacOS) format', [self, z^.zipName]);
+          'FLAG_DATADESCRIPTOR (MacOS) format', [self, z^.zipName]);
       h32 := z^.dir^;
       h64:= z^.fileinfo; // from TZipRead.Create()
       // append new header and file content
@@ -2317,7 +2326,7 @@ procedure TZipWrite.Append(const Content: RawByteString);
 begin
   if (self = nil) or
      (Count <> 0) then
-    raise ESynZip.Create('TZipWrite.Append: invalid call');
+    ESynZip.RaiseU('TZipWrite.Append: invalid call');
   inc(fAppendOffset, length(Content));
   fDest.WriteBuffer(pointer(Content)^, length(Content));
 end;
@@ -2349,9 +2358,8 @@ begin
         inc(lh64.headerSize, SizeOf(h64));
       end;
     end;
-  FastNewRawByteString(tmp,
-    lh64.headerSize + SizeOf(lh) + SizeOf(lh64) + SizeOf(loc64));
-  P := pointer(tmp);
+  P := FastNewString(lh64.headerSize + SizeOf(lh) + SizeOf(lh64) + SizeOf(loc64));
+  pointer(tmp) := P;
   for i := 0 to Count - 1 do
     with Entry[i] do
     begin
@@ -2387,9 +2395,9 @@ begin
     inc(P, SizeOf(lh64));
     MoveFast(loc64, P^, SizeOf(loc64));
     inc(P, SizeOf(loc64));
-    lh.thisFiles := ZIP32_MAXFILE;
-    lh.totalFiles := ZIP32_MAXFILE;
-    lh.headerSize := ZIP32_MAXSIZE;
+    lh.thisFiles    := ZIP32_MAXFILE;
+    lh.totalFiles   := ZIP32_MAXFILE;
+    lh.headerSize   := ZIP32_MAXSIZE;
     lh.headerOffset := ZIP32_MAXSIZE;
   end
   else
@@ -2408,7 +2416,7 @@ begin
 end;
 
 const
-  /// direct conversion from code page 437 to UTF-16, as zip appnote requires
+  /// direct conversion from code page 437 to UTF-16, as PKware appnote requires
   // - on POSIX, a constant table is easier and lighter than running external
   // iconv/ICU from mormot.core.os (in UTF-8 POSIX, we don't need code pages)
   CP_437: array[128..255] of word = (
@@ -2425,21 +2433,21 @@ const
     $03B5, $2229, $2261, $00B1, $2265, $2264, $2320, $2321, $00F7, $2248, $00B0,
     $2219, $00B7, $221A, $207F, $00B2, $25A0, $00A0);
 
-procedure Cp437ToFileName(const oem: RawByteString; out filename: TFileName);
+procedure Cp437ToFileName(oem: PByteArray; len: PtrInt; var filename: TFileName);
 var
-  len, i, c: PtrInt;
-  utf16: SynUnicode;
+  i, c: PtrInt;
+  utf16: array[0 .. ZIP_MAXNAMELEN - 1] of word;
 begin
-  len := length(oem);
-  SetLength(utf16, len);
+  if len > high(utf16) then
+    exit; // paranoid - IsZipStart() checked nameLen < ZIP_MAXNAMELEN
   for i := 0 to len - 1 do
   begin
-    c := PByteArray(oem)[i];
+    c := oem[i];
     if c > 127 then
       c := CP_437[c];
-    PWordArray(utf16)[i] := c;
+    utf16[i] := c;
   end;
-  filename := SynUnicodeToString(utf16);
+  RawUnicodeToString(@utf16, len, string(filename));
 end;
 
 function IsZipStart(P: PCardinal): boolean;
@@ -2451,8 +2459,8 @@ begin
       with PLocalFileHeader(P)^.fileInfo do
         result := (ToByte(neededVersion) in [10, 20, 45]) and
                   (zzipMethod in [Z_STORED, Z_DEFLATED]) and
-                  (extraLen < 100) and
-                  (nameLen < 512);
+                  (nameLen  < ZIP_MAXNAMELEN) and
+                  (extraLen < ZIP_MAXNAMELEN); // e.g. UNICODEPATH_EXTRA_ID
     LASTHEADER_SIGNATURE_INC:
       result := PInt64(@PLastHeader(P)^.totalFiles)^ = 0; // *Disk=0
   else
@@ -2466,131 +2474,130 @@ var
   i: PtrInt;
   loc64: PLocator64;
 begin
-  if (BufZip <> nil) and
-     (Size >= SizeOf(TLastHeader)) then
-    for i := 0 to 127 do
+  // resources size may be rounded up -> search in trailing 128 bytes
+  for i := 0 to 127 do
+  begin
+    result := @BufZip[Size - SizeOf(TLastHeader)];
+    if result^.signature + 1 = LASTHEADER_SIGNATURE_INC then
     begin
-      // resources size may be rounded up -> search in trailing 128 bytes
-      result := @BufZip[Size - SizeOf(TLastHeader)];
-      if result^.signature + 1 = LASTHEADER_SIGNATURE_INC then
+      if (result^.thisFiles    = ZIP32_MAXFILE) or
+         (result^.totalFiles   = ZIP32_MAXFILE) or
+         (result^.headerSize   = ZIP32_MAXSIZE) or
+         (result^.headerOffset = ZIP32_MAXSIZE) then
       begin
-        if (result^.thisFiles = ZIP32_MAXFILE) or
-           (result^.totalFiles = ZIP32_MAXFILE) or
-           (result^.headerSize = ZIP32_MAXSIZE) or
-           (result^.headerOffset = ZIP32_MAXSIZE) then
-        begin
-          // validate zip64 trailer
-          loc64 := pointer(result);
-          dec(loc64);
-          if (PtrUInt(loc64) < PtrUInt(BufZip)) or
-             (loc64^.signature + 1 <> LASTHEADERLOCATOR64_SIGNATURE_INC) or
-             (loc64^.headerOffset + SizeOf({%H-}head64^) >= QWord(Offset + Size)) then
-            break;
-          head64 := @BufZip[loc64^.headerOffset - QWord(Offset)];
-          if head64^.signature + 1 <> LASTHEADER64_SIGNATURE_INC then
-            break;
-        end
-        else
-          // regular zip 2.0 trailer
-          head64 := nil;
-        exit;
-      end;
-      dec(Size);
-      if Size < SizeOf(TLastHeader) then
-        break;
+        // validate zip64 locator, stored just before this 32-bit TLastHeader
+        loc64 := pointer(result);
+        dec(loc64);
+        if (PtrUInt(loc64) < PtrUInt(BufZip)) or
+           (loc64^.signature + 1 <> LASTHEADERLOCATOR64_SIGNATURE_INC) or
+           (loc64^.headerOffset + SizeOf({%H-}head64^) >= QWord(Offset + Size)) then
+          break;
+        // validate zip64 last header, stored before the zip64 locator
+        head64 := @BufZip[loc64^.headerOffset - QWord(Offset)];
+        if head64^.signature + 1 <> LASTHEADER64_SIGNATURE_INC then
+          break;
+      end
+      else
+        // regular zip 2.0 trailer
+        head64 := nil;
+      exit;
     end;
+    dec(Size);
+    if Size < SizeOf(TLastHeader) then
+      break;
+  end;
   result := nil;
-end;
-
-function LocateCentralDirectoryOffset(BufZip: PByteArray; Size: PtrInt;
-  Offset: Int64; const FileName: TFileName): Int64;
-var
-  lh32: PLastHeader;
-  lh64: PLastHeader64;
-begin
-  lh32 := LocateLastHeader(BufZip, Size, Offset, lh64);
-  if lh32 = nil then
-    ESynZip.RaiseUtf8(
-      'TZipRead.Create(%): zip trailer signature not found', [FileName]);
-  if lh64 <> nil then
-    result := lh64^.headerOffset
-  else
-    result := lh32^.headerOffset;
 end;
 
 
 { TZipRead }
 
-constructor TZipRead.Create(BufZip: PByteArray; Size: PtrInt; Offset: Int64);
+function IsAscii7(P: PAnsiChar; rev, new: AnsiChar): boolean;
+begin
+  result := true;
+  repeat
+    if P^ = rev then // normalize path delimiter
+      P^ := new
+    else if P^ > #127 then
+      result := false; // this file name requires some decoding
+    inc(P);
+  until P^ = #0;
+end;
+
+procedure TZipRead.LocateCentralDirectory(BufZip: PByteArray;
+  var Size: PtrInt; Offset: Int64);
 var
   lh32: PLastHeader;
   lh64: PLastHeader64;
-  lastheader: TLastHeader64;
+begin
+  if (BufZip = nil) or
+     (Size < SizeOf(TLastHeader)) then
+    lh32 := nil
+  else
+    lh32 := LocateLastHeader(BufZip, Size, Offset, lh64);
+  if lh32 = nil then
+    ESynZip.RaiseUtf8(
+      '%.Create(%): zip trailer signature not found', [self, fFileName]);
+  if lh64 <> nil then
+  begin
+    fCentralDirectoryOffset     := lh64^.headerOffset;
+    fCentralDirectoryTotalFiles := lh64^.totalFiles;
+  end
+  else
+  begin
+    fCentralDirectoryOffset     := lh32^.headerOffset;
+    fCentralDirectoryTotalFiles := lh32^.totalFiles;
+  end;
+end;
+
+constructor TZipRead.Create(BufZip: PByteArray; Size: PtrInt; Offset: Int64);
+var
   h, hnext: PFileHeader;
   extraname: PFileInfoExtraName;
   e, prev: PZipReadEntry;
   i: PtrInt;
-  isascii7: boolean;
-  P: PAnsiChar;
   p64: PQWord;
   tmp: RawByteString;
 begin
   Create;
-  if (BufZip = nil) or
-     (Size < SizeOf(TLastHeader)) then
-     ESynZip.RaiseUtf8('%.Create(nil): not a zip file %', [self, fFileName]);
-  lh32 := LocateLastHeader(BufZip, Size, Offset, lh64);
-  if lh32 = nil then
-    ESynZip.RaiseUtf8('%.Create(%): zip trailer signature not found',
-      [self, fFileName]);
-  if lh64 <> nil then
-    // zip64 support
-    lastheader := lh64^
-  else
+  // locate the central directory in the zip trailer, potentially in zip64 format
+  if fCentralDirectoryOffset = 0 then // if not already searched
   begin
-    // regular .zip content
-    lastheader.totalFiles := lh32^.totalFiles;
-    lastheader.headerOffset := lh32^.headerOffset;
+    LocateCentralDirectory(BufZip, Size, Offset);
+    if (fCentralDirectoryOffset < Offset) or
+       ((fCentralDirectoryTotalFiles <> 0) and
+        (fCentralDirectoryOffset +
+         (fCentralDirectoryTotalFiles * SizeOf(TFileHeader)) > Offset + Size)) then
+      ESynZip.RaiseUtf8('%.Create(BufZip): corrupted Central Directory ' +
+        'or truncated Size=% for % files (Offset=%) %', [self,
+        Size, fCentralDirectoryTotalFiles, fCentralDirectoryOffset]);
   end;
-  if lastheader.totalFiles = 0 then
+  if fCentralDirectoryTotalFiles = 0 then
     exit; // a void .zip file has no central directory nor any file header
-  fCentralDirectoryOffset := lastheader.headerOffset;
-  if (fCentralDirectoryOffset <= Offset) or
-     (fCentralDirectoryOffset +
-       Int64(lastheader.totalFiles * SizeOf(TFileHeader)) >= Offset + Size) then
-    ESynZip.RaiseUtf8(
-      '%.Create: corrupted Central Directory or too small WorkMem (Offset=%) %',
-      [self, fCentralDirectoryOffset, fFileName]);
   fCentralDirectory := @BufZip[fCentralDirectoryOffset - Offset];
-  SetLength(fEntry, lastheader.totalFiles); // Entry[] contain the Zip headers
+  // parse the central directory into Entry[]
+  SetLength(fEntry, fCentralDirectoryTotalFiles);
   e := pointer(fEntry);
   prev := nil;
   h := fCentralDirectory;
-  for i := 1 to lastheader.totalFiles do
+  for i := 1 to fCentralDirectoryTotalFiles do
   begin
+    // validate this entry header
     if (PtrUInt(h) + SizeOf(TFileHeader) >= PtrUInt(@BufZip[Size])) or
        (h^.signature + 1 <> ENTRY_SIGNATURE_INC) or
        (h^.fileInfo.nameLen = 0) then
       ESynZip.RaiseUtf8('%.Create: corrupted file header #%/% %',
-        [self, i, lastheader.totalFiles, fFileName]);
+        [self, i, fCentralDirectoryTotalFiles, fFileName]);
     hnext := pointer(PtrUInt(h) + SizeOf(h^) + h^.fileInfo.NameLen +
       h^.fileInfo.extraLen + h^.commentLen);
     if PtrUInt(hnext) >= PtrUInt(@BufZip[Size]) then
       ESynZip.RaiseUtf8('%.Create: corrupted header in %', [self, fFileName]);
+    // retrieve the entry file name with proper Unicode/UTF-8 support
     e^.dir := h;
     e^.storedName := PAnsiChar(h) + SizeOf(h^);
     SetString(tmp, e^.storedName, h^.fileInfo.nameLen); // better for FPC
-    isascii7 := true;
-    P := pointer(tmp);
-    repeat
-      if P^ = fZipNamePathDelimReversed then // normalize path delimiter
-        P^ := fZipNamePathDelim
-      else if P^ > #127 then
-        isascii7 := false;
-      inc(P);
-    until P^ = #0;
-    if isascii7 then
-      // plain ASCII file name need no conversion
+    if IsAscii7(pointer(tmp), fZipNamePathDelimReversed, fZipNamePathDelim) then
+      // plain ASCII file name needs no conversion
       e^.zipName := Ansi7ToString(tmp)
     else
     begin
@@ -2603,27 +2610,29 @@ begin
         Utf8ToFileName(tmp, e^.zipName)
       end
       else if h^.fileInfo.GetUtf8FileNameFlag or
-              IsValidUtf8(tmp) then
+              IsValidUtf8Small(tmp) then
         // flag let decode UTF-8 file name into native string/TFileName type
         // also detects UTF-8 without the flag (happens from POSIX zippers)
         Utf8ToFileName(tmp, e^.zipName)
       else
         // legacy Windows-OEM-CP437 encoding
-        Cp437ToFileName(tmp, e^.zipName);
+        Cp437ToFileName(pointer(tmp), length(tmp), e^.zipName);
     end;
+    // validate entry
     if not (h^.fileInfo.zZipMethod in [Z_STORED, Z_DEFLATED]) and
        not IsFolder(e^.zipName) then
       ESynZip.RaiseUtf8('%.Create: Unsupported zipmethod % for % in %',
         [self, h^.fileInfo.zZipMethod, e^.zipName, fFileName]);
+    // proper zip64 support
     { TFileInfoExtra64 is the layout of the zip64 extended info "extra" block.
       If one of the size or offset fields in the Local or Central directory
-      record is too small to hold the required data, a Zip64 extended information
+      record is too small to hold the required data, a zip64 extended information
       record is created. The order of the fields in the zip64 extended information
       record is fixed, but the fields **MUST only appear** if the corresponding
       Local or Central directory record field is set to 0xFFFF or 0xFFFFFFFF. }
-    if (h^.localHeadOff = ZIP32_MAXSIZE) or
+    if (h^.localHeadOff       = ZIP32_MAXSIZE) or
        (h^.fileInfo.zfullSize = ZIP32_MAXSIZE) or
-       (h^.fileInfo.zzipSize = ZIP32_MAXSIZE) then
+       (h^.fileInfo.zzipSize  = ZIP32_MAXSIZE) then
       // zip64 format: retrieve TFileInfoExtra64 position in dir64
       if h^.fileInfo.IsZip64 then
       begin
@@ -2666,6 +2675,7 @@ begin
         e^.fileinfo.offset := p64^
     else
       e^.fileinfo.offset := e^.dir^.localHeadOff;
+    // prepare for direct in-memory access, if possible
     if e^.fileinfo.offset >= QWord(Offset) then
     begin
       // we can unzip directly from the existing memory buffer: store pointer
@@ -2676,7 +2686,7 @@ begin
           if (zcrc32 <> 0) or
              (zzipSize <> 0) or
              (zfullSize <> 0) then
-            ESynZip.RaiseUtf8('%.Create: data descriptor (MacOS) with ' +
+            ESynZip.RaiseUtf8('%.Create: FLAG_DATADESCRIPTOR (MacOS) with ' +
               'sizes for % %', [self, e^.zipName, fFileName]);
       if prev <> nil then
         prev^.nextlocal := e^.local;
@@ -2684,7 +2694,8 @@ begin
     if prev <> nil then
       prev^.nextlocaloffs := e^.fileinfo.offset;
     prev := e;
-    inc(fCount); // add file (or folder) to Entry[]
+    // add file (or folder) to Entry[]
+    inc(fCount);
     inc(e);
     h := hnext;
   end;
@@ -2692,7 +2703,7 @@ begin
     prev^.nextlocaloffs := fCentralDirectoryOffset; // last file backward search
   if fCount = 0 then
     fEntry := nil
-  else if fCount <> lastheader.totalFiles then
+  else if fCount <> fCentralDirectoryTotalFiles then
     DynArrayFakeLength(fEntry, fCount); // so that length(Entry)=Count 
 end;
 
@@ -2708,7 +2719,7 @@ end;
 constructor TZipRead.Create(aFile: THandle;
   ZipStartOffset, Size, WorkingMem: QWord; DontReleaseHandle: boolean);
 var
-  read, i: PtrInt;
+  read, i, j: PtrInt;
   P: PByteArray;
   local: TLocalFileHeader;
   centraldirsize: Int64;
@@ -2716,8 +2727,7 @@ begin
   // initialize source stream - released (possibly with handle) on ESynZip below
   if not ValidHandle(aFile) then
     exit;
-  fSource := TFileStreamFromHandle.Create(aFile);
-  TFileStreamFromHandle(fSource).DontReleaseHandle := DontReleaseHandle;
+  fSource := TFileStreamEx.CreateFromHandle(aFile, fFileName, DontReleaseHandle);
   // prepare the internal buffer - contains at least the central directory
   if Size = 0 then
     Size := FileSize(aFile);
@@ -2725,15 +2735,14 @@ begin
     WorkingMem := Size; // up to 1MB by default
   if WorkingMem < SizeOf(TLastHeader) then // minimal void .zip file is 22 bytes
     ESynZip.RaiseUtf8('%.Create: % is not a zip file', [self, fFileName]);
-  FastNewRawByteString(fSourceBuffer, WorkingMem);
+  P := FastNewRawByteString(fSourceBuffer, WorkingMem);
   // search for the first zip file local header
-  P := pointer(fSourceBuffer);
   if ZipStartOffset = 0 then
   begin
     fSource.Seek(0, soBeginning);
     if WorkingMem = SizeOf(TLastHeader) then
     begin
-      fSource.Read(P^, WorkingMem);
+      fSource.ReadBuffer(P^, WorkingMem);
       Create(P, WorkingMem); // void .zip
       exit;
     end;
@@ -2743,16 +2752,17 @@ begin
       // it seems to be a regular .zip -> read WorkingMem trailing content
       fSource.Seek(Size - WorkingMem, soBeginning);
       fSource.ReadBuffer(P^, WorkingMem);
-      centraldirsize := Int64(Size) -
-        LocateCentralDirectoryOffset(P, WorkingMem, Size - WorkingMem, fFileName);
+      read := WorkingMem;
+      LocateCentralDirectory(P, read, Size - WorkingMem);
+      WorkingMem := read;
+      centraldirsize := Int64(Size) - fCentralDirectoryOffset;
       if centraldirsize > Int64(WorkingMem) then
       begin
-        // 1MB of WorkingMem was not enough (a lot of files indeed!)
+        // WorkingMem (default 1MB) was not enough (e.g. > 40,000 files)
         WorkingMem := centraldirsize + 1024;
         if WorkingMem > Size then
           WorkingMem := Size;
-        FastNewRawByteString(fSourceBuffer, WorkingMem); // alloc bigger
-        P := pointer(fSourceBuffer);
+        P := FastNewRawByteString(fSourceBuffer, WorkingMem); // alloc bigger
         fSource.Seek(Size - WorkingMem, soBeginning);
         fSource.ReadBuffer(P^, WorkingMem);
       end;
@@ -2760,12 +2770,12 @@ begin
       exit;
     end;
   end;
-  // search FileAppendSignature() mark from the trailing bytes
+  // search FileAppend/FileAppendSignature() markers from the trailing bytes
   fSource.Seek(Size - WorkingMem, soBeginning);
   fSource.ReadBuffer(P^, WorkingMem);
-  for i := WorkingMem - 16 downto WorkingMem - 32 do
-    if (i >= 0) and  // expects magic4+offset8+magic4 pattern
-       (PCardinal(@P[i])^ + 1 = FILEAPPEND_SIGNATURE_INC) and
+  for i := WorkingMem - 16 downto WorkingMem - 32 do // up to 16 bytes alignment
+    if (i >= 0) and  // expects "magic4 + offset8 + magic4" pattern
+       (PCardinal(@P[i     ])^ + 1 = FILEAPPEND_SIGNATURE_INC) and
        (PCardinal(@P[i + 12])^ + 1 = FILEAPPEND_SIGNATURE_INC) then
     begin
       fSourceOffset := PQWord(@P[i + 4])^;
@@ -2783,18 +2793,30 @@ begin
     end;
   // manual search of the first zip local file header
   repeat
-    fSource.Seek(ZipStartOffset, soBeginning);
-    read := fSource.Read(P^, WorkingMem);
+    if Size <> WorkingMem then
+    begin
+      fSource.Seek(ZipStartOffset, soBeginning); // search by chunks
+      read := fSource.Read(P^, WorkingMem);
+    end
+    else
+      read := WorkingMem; // we already have the whole file content in P^
     for i := 0 to read - SizeOf(TLocalFileHeader) do
       if IsZipStart(@P[i]) then
       begin
         fSourceOffset := ZipStartOffset + Qword(i);
+        j := i;
+        if (j >= 4) and
+           (PCardinal(@P[j - 4])^ + 1 = SPANHEADER_SIGNATURE_INC) then
+        begin
+          dec(j, 4); // PK00 prefix of single zip file from spanning mode
+          dec(fSourceOffset, 4); // all offsets start from this PK00 header
+        end;
         if Size = WorkingMem then
           // small files could reuse the existing buffer
-          Create(@P[i], read - i, 0)
+          Create(@P[j], read - j, 0)
         else
         begin
-          // big files need to read the last WorkingMem
+          // big files just read the last WorkingMem bytes for centraldir lookup
           fSource.Seek(Size - WorkingMem, soBeginning);
           fSource.ReadBuffer(P^, WorkingMem);
           Create(P, WorkingMem, Size - WorkingMem - fSourceOffset);
@@ -2843,15 +2865,6 @@ begin
   result := -1;
 end;
 
-type
-  // some (MacOs) tools store 0 within local header, and append "data descriptor"
-  TDataDescriptor = packed record
-    signature: cardinal;
-    crc32: cardinal;
-    zipSize: cardinal;
-    fullSize: cardinal;
-  end;
-
 function TZipRead.RetrieveLocalFileHeader(Index: integer;
   out Header: TLocalFileHeader): boolean;
 var
@@ -2870,21 +2883,88 @@ begin
   result := true;
 end;
 
+type
+  // some (MacOs) tools store 0 in local header, and append FLAG_DATADESCRIPTOR
+  TDataDescriptor = packed record
+    signature: cardinal;
+    crc32:     cardinal;
+    zipSize:   cardinal;
+    fullSize:  cardinal;
+  end;
+
 function TZipRead.RetrieveFileInfo(Index: integer;
   out Info: TFileInfoFull): boolean;
 var
-  desc: ^TDataDescriptor;
   e: PZipReadEntry;
-  descmin, tmpLen: PtrUInt;
-  posi: Int64;
   local: TLocalFileHeader;
-  tmp: array[0..63] of TDataDescriptor; // search for a few iterations is enough
+
+  procedure SearchFromDataDescriptor; // seldom called sub-function
+  var
+    desc: ^TDataDescriptor;
+    descmin, tmpLen: PtrUInt;
+    posi: Int64;
+    tmp: array[0..63] of TDataDescriptor; // enough to search a few iterations
+  begin
+    descmin := 0;
+    if e^.local <> nil then
+      descmin := PtrUInt(e^.local^.Data);
+    // search backward from next file to current file
+    desc := pointer(e^.nextlocal);
+    if (desc = nil) or
+       (descmin = 0) then
+    begin
+      // this file is not within WorkingMem: search from disk
+      if e^.nextlocaloffs = 0 then // paranoid
+        ESynZip.RaiseUtf8('%: datadesc with nextlocaloffs=0', [self]);
+      tmpLen := e^.nextlocaloffs - e^.fileinfo.offset;
+      if tmpLen > SizeOf(tmp) then
+        tmpLen := SizeOf(tmp); // search backward up to 1024 bytes
+      repeat
+        posi := e^.nextlocaloffs + fSourceOffset - tmpLen;
+        if posi >= 0 then
+          break;
+        dec(tmpLen); // paranoid resize for last file of a very small zip
+      until tmpLen = 0;
+      fSource.Seek(posi, soBeginning);
+      if not StreamReadAll(fSource, @tmp, tmpLen) then
+        ESynZip.RaiseUtf8('%: data descriptor read error on % %',
+          [self, e^.zipName, fFileName]);
+      descmin := PtrUInt(@tmp);
+      desc := pointer(descmin + tmpLen);
+      e := nil; // indicates below that descmin does not match zipSize
+    end;
+    dec(desc);
+    while PtrUInt(desc) > descmin do
+      // same pattern than ReadLocalItemDescriptor() in 7-Zip's ZipIn.cpp
+      // but here, search is done backwards (much faster than 7-Zip algorithm)
+      if (desc^.signature + 1 = DATADESCRIPTOR_SIGNATURE_INC) and
+         ((e = nil) or
+          (desc^.zipSize = PtrUInt(desc) - descmin)) then
+      begin
+        if (desc^.fullSize = 0) or
+           (desc^.zipSize  = ZIP32_MAXSIZE) or
+           (desc^.fullSize = ZIP32_MAXSIZE) then
+          // we expect 32-bit sizes only (no zip64 support from MacOS)
+          break;
+        Info.f32.zcrc32    := desc^.crc32;
+        Info.f32.zzipSize  := desc^.zipSize;
+        Info.f32.zfullSize := desc^.fullSize;
+        Info.f64.zzipSize  := desc^.zipSize;
+        Info.f64.zfullSize := desc^.fullSize;
+        exit;
+      end
+      else
+        dec(PByte(desc));
+    result := false; // not found
+  end;
+
 begin
   result := false;
   if (self = nil) or
      (cardinal(Index) >= cardinal(Count)) then
     exit;
   // try to get information from central directory
+  result := true;
   e := @Entry[Index];
   Info.f32 := e^.dir^.fileInfo;
   FillCharFast(Info.f64, SizeOf(Info.f64), 0);
@@ -2894,64 +2974,11 @@ begin
     local.Load(fSource, e^.fileinfo.offset + fSourceOffset);
   Info.localsize := local.Size;
   if local.fileInfo.flags and FLAG_DATADESCRIPTOR = 0 then
-  begin
     // it seems we can use the central directory information
-    Info.f64 := e^.fileinfo;
-    result := true;
-    exit;
-  end;
-  // MacOS: search manually the "data descriptor" from the binary local data
-  descmin := 0;
-  if e^.local <> nil then
-    descmin := PtrUInt(e^.local^.Data);
-  // search backward from next file to current file
-  desc := pointer(e^.nextlocal);
-  if (desc = nil) or
-     (descmin = 0) then
-  begin
-    // this file is not within WorkingMem: search from disk
-    if e^.nextlocaloffs = 0 then // paranoid
-      ESynZip.RaiseUtf8('%: datadesc with nextlocaloffs=0', [self]);
-    tmpLen := e^.nextlocaloffs - e^.fileinfo.offset;
-    if tmpLen > SizeOf(tmp) then
-      tmpLen := SizeOf(tmp); // search backward up to 1024 bytes
-    repeat
-      posi := e^.nextlocaloffs + fSourceOffset - tmpLen;
-      if posi >= 0 then
-        break;
-      dec(tmpLen); // paranoid resize for last file of a very small zip
-    until tmpLen = 0;
-    fSource.Seek(posi, soBeginning);
-    if PtrUInt(fSource.Read(tmp, tmpLen)) <> tmpLen then
-      ESynZip.RaiseUtf8('%: data descriptor read error on % %',
-        [self, e^.zipName, fFileName]);
-    descmin := PtrUInt(@tmp);
-    desc := pointer(descmin + tmpLen);
-    e := nil; // indicates below that descmin does not match zipSize
-  end;
-  dec(desc);
-  while PtrUInt(desc) > descmin do
-    // same pattern than ReadLocalItemDescriptor() in 7-Zip's ZipIn.cpp
-    // but here, search is done backwards (much faster than 7-Zip algorithm)
-    if (desc^.signature = SIGNATURE_DATADESCRIPTOR) and
-       ((e = nil) or
-        (desc^.zipSize = PtrUInt(desc) - descmin)) then
-    begin
-      if (desc^.fullSize = 0) or
-         (desc^.zipSize  = ZIP32_MAXSIZE) or
-         (desc^.fullSize = ZIP32_MAXSIZE) then
-        // we expect 32-bit sizes only (no Zip64 support from MacOS)
-        exit;
-      Info.f32.zcrc32    := desc^.crc32;
-      Info.f32.zzipSize  := desc^.zipSize;
-      Info.f32.zfullSize := desc^.fullSize;
-      Info.f64.zzipSize  := desc^.zipSize;
-      Info.f64.zfullSize := desc^.fullSize;
-      result := true;
-      exit;
-    end
-    else
-      dec(PByte(desc));
+    Info.f64 := e^.fileinfo
+  else
+    // MacOS: search manually the "data descriptor" from the binary local data
+    SearchFromDataDescriptor;
 end;
 
 function TZipRead.UnZip(aIndex: integer; aMaxSize: Int64): RawByteString;
@@ -2965,8 +2992,9 @@ begin
   result := '';
   if not RetrieveFileInfo(aIndex, info) or
      (info.f64.zfullSize = 0) or
-     (info.f64.zzipSize > aMaxSize) or
-     (info.f64.zfullSize > aMaxSize) then
+     ((aMaxSize > 0) and
+      ((info.f64.zzipSize > aMaxSize) or
+       (info.f64.zfullSize > aMaxSize))) then
     exit;
   // call libdeflate_crc32 / libdeflate_deflate_decompress if available
   FastSetString(RawUtf8(result), info.f64.zfullSize); // assume CP_UTF8 for FPC
@@ -2981,8 +3009,8 @@ begin
         fSource.ReadBuffer(pointer(result)^, len);
       Z_DEFLATED:
         begin
-          FastNewRawByteString(tmp, info.f64.zzipSize);
-          fSource.Read(pointer(tmp)^, info.f64.zzipSize);
+          pointer(tmp) := FastNewString(info.f64.zzipSize);
+          fSource.ReadBuffer(pointer(tmp)^, info.f64.zzipSize);
           len := UnCompressMem(pointer(tmp), pointer(result),
             info.f64.zzipsize, info.f64.zfullsize);
         end;
@@ -3007,8 +3035,8 @@ begin
   end;
   if (len <> info.f64.zfullsize) or
      (mormot.lib.z.crc32(0, pointer(result), len) <> info.f32.zcrc32) then
-    ESynZip.RaiseUtf8('%.UnZip: crc error for % %',
-      [self, e^.zipName, fFileName]);
+    ESynZip.RaiseUtf8('%.UnZip(%): error from % (len=% %)',
+      [self, e^.zipName, fFileName, len, info.f64.zfullSize]);
 end;
 
 function TZipRead.UnZipStream(aIndex: integer; const aInfo: TFileInfoFull;
@@ -3047,8 +3075,8 @@ begin
        (len < LIBDEFLATE_MAXSIZE) then
       with aInfo.f64 do
       begin
-        FastNewRawByteString(tmp, zzipSize + len); // alloc zip+unziped
-        if fSource.Read(pointer(tmp)^, zzipSize) <> zzipSize then
+        pointer(tmp) := FastNewString(zzipSize + len); // alloc zip+unziped
+        if not StreamReadAll(fSource, pointer(tmp), zzipSize) then
           exit;
         data := @PByteArray(tmp)[zzipsize];
         if UnCompressMem(pointer(tmp), data, zzipsize, len) <> len then
@@ -3065,10 +3093,10 @@ begin
         deflate := TSynZipDecompressor.Create(aDest, szcfRaw);
       try
         len := aInfo.f64.zzipSize;
-        tmpLen := 1 shl 20;
+        tmpLen := 1 shl 20; // use a 1MB temporary buffer
         if len < tmpLen then
           tmpLen := len;
-        FastNewRawByteString(tmp, tmpLen);
+        pointer(tmp) := FastNewString(tmpLen);
         crc := 0; // for Z_STORED
         repeat
           if len < tmpLen then
@@ -3119,9 +3147,9 @@ begin
         // up to 64MB/128MB will call libdeflate using a temporary memory buffer
         if len < LIBDEFLATE_MAXSIZE then
         begin
-          FastNewRawByteString(tmp, len);
+          pointer(tmp) := FastNewString(len);
           if UnCompressMem(data, pointer(tmp), zzipsize, len) <> len then
-             exit;
+            exit;
           crc := mormot.lib.z.crc32(0, pointer(tmp), len);
           aDest.WriteBuffer(pointer(tmp)^, len);
         end
@@ -3151,7 +3179,7 @@ function TZipRead.UnZip(aIndex: integer; const DestDir: TFileName;
   DestDirIsFileName: boolean): boolean;
 var
   FS: TStream;
-  LocalZipName, Dest: TFileName;
+  LocalZipName, LocalPath, Dest: TFileName;
   info: TFileInfoFull;
 begin
   result := false;
@@ -3163,24 +3191,30 @@ begin
   begin
     LocalZipName := Entry[aIndex].zipName;
     if fZipNamePathDelim <> PathDelim then
-      LocalZipName := StringReplace(
-        LocalZipName, fZipNamePathDelimString, PathDelim, [rfReplaceAll]);
+      LocalZipName := NormalizeFileName(LocalZipName);
     if not SafeFileName(LocalZipName) then
       ESynZip.RaiseUtf8('%.UnZip(%): unsafe file name ''%''',
         [self, fFileName, LocalZipName]);
-    Dest := EnsureDirectoryExists(
-              EnsureDirectoryExists(DestDir) + ExtractFilePath(LocalZipName));
+    Dest := EnsureDirectoryExists(DestDir, nil, {noexpand=}true);
     if Dest = '' then
+      exit;
+    LocalPath := ExtractFilePath(LocalZipName);
+    if LocalPath <> '' then
+    begin
+      LocalZipName := ExtractFileName(LocalZipName);
+      Dest := EnsureDirectoryExists([Dest, LocalPath], nil, {noexpand=}true);
+    end;
+    if not FileIsWritable(Dest) then
       exit; // impossible to write in this folder
-    Dest := Dest + ExtractFileName(LocalZipName);
+    Dest := Dest + LocalZipName;
   end;
   if IsFolder(Entry[aIndex].zipName) then
-    result := EnsureDirectoryExists(Dest) <> ''
+    result := EnsureDirectoryExists(Dest, nil, {noexpand=}true) <> ''
   else
   begin
     FS := TFileStreamEx.Create(Dest, fmCreate);
     try
-      result := UnZipStream(aIndex, info, FS);
+      result := UnZipStream(aIndex, info, FS); // use libdeflate if possible
     finally
       FS.Free;
     end;
@@ -3190,7 +3224,7 @@ end;
 
 function TZipRead.UnZipAll(DestDir: TFileName): integer;
 begin
-  DestDir := EnsureDirectoryExists(DestDir, ESynZip);
+  DestDir := EnsureDirectoryExists(DestDir, ESynZip, {noexpand=}true);
   for result := 0 to Count - 1 do
     if not UnZip(result, DestDir) then
       exit;
@@ -3237,6 +3271,42 @@ begin
     result := UnZip(aIndex);
 end;
 
+
+function UnZipMemAll(const ZipMem: RawByteString; const DestFolder: TFileName): boolean;
+var
+  z: TZipRead;
+begin
+  result := false;
+  if ZipMem <> '' then
+  try
+    z := TZipRead.Create(pointer(ZipMem), length(ZipMem));
+    try
+      result := z.UnZipAll(Destfolder) < 0; // -1 = success
+    finally
+      z.Free;
+    end;
+  except
+    result := false; // indicates error
+  end;
+end;
+
+function UnZipAll(const ZipFile: TFileName; const DestFolder: TFileName): boolean;
+var
+  z: TZipRead;
+begin
+  result := false;
+  if ZipFile <> '' then
+  try
+    z := TZipRead.Create(ZipFile);
+    try
+      result := z.UnZipAll(Destfolder) < 0; // -1 = success
+    finally
+      z.Free;
+    end;
+  except
+    result := false; // indicates error
+  end;
+end;
 
 var
   EventArchiveZipSafe: TLightLock; // paranoid but better safe than sorry
@@ -3297,7 +3367,7 @@ begin
       else
       begin
         // use efficient direct streaming decompression/recompression
-        s := FileStreamSequentialRead(aOldLogFileName);
+        s := TFileStreamEx.CreateRead(aOldLogFileName);
         try
           z := EventArchiveZipWrite.AddDeflatedStream(zipname,
              DateTimeToWindowsFileTime(UnixMSTimeToDateTime(ftime)),
@@ -3345,13 +3415,13 @@ procedure FileAppendSignature(O: TStream; APos: Int64);
 var
   magic: cardinal;
 begin
-  magic := FILEAPPEND_SIGNATURE_INC; // searched by TZipRead() to retrieve APos
+  magic := FILEAPPEND_SIGNATURE_INC; // stored as +1 in the executable
   dec(magic);
+  // TZipRead expects "magic4 + offset8 + magic4" pattern
   O.WriteBuffer(magic, SizeOf(magic));
-  O.WriteBuffer(APos, SizeOf(APos));
+  O.WriteBuffer(APos,  SizeOf(APos));
   O.WriteBuffer(magic, SizeOf(magic));
 end;
-
 
 procedure FileAppend(const MainFile, AppendFile: TFileName);
 var
@@ -3533,8 +3603,8 @@ begin
   if Compress then
   begin
     max := zlibCompressMax(L);
-    FastNewRawByteString(Data, max);
-    L := CompressMem(pointer(src), pointer(Data), L, max, HTTP_LEVEL, ZLib);
+    L := CompressMem(pointer(src),
+      FastNewRawByteString(Data, max), L, max, HTTP_LEVEL, ZLib);
     if L <= 0 then
       Data := ''
     else

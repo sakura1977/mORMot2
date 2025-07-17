@@ -15,23 +15,35 @@ unit mormot.lib.openssl11;
    - TLS / HTTPS Encryption Layer using OpenSSL for mormot.net.sock / TCrtSocket
 
     In respect to OpenSSL 1.0.x, the new 1.1 API hides most structures
-   behind getter/setter functions, and doesn't require complex initialization.
-    OpenSSL 1.1 features TLS 1.3, and is a LTS revision (until 2023-09-11).
-    OpenSSL 3.x is also supported on some platforms, as the next major version.
+   behind getter/setter functions, and does not require complex initialization.
+    OpenSSL 1.1 features TLS 1.3, but is now deprecated.
+    OpenSSL 3.x is supported as the current major version.
     OpenSSL 1.1 / 3.x API adaptation is done at runtime by dynamic loading.
 
   *****************************************************************************
 
-  Warning: on Windows, you need to define the USE_OPENSSL conditional in YOUR
-   project options to have this code actually link the OpenSSL library, or
-   FORCE_OPENSSL if you want to enable OpenSSL automatic loading.
-   Otherwise, it will fallback to the SChannel layer for TLS support.
-  We did not enable OpenSSL by default, because it is very likely that your
-   executable may find some obsolete dll in your Windows path, if it can't find
-   any suitable dll in its own folder.
+  Warning:
+   On Windows, the USE_OPENSSL conditional is defined, but the OpenSSL
+     lib*.dll will be loaded at runtime, only if needed, and silently fail if
+     they are not available or in an unexpected version.
+   Therefore, the SChannel layer will be used for TLS support by default, until
+     OpenSslInitialize or OpenSslIsAvailable are called and succeeded.
+   We did not enable OpenSSL by default on Windows, because from experience,
+     it is very likely that your executable may find some obsolete dll in your
+     Windows path, if it can't find any suitable dll in its own folder.
 
-  Legal Notice: as stated by our LICENSE.md terms, make sure that you comply
-   to any restriction about the use of cryptographic software in your country.
+   On POSIX, this unit will always try to load OpenSSL at startup, as if
+     FORCE_OPENSSL conditional was defined.
+   On Darwin/MacOS, the .dylib supplied by the system are unstable and should
+     not be used. Try instead e.g. https://synopse.info/files/OpenSSLMacX64.tgz
+     (for x64) or https://synopse.info/files/OpenSSLMacA64.tgz (for arm).
+
+   This unit will only enable direct low-level OpenSSL APIs and TLS: you need
+     to call explicitly RegisterOpenSsl to enable mormot.crypt.openssl.pas
+     algorithms in mORMot high-level classes and wrappers.
+
+   Legal Notice: as stated by our LICENSE.md terms, make sure that you comply
+     to any restriction about the use of cryptographic software in your country.
 }
 
 
@@ -39,7 +51,7 @@ unit mormot.lib.openssl11;
 // define this conditional to publish the whole (huge) OpenSSL API - unsupported
 // - as stored in mormot.lib.openssl11.full.inc separated file
 // - by default, only the API features needed by mORMot are published
-// - full API increases compilation time, but is kept as reference
+// - full API increases compilation time, is unsupported, but kept as reference
 // - the full API libraries will be directly/statically linked, not dynamically:
 // if you have "cannot find -lcrypto" errors at linking, run e.g. the following:
 //     cd /usr/lib/x86_64-linux-gnu
@@ -52,11 +64,10 @@ unit mormot.lib.openssl11;
 // you may try to define it if you don't check memory leaks (at you own risk)
 
 {.$define NOOPENSSL1}
-// define this to disable OpenSSL 1.1 API
+// define this to disable OpenSSL 1.1 API - safer on any recent system
 
 {.$define NOOPENSSL3}
-// define this to disable OpenSSL 3.x API - only Linux and Windows by now
-// on dynamic linking, will fallback to 1.1 if 3.x is not available
+// define this to disable OpenSSL 3.x API - not a good idea
 
 
 {$ifdef FPCMM_REPORTMEMORYLEAKS}
@@ -91,20 +102,21 @@ type
     fLastError: integer;
     class function GetOpenSsl: string;
     /// wrap ERR_get_error/ERR_error_string_n or SSL_get_error/SSL_error
-    class procedure CheckFailed(caller: TObject; const method: shortstring;
-      errormsg: PRawUtf8; ssl: pointer; sslretcode: integer);
-    class procedure TryNotAvailable(caller: TClass; const method: shortstring);
+    class procedure CheckFailed(caller: TObject; const method: ShortString;
+      errormsg: PRawUtf8 = nil; ssl: pointer = nil; sslretcode: integer = 0;
+      const context: RawUtf8 = '');
+    class procedure TryNotAvailable(caller: TClass; const method: ShortString);
   public
     /// if res <> OPENSSLSUCCESS, raise the exception with some detailed message
-    class procedure Check(caller: TObject; const method: shortstring;
+    class procedure Check(caller: TObject; const method: ShortString;
       res: integer; errormsg: PRawUtf8 = nil; ssl: pointer = nil); overload;
       {$ifdef HASINLINE} inline; {$endif}
       /// if res <> OPENSSLSUCCESS, raise the exception with some detailed message
-    class procedure Check(res: integer; const method: shortstring = '';
+    class procedure Check(res: integer; const method: ShortString = '';
       ssl: pointer = nil); overload;
       {$ifdef HASINLINE} inline; {$endif}
     /// raise the exception if OpenSslIsAvailable if false
-    class procedure CheckAvailable(caller: TClass; const method: shortstring);
+    class procedure CheckAvailable(caller: TClass; const method: ShortString);
       {$ifdef HASINLINE} inline; {$endif}
   published
     /// the last error code from OpenSSL, after Check() failure
@@ -128,15 +140,15 @@ const
   {$ifdef OSWINDOWS}
     {$ifdef CPU32}
     LIB_CRYPTO1 = 'libcrypto-1_1.dll';
-    LIB_SSL1 = 'libssl-1_1.dll';
+    LIB_SSL1    = 'libssl-1_1.dll';
     LIB_CRYPTO3 = 'libcrypto-3.dll';
-    LIB_SSL3 = 'libssl-3.dll';
+    LIB_SSL3    = 'libssl-3.dll';
     _PU = '';
     {$else}
     LIB_CRYPTO1 = 'libcrypto-1_1-x64.dll';
-    LIB_SSL1 = 'libssl-1_1-x64.dll';
+    LIB_SSL1    = 'libssl-1_1-x64.dll';
     LIB_CRYPTO3 = 'libcrypto-3-x64.dll';
-    LIB_SSL3 = 'libssl-3-x64.dll';
+    LIB_SSL3    = 'libssl-3-x64.dll';
     _PU = '';
     {$endif CPU32}
   {$else}
@@ -144,12 +156,12 @@ const
       {$define NOOPENSSL3} // unsupported yet
       {$ifdef CPU32}
       LIB_CRYPTO1 = 'libcrypto-android32.a';
-      LIB_SSL1 = 'libssl-android32.a';
+      LIB_SSL1    = 'libssl-android32.a';
       _PU = '';
       {$define OPENSSLSTATIC}
       {$else}
       LIB_CRYPTO1 = 'libcrypto-android64.a';
-      LIB_SSL1 = 'libssl-android64.a';
+      LIB_SSL1    = 'libssl-android64.a';
       _PU = '';
       {$define OPENSSLSTATIC}
       {$endif CPU32}
@@ -159,43 +171,45 @@ const
           // from https://github.com/grijjy/DelphiOpenSsl
           {$ifdef CPUX86}
           LIB_CRYPTO1 = 'libssl-merged-osx32.dylib';
-          LIB_SSL1 = 'libssl-merged-osx32.dylib';
+          LIB_SSL1    = 'libssl-merged-osx32.dylib';
           _PU = '_';
           {$endif CPUX86}
           {$ifdef CPUX64}
           LIB_CRYPTO1 = 'libssl-merged-osx64.dylib';
-          LIB_SSL1 = 'libssl-merged-osx64.dylib';
+          LIB_SSL1    = 'libssl-merged-osx64.dylib';
           _PU = '_';
           {$endif CPUX64}
           {$ifdef CPUX64_static}
           LIB_CRYPTO1 = 'libcrypto-osx64.a';
-          LIB_SSL1 = 'libssl-osx64.a';
+          LIB_SSL1    = 'libssl-osx64.a';
           _PU = '';
           {$define OPENSSLSTATIC}
           {$endif CPUX64_static}
         {$else}
           // regular OpenSSL 1.1 dylib - to be supplied
           LIB_CRYPTO1 = 'libcrypto.1.1.dylib'; // typically ARM64
-          LIB_SSL1 = 'libssl.1.1.dylib';
+          LIB_SSL1    = 'libssl.1.1.dylib';
           _PU = '';
         {$endif CPUINTEL}
         // regular OpenSSL 3 from https://synopse.info/files/OpenSSLMacX64.tgz
         // the system dylib fails as "xxx is loading libcrypto in an unsafe way"
-        // because Apple deprecates its OS lib since 10.7 days (2011) so we
-        // won't try to load plain libcrypto/libssl.dylib
+        // because Apple deprecates its OpenSSL API since 10.7 days (2011) in
+        // favor of its own "Cryptographic Services", so we won't try to load
+        // plain libcrypto/libssl.dylib but search for modern custom .dylib
         LIB_CRYPTO3 = 'libcrypto.3.dylib';
-        LIB_SSL3 = 'libssl.3.dylib';
+        LIB_SSL3    = 'libssl.3.dylib';
       {$else}
         {$ifdef OSLINUX}
         // specific versions on Linux
         LIB_CRYPTO1 = 'libcrypto.so.1.1';
-        LIB_SSL1 = 'libssl.so.1.1';
+        LIB_SSL1    = 'libssl.so.1.1';
         LIB_CRYPTO3 = 'libcrypto.so.3';
-        LIB_SSL3 = 'libssl.so.3';
-        {$else}
-        {$define NOOPENSSL3} // unsupported yet
-        LIB_CRYPTO1 = 'libcrypto.so'; // should redirect to 1.1
-        LIB_SSL1 = 'libssl.so';
+        LIB_SSL3    = 'libssl.so.3';
+        {$else} // not tested on OpenBSD/FreeBSD yet
+        LIB_CRYPTO1 = 'libcrypto.so'; // should redirect to 1.1 or 3
+        LIB_SSL1    = 'libssl.so';
+        LIB_CRYPTO3 = 'libcrypto.so.3';
+        LIB_SSL3    = 'libssl.so.3';
         {$endif OSLINUX}
         _PU = '';
       {$endif OSDARWIN}
@@ -242,10 +256,7 @@ const
 
 var
   /// internal flag used by OpenSslIsAvailable function for dynamic loading
-  openssl_initialized: (
-    osslUnTested,
-    osslAvailable,
-    osslNotAvailable);
+  openssl_initialized: TLibraryState;
 
   /// the error message triggerred by OpenSslIsAvailable when loading OpenSSL
   // - is replicated as a global variable to allow early initialization before
@@ -279,13 +290,15 @@ const
   {$endif NOOPENSSL3}
 
 /// return TRUE if OpenSSL 1.1 / 3.x library can be used
-// - will load and initialize it, calling OpenSslInitialize if necessary,
-// catching any exception during the process
-// - return always true if OPENSSLFULLAPI or OPENSSLSTATIC conditionals have
-// been defined, since they link the library at compile or startup time
+// - will load and initialize it, calling OpenSslInitialize if necessary with
+// the global/default search paths, catching any exception during the process
+// - always return true if OPENSSLFULLAPI or OPENSSLSTATIC conditionals are set
+// - on success, returns true and register OpenSSL for TLS support - but
+// you need to call explicitly RegisterOpenSsl to enable mormot.crypt.openssl
+// algorithms in mORMot high-level wrappers
 // - you should never call any OpenSSL function if false is returned
+// - this method is thread safe, using function LibraryAvailable/GlobalLock
 function OpenSslIsAvailable: boolean;
-  {$ifdef HASINLINE} inline; {$endif}
 
 /// return TRUE if OpenSSL 1.1 / 3.x library has been initialized
 // - don't try to load it if was not already done
@@ -301,7 +314,11 @@ function OpenSslIsLoaded: boolean;
 // then within the executable folder, and then in the system path
 // - do nothing if the library has already been loaded or if
 // OPENSSLFULLAPI or OPENSSLSTATIC conditionals have been defined
-// - you would typically call RegisterOpenSsl after this lower level function
+// - on success, returns true and register OpenSSL for TLS support - but
+// you need to call explicitly RegisterOpenSsl to enable mormot.crypt.openssl
+// algorithms in mORMot high-level wrappers
+// - this method is not thread safe and should be executed e.g. at startup or
+// within GlobalLock/GlobalUnlock - or via OpenSslIsAvailable wrapper
 function OpenSslInitialize(
    const libcryptoname: TFileName = '';
    const libsslname: TFileName = '';
@@ -354,6 +371,8 @@ const
   EVP_MD_FLAG_DIGALGID_CUSTOM = $0018;
   EVP_MD_FLAG_FIPS = $0400;
 
+  SN_pbe_WithSHA1And3_Key_TripleDES_CBC = 'PBE-SHA1-3DES';
+  NID_pbe_WithSHA1And3_Key_TripleDES_CBC = 146; // for old PKCS#12 nid_key
   SN_X9_62_prime192v1 = 'prime192v1';
   NID_X9_62_prime192v1 = 409;
   SN_X9_62_prime192v2 = 'prime192v2';
@@ -368,6 +387,7 @@ const
   NID_X9_62_prime239v3 = 414;
   SN_X9_62_prime256v1 = 'prime256v1';
   NID_X9_62_prime256v1 = 415; // = secp256r1
+  NID_aes_256_cbc = 427;
   NID_sha256 = 672;
   NID_sha384 = 673;
   NID_sha512 = 674;
@@ -1157,6 +1177,7 @@ type
   Pstack_st_X509 = POPENSSL_STACK;
   PPstack_st_X509 = ^Pstack_st_X509;
 
+  /// convenient wrapper to a PSSL instance
   SSL = object
   public
     function CurrentCipher: PSSL_CIPHER;
@@ -1170,11 +1191,13 @@ type
       {$ifdef HASINLINE} inline; {$endif}
   end;
 
+  /// convenient wrapper to a PSSL_CIPHER instance
   SSL_CIPHER = object
   public
     function Description: RawUtf8;
   end;
 
+  /// convenient wrapper to a PBIO instance
   BIO = object
   public
     function get_flags: integer;
@@ -1212,6 +1235,7 @@ type
   PSSL_SESSION = type pointer;
   PPSSL_SESSION = ^PSSL_SESSION;
 
+  /// convenient wrapper to a PSSL_CTX instance
   SSL_CTX = object
   public
     function SetCertificateFiles(const Cert, Key: TFileName;
@@ -1233,6 +1257,7 @@ type
   PEVP_CIPHER = type pointer;
   PPEVP_CIPHER = ^PEVP_CIPHER;
 
+  /// convenient wrapper to a PEVP_PKEY instance
   EVP_PKEY = object
   public
     function PrivateToDer(const PassWord: SpiUtf8): RawByteString;
@@ -1285,12 +1310,16 @@ type
   PENGINE = type pointer;
   PPENGINE = ^PENGINE;
 
+  POSSL_LIB_CTX = type pointer;
+  POSSL_PROVIDER = type pointer;
+
   PBIO_METHOD = type pointer;
   PPBIO_METHOD = ^PBIO_METHOD;
 
   OPENSSL_sk_compfunc = function(p1: pointer; p2: pointer): integer; cdecl;
   OPENSSL_sk_freefunc = procedure(p1: pointer); cdecl;
 
+  /// convenient wrapper to a POPENSSL_STACK instance
   OPENSSL_STACK = object
   private
     function GetItem(index: integer): pointer;
@@ -1304,7 +1333,7 @@ type
     function Extract(index: integer): pointer;
     /// low-level method needing an explicit result typecast e.g. to PX509DynArray
     function ToDynArray: TPointerDynArray;
-    /// note: instances should be released explicitely before or call e.g. FreeX509
+    /// note: instances should be released explicitly before or call e.g. FreeX509
     procedure Free;
     /// make PX509/_CRL/_EXTENSION.Free to all items, then free the stack
     procedure FreeX509;
@@ -1316,6 +1345,7 @@ type
 
   PBIGNUM = ^BIGNUM;
 
+  /// convenient wrapper to a PBIGNUM instance
   BIGNUM = object
   public
     function ToDecimal: RawUtf8;
@@ -1373,6 +1403,7 @@ type
   CRYPTO_EX_DATA = crypto_ex_data_st;
   PCRYPTO_EX_DATA = ^CRYPTO_EX_DATA;
 
+  /// convenient wrapper to a PASN1_STRING instance
   asn1_string_st = object
   public
     function Data: pointer;
@@ -1390,6 +1421,7 @@ type
   PASN1_STRING = ^ASN1_STRING;
   PPASN1_STRING = ^PASN1_STRING;
 
+  /// convenient wrapper to a PASN1_INTEGER instance
   ASN1_INTEGER = object(asn1_string_st)
   public
     function ToBigInt: PBIGNUM;
@@ -1399,6 +1431,7 @@ type
   PASN1_INTEGER = ^ASN1_INTEGER;
   PPASN1_INTEGER = ^PASN1_INTEGER;
 
+  /// convenient wrapper to a PASN1_OBJECT instance
   ASN1_OBJECT = object
   public
     function NID: integer;
@@ -1441,24 +1474,26 @@ type
   PASN1_VALUE = type pointer;
   PPASN1_VALUE = ^PASN1_VALUE;
 
+  /// convenient wrapper to a PASN1_TIME instance
   ASN1_TIME = object
   public
+    /// may return 0 if ASN1_TIME_to_tm() is not supported on oldest OpenSSL
     function ToDateTime: TDateTime;
   end;
   PASN1_TIME = ^ASN1_TIME;
 
   _anonymous_type_1 = record
     case integer of
-      0: (ptr: PUtf8Char);
-      1: (boolean: ASN1_BOOLEAN);
-      2: (asn1_string: PASN1_STRING);
-      3: (_object: PASN1_OBJECT);
-      4: (_integer: PASN1_INTEGER);
-      5: (enumerated: PASN1_ENUMERATED);
-      6: (bit_string: PASN1_BIT_STRING);
-      7: (octet_string: PASN1_OCTET_STRING);
-      8: (printablestring: PASN1_PRINTABLESTRING);
-      9: (t61string: PASN1_T61STRING);
+      0:  (ptr: PUtf8Char);
+      1:  (boolean: ASN1_BOOLEAN);
+      2:  (asn1_string: PASN1_STRING);
+      3:  (_object: PASN1_OBJECT);
+      4:  (_integer: PASN1_INTEGER);
+      5:  (enumerated: PASN1_ENUMERATED);
+      6:  (bit_string: PASN1_BIT_STRING);
+      7:  (octet_string: PASN1_OCTET_STRING);
+      8:  (printablestring: PASN1_PRINTABLESTRING);
+      9:  (t61string: PASN1_T61STRING);
       10: (ia5string: PASN1_IA5STRING);
       11: (generalstring: PASN1_GENERALSTRING);
       12: (bmpstring: PASN1_BMPSTRING);
@@ -1490,6 +1525,7 @@ type
 
   PX509_NAME = ^X509_NAME;
 
+  /// convenient wrapper to a PX509_REQ instance
   X509_REQ = object
   public
     function GetName: PX509_NAME;
@@ -1527,6 +1563,7 @@ type
   Pstack_st_CONF_VALUE = POPENSSL_STACK;
   Plhash_st_CONF_VALUE = POPENSSL_STACK;
 
+  /// convenient wrapper to a PX509V3_CONF_METHOD instance
   X509V3_CONF_METHOD = record
     get_string: function(db: pointer; section: PUtf8Char; value: PUtf8Char): PUtf8Char; cdecl;
     get_section: function(db: pointer; section: PUtf8Char): Pstack_st_CONF_VALUE; cdecl;
@@ -1537,6 +1574,7 @@ type
 
   PX509_NAME_ENTRY = ^X509_NAME_ENTRY;
 
+  /// convenient wrapper to a PX509_NAME instance
   X509_NAME = object
   public
     function Count: integer;
@@ -1560,6 +1598,7 @@ type
     function ToText: RawUtf8;
   end;
 
+  /// convenient wrapper to a PX509_NAME_ENTRY instance
   X509_NAME_ENTRY = object
   public
     function Data: PASN1_STRING;
@@ -1596,6 +1635,7 @@ type
   PBASIC_CONSTRAINTS = ^BASIC_CONSTRAINTS;
   PPBASIC_CONSTRAINTS = ^PBASIC_CONSTRAINTS;
 
+  /// convenient wrapper to a PX509_EXTENSION instance
   X509_EXTENSION = object
   public
     function BasicConstraintIsCA: boolean;
@@ -1608,6 +1648,7 @@ type
   PX509_EXTENSIONS = POPENSSL_STACK;
   PPX509_EXTENSIONS = ^PX509_EXTENSIONS;
 
+  /// high-level data structure to decode and store PX509_EXTENSION fields
   TX509_Extension = object
   public
     /// the low-level X509 extension instance
@@ -1626,6 +1667,7 @@ type
   end;
   TX509_Extensions = array of TX509_Extension;
 
+  /// convenient wrapper to a PX509_REVOKED instance
   X509_REVOKED = object
   public
     function SerialNumber: RawUtf8;
@@ -1637,6 +1679,7 @@ type
       {$ifdef HASINLINE} inline; {$endif}
   end;
 
+  /// convenient wrapper to a PX509_CRL instance
   X509_CRL = object
   public
     function Version: integer;
@@ -1679,6 +1722,7 @@ type
 
   X509_STORE_CTX_verify_cb = function(p1: integer; p2: PX509_STORE_CTX): integer; cdecl;
 
+  /// convenient wrapper to a PX509_STORE instance
   X509_STORE = object
   public
     function CertificateCount: integer;
@@ -1699,8 +1743,9 @@ type
     function IsRevoked(const serial: RawUtf8): integer; overload;
     function IsRevoked(serial: PASN1_INTEGER): integer; overload;
     function SetDefaultPaths: boolean;
-    // both methods will increase the certificate/CRL refcount
+    // those methods will increase the certificate/CRL refcount
     function AddCertificate(x: PX509): boolean;
+    function AddCertificates(const x: PX509DynArray): boolean;
     function AddCrl(c: PX509_CRL): boolean;
     // try binary DER serialization of X509 Certificate or CRL
     function AddFromBinary(const Der: RawByteString): RawUtf8;
@@ -1727,6 +1772,7 @@ type
       {$ifdef HASINLINE} inline; {$endif}
   end;
 
+  /// convenient wrapper to a PX509_STORE_CTX instance
   X509_STORE_CTX = object
   public
     function CurrentCert: PX509;
@@ -1751,10 +1797,16 @@ type
 
   PX509_VAL = type pointer;
 
-
   PX509V3_CTX = ^v3_ext_ctx;
 
-  /// wrapper to the PX509 abstract pointer
+  /// used by X509.ToPkcs12Ex() method and OpenSslDefaultPkcs12 global variable
+  TX509Pkcs12Format = (
+   p12Default,
+   p12Legacy,
+   p12New,
+   p12PrefixDisabled);
+
+  /// convenient wrapper to a PX509 instance
   X509 = object
   public
     function GetSerial: PASN1_INTEGER;
@@ -1870,11 +1922,24 @@ type
     /// serialize the certificate as PEM text
     function ToPem: RawUtf8;
     /// serialize the certificate and associated private key as PKCS12 raw binary
-    // - nid_key/nid_cert could be retrieved from OBJ_txt2nid()
+    // - warning: default algorithm changed to AES-256-CBC with OpenSSL 3
+    // https://github.com/openssl/openssl/commit/762970bd686c4aa
+    // - see also ToPkcs12Ex() - as used by TCryptCertOpenSsl.Save()
     function ToPkcs12(pkey: PEVP_PKEY; const password: SpiUtf8;
       CA: Pstack_st_X509 = nil; nid_key: integer = 0; nid_cert: integer = 0;
-      iter: integer = 0; mac_iter: integer = 0;
-      const FriendlyName: RawUtf8 = ''): RawByteString;
+      iter: integer = 0; mac_iter: integer = 0; md_type: PEVP_MD = nil;
+      const FriendlyName: RawUtf8 = ''): RawByteString; overload;
+    /// serialize the certificate and associated private key as PKCS12 raw binary
+    // - can specify the actual output format
+    function ToPkcs12(pkey: PEVP_PKEY; const password: SpiUtf8;
+      format: TX509Pkcs12Format): RawByteString; overload;
+    /// serialize the certificate and associated private key as PKCS12 raw binary
+    // - this method will recognize '3des=' (PKCS12_3DES_PREFIX) and 'aes='
+    // (PKCS12_AES_PREFIX) prefixes to the password text (which will be trimmed),
+    // to force either legacy SHA1-3DES or new AES-256-CBC algorithm
+    // - will use OpenSslDefaultPkcs12 global variable format by default
+    // - as used by TCryptCertOpenSsl.Save() with cccCertWithPrivateKey and ccfBinary
+    function ToPkcs12Ex(pkey: PEVP_PKEY; const password: SpiUtf8): RawByteString;
     /// increment the X509 reference count to avoid premature release
     function Acquire: integer;
     /// sign this Certificate with the supplied private key and algorithm
@@ -1894,7 +1959,7 @@ type
   Pstack_st_PKCS12_SAFEBAG = POPENSSL_STACK;
   PPstack_st_PKCS12_SAFEBAG = ^Pstack_st_PKCS12_SAFEBAG;
 
-  /// wrapper to the PKCS12 abstract pointer
+  /// convenient wrapper to a PPKCS12 instance
   PKCS12 = object
   public
     /// parse and extract the private key, certificate and CAs in this PKCS12 store
@@ -1942,7 +2007,7 @@ type
 
   // minimal C-like definitions to mimic unixtype FPC unit on Windows
   clong = PtrInt;
-  time_t = PtrInt;
+  time_t = PtrInt; // may suffer Year2038 issue on CPU32 - not used in practice
   ptime_t = ^time_t;
 
   timeval = record
@@ -1967,6 +2032,17 @@ type
   PCRYPTO_EX_free = procedure(parent: pointer; ptr: pointer; ad: PCRYPTO_EX_DATA; idx: integer; argl: integer; argp: pointer); cdecl;
   PCRYPTO_EX_dup = function(_to: PCRYPTO_EX_DATA; from: PCRYPTO_EX_DATA; from_d: pointer; idx: integer; argl: integer; argp: pointer): integer; cdecl;
 
+const
+  /// password prefix recognized by X509.ToPkcs12Ex() to force legacy PBE-SHA1-3DES
+  PKCS12_3DES_PREFIX = '3des=';
+  /// password prefix recognized by X509.ToPkcs12Ex() to force new AES-256-CBC
+  PKCS12_AES_PREFIX = 'aes=';
+
+var
+  /// globally set a specific algorithm for X509.ToPkcs12Ex() binary persistence
+  // - see also TCryptCertOpenSsl.Save() with cccCertWithPrivateKey and ccfBinary
+  // - could also disable password prefix recognition with p12PrefixDisabled
+  OpenSslDefaultPkcs12: TX509Pkcs12Format;
 
 
 { ******************** OpenSSL Library Functions }
@@ -2275,6 +2351,8 @@ function PKCS12_new(): PPKCS12; cdecl;
 procedure PKCS12_free(a: PPKCS12); cdecl;
 function PKCS12_create(pass: PUtf8Char; name: PUtf8Char; pkey: PEVP_PKEY; cert: PX509;
   ca: Pstack_st_X509; nid_key, nid_cert, iter, mac_iter, keytype: integer): PPKCS12; cdecl;
+function PKCS12_set_mac(p12: PPKCS12; pass: PUtf8Char; passlen: integer;
+  salt: PByte; saltlen: integer; iter: integer; md_type: PEVP_MD): integer; cdecl;
 function PKCS12_add_cert(pbags: PPstack_st_PKCS12_SAFEBAG; cert: PX509): PPKCS12_SAFEBAG; cdecl;
 function PKCS12_add_key(pbags: PPstack_st_PKCS12_SAFEBAG; key: PEVP_PKEY; key_usage: integer;
   iter: integer; key_nid: integer; pass: PUtf8Char): PPKCS12_SAFEBAG; cdecl;
@@ -2338,12 +2416,14 @@ function d2i_PrivateKey_bio(bp: PBIO; a: PPEVP_PKEY): PEVP_PKEY; cdecl;
 function i2d_PUBKEY_bio(bp: PBIO; pkey: PEVP_PKEY): integer; cdecl;
 function d2i_PUBKEY_bio(bp: PBIO; a: PPEVP_PKEY): PEVP_PKEY; cdecl;
 function RAND_bytes(buf: PByte; num: integer): integer; cdecl;
+procedure RAND_seed(buf: pointer; num: integer); cdecl;
 function EVP_get_cipherbyname(name: PUtf8Char): PEVP_CIPHER; cdecl;
 function EVP_get_digestbyname(name: PUtf8Char): PEVP_MD; cdecl;
 function EVP_CIPHER_CTX_new(): PEVP_CIPHER_CTX; cdecl;
 function EVP_CIPHER_CTX_reset(c: PEVP_CIPHER_CTX): integer; cdecl;
 procedure EVP_CIPHER_CTX_free(c: PEVP_CIPHER_CTX); cdecl;
 function EVP_CIPHER_CTX_copy(_out: PEVP_CIPHER_CTX; _in: PEVP_CIPHER_CTX): integer; cdecl;
+function EVP_CIPHER_CTX_set_key_length(x: PEVP_CIPHER_CTX; keylen: integer): integer; cdecl;
 function EVP_CIPHER_CTX_ctrl(ctx: PEVP_CIPHER_CTX; typ: integer;
   arg: integer; ptr: pointer): integer; cdecl;
 function EVP_CipherInit_ex(ctx: PEVP_CIPHER_CTX; cipher: PEVP_CIPHER;
@@ -2442,9 +2522,13 @@ function i2d_PKCS8PrivateKey_bio(bp: PBIO; x: PEVP_PKEY; enc: PEVP_CIPHER;
 function d2i_PKCS8PrivateKey_bio(bp: PBIO; x: PPEVP_PKEY;
   cb: Ppem_password_cb; u: pointer): PEVP_PKEY; cdecl;
 function EVP_aes_256_cbc(): PEVP_CIPHER; cdecl;
+function EVP_bf_cbc(): PEVP_CIPHER; cdecl;
 function PEM_write_bio_PUBKEY(bp: PBIO; x: PEVP_PKEY): integer; cdecl;
 function OpenSSL_version_num(): cardinal; cdecl;
 function OpenSSL_version(typ: integer): PUtf8Char; cdecl;
+function OSSL_PROVIDER_load(libctx: POSSL_LIB_CTX; name: PAnsiChar): POSSL_PROVIDER; cdecl;
+function OSSL_PROVIDER_set_default_search_path(libctx: POSSL_LIB_CTX; path: PAnsiChar): integer; cdecl;
+function OSSL_PROVIDER_available(libctx: POSSL_LIB_CTX; name: PAnsiChar): integer; cdecl;
 function X509_print(bp: PBIO; x: PX509): integer; cdecl;
 
 
@@ -2521,15 +2605,16 @@ function Digest(md: PEVP_MD; const buf: RawByteString): RawUtf8; overload;
 /// load a private key from a PEM or DER buffer, optionally with a password
 // - try first with PEM text format, then will fallback to DER binary (as raw,
 // PKCS#8 or PKCS#12 format)
+// - can also extract the certificate stored with the key in PKCS12/.PFX format
 // - caller should make result.Free once done with the result
 function LoadPrivateKey(PrivateKey: pointer; PrivateKeyLen: integer;
-  const Password: SpiUtf8): PEVP_PKEY; overload;
+  const Password: SpiUtf8; Pkcs12Cert: PPX509 = nil): PEVP_PKEY; overload;
 
 /// load a private key from a PEM or DER content, optionally with a password
 // - just a wrapper to the overloaded LoadPrivateKey() function
 // - caller should make result.Free once done with the result
 function LoadPrivateKey(const Saved: RawByteString;
-  const Password: SpiUtf8 = ''): PEVP_PKEY; overload;
+  const Password: SpiUtf8 = ''; Pkcs12Cert: PPX509 = nil): PEVP_PKEY; overload;
 
 /// load a public key from a PEM or DER buffer, optionally with a password
 // - try first with PEM text format, then will fallback to DER binary
@@ -2560,8 +2645,7 @@ function NewCertificate: PX509;
 
 /// unserialize as a new X509 Certificate Instance
 // - from DER binary as serialized by X509.ToBinary, or PEM text format
-// - use LoadCertificate(PemToDer()) to load a PEM certificate
-function LoadCertificate(const Der: RawByteString): PX509;
+function LoadCertificate(const DerOrPem: RawByteString): PX509;
 
 /// unserialize as a new X509 CSR Instance
 // - from DER binary as serialized by X509_REQ.ToBinary, or PEM text format
@@ -2571,7 +2655,20 @@ function LoadCsr(const Der: RawByteString): PX509_REQ;
 /// unserialize one or several new X509 Certificate Instance(s) from PEM
 // - from PEM concatenated text content
 // - once done with the X509 instances, free them e.g. using PX509DynArrayFree()
-function LoadCertificates(const Pem: RawUtf8): PX509DynArray;
+function LoadCertificates(const Pem: RawUtf8; Max: integer = 0): PX509DynArray;
+
+/// retrieve the OS certificates store as PX509DynArray
+// - wrap LoadCertificates() over mormot.core.os.GetSystemStoreAsPem()
+// - an internal cache of PX509 instances is maintained
+function LoadCertificatesFromSystemStore(
+  CertStores: TSystemCertificateStores = [scsCA, scsRoot];
+  FlushCache: boolean = false; OnlySystemStore: boolean = false): PX509DynArray;
+
+/// retrieve all certificates of a given system store as PX509DynArray
+// - wrap LoadCertificates() over mormot.core.os.GetOneSystemStoreAsPem()
+// - an internal cache of PX509 instances is maintained
+function LoadCertificatesFromOneSystemStore(CertStore: TSystemCertificateStore;
+  FlushCache: boolean = false): PX509DynArray;
 
 /// create a new X509 Certificates Store Instance
 function NewCertificateStore: PX509_STORE;
@@ -2605,15 +2702,39 @@ function LoadCertificateRequest(const Der: RawByteString): PX509_REQ;
 /// create a new OpenSSL pointer Stack storage instance
 function NewOpenSslStack: POPENSSL_STACK;
 
-/// create a new OpenSSL PKCS12 structure instance with all given parameters
+/// create a new OpenSSL PKCS12/.PFX structure instance with all given parameters
 // - nid_key/nid_cert could be retrieved from OBJ_txt2nid()
 function NewPkcs12(const Password: SpiUtf8; PrivKey: PEVP_PKEY; Cert: PX509;
   CA: Pstack_st_X509 = nil; nid_key: integer = 0; nid_cert: integer = 0;
   iter: integer = 0; mac_iter: integer = 0;
   const FriendlyName: RawUtf8 = ''): PPKCS12;
 
-/// unserialize a new OpenSSL PKCS12 structure instance
+/// unserialize a new OpenSSL PKCS12/.PFX structure instance
 function LoadPkcs12(const Der: RawByteString): PPKCS12;
+
+/// unserialize a PKCS12/.PFX binary into its certificate and private key
+function ParsePkcs12(const Saved: RawByteString; const Password: SpiUtf8;
+  out Cert: PX509; out PrivateKey: PEVP_PKEY): boolean;
+
+type
+  /// a convenient PX509 array wrapper to leverage mormot.core.os.pas PEM cache
+  {$ifdef USERECORDWITHMETHODS}
+  TX509Cache = record
+  {$else}
+  TX509Cache = object
+  {$endif USERECORDWITHMETHODS}
+  private
+    fSafe: TLightLock; // to ensure Cache() is thread-safe
+    fPem: RawUtf8;
+    fX509: PX509DynArray;
+  public
+    /// fill res[] from pem content, using an internal cache of last instances
+    // - a faster alternative to res := LoadCertificates(pem)
+    procedure Cache(const pem: RawUtf8; out res: PX509DynArray);
+    /// should eventually be called to release the stored PX509 instances
+    procedure Done;
+      {$ifdef HASINLINE} inline; {$endif}
+  end;
 
 
 { ************** TLS / HTTPS Encryption Layer using OpenSSL for TCrtSocket }
@@ -2626,8 +2747,7 @@ type
 /// OpenSSL TLS layer communication factory - as expected by mormot.net.sock.pas
 // - on non-Windows systems, this unit initialization will register OpenSSL for TLS
 // - on Windows systems, SChannel will be kept as default so you would need to
-// set the FORCE_OPENSSL conditional, or register OpenSSL for TLS mannually:
-// ! @NewNetTls := @NewOpenSslNetTls;
+// set the FORCE_OPENSSL conditional, or call OpenSslInitialize() explicitly
 function NewOpenSslNetTls: INetTls;
 
 var
@@ -2649,7 +2769,103 @@ function GetPeerCertInfoFromUrl(const url: RawUtf8): RawUtf8;
 
 implementation
 
-{ ******************** Minimal Dynamically linked OpenSSL Library }
+
+{ ******************** Dynamic or Static OpenSSL Library Loading }
+
+{ EOpenSsl }
+
+class procedure EOpenSsl.Check(caller: TObject; const method: ShortString;
+  res: integer; errormsg: PRawUtf8; ssl: pointer);
+begin
+  if res <> OPENSSLSUCCESS then
+    CheckFailed(caller, method, errormsg, ssl, res);
+end;
+
+class procedure EOpenSsl.Check(res: integer; const method: ShortString;
+  ssl: pointer);
+begin
+  if res <> OPENSSLSUCCESS then
+    CheckFailed(nil, method, nil, ssl, res);
+end;
+
+class procedure EOpenSsl.CheckFailed(caller: TObject; const method: ShortString;
+  errormsg: PRawUtf8; ssl: pointer; sslretcode: integer; const context: RawUtf8);
+var
+  res: integer;
+  msg: RawUtf8;
+  exc: EOpenSsl;
+begin
+  if ssl = nil then
+  begin
+    // generic OpenSSL error (e.g. within cryptography context)
+    res := ERR_get_error;    // unqueue earliest error code, or 0 if no more
+    OpenSSL_error(res, msg); // get corresponding text from library
+  end
+  else
+  begin
+    // specific error within the context of ssl_*() methods
+    res := SSL_get_error(ssl, sslretcode);
+    SSL_get_error_text(res, msg); // recognize SSL_ERROR_* constant and more
+    PSSL(ssl).IsVerified(@msg); // append cert verif error text to msg if needed
+  end;
+  if errormsg <> nil then
+  begin
+    if errormsg^ <> '' then // caller may have set additional information
+      msg := Join([msg, errormsg^]);
+    errormsg^ := msg;
+  end;
+  if context <> '' then
+    msg := Join([msg, ' ', context]);
+  if caller = nil then
+    exc := CreateFmt('OpenSSL %s error %d [%s]', [OpenSslVersionHexa, res, msg])
+  else
+    exc := CreateFmt('%s.%s: OpenSSL %s error %d [%s]',
+      [ClassNameShort(caller)^, method, OpenSslVersionHexa, res, msg]);
+  exc.fLastError := res;
+  raise exc;
+end;
+
+{$ifdef OPENSSLSTATIC} // OpenSSL is always available when statically linked
+
+class procedure EOpenSsl.TryNotAvailable(caller: TClass; const method: ShortString);
+begin
+end;
+
+class procedure EOpenSsl.CheckAvailable(caller: TClass; const method: ShortString);
+begin
+end;
+
+{$else}
+
+class procedure EOpenSsl.TryNotAvailable(caller: TClass; const method: ShortString);
+var
+  name: ShortString;
+begin
+  if OpenSslIsAvailable then
+    exit;
+  if caller = nil then
+    name := method
+  else
+    name := ClassNameShort(caller)^ + '.' + method;
+  raise CreateFmt('%s: OpenSSL ' + LIB_TXT + ' not available [%s]',
+    [name, openssl_initialize_errormsg])
+end;
+
+class procedure EOpenSsl.CheckAvailable(caller: TClass; const method: ShortString);
+begin
+  if openssl_initialized <> lsAvailable then
+    TryNotAvailable(caller, method);
+end;
+
+{$endif OPENSSLSTATIC}
+
+class function EOpenSsl.GetOpenSsl: string;
+begin
+  result := OpenSslVersionHexa;
+end;
+
+
+{ ******************** Dynamically linked OpenSSL Library Functions }
 
 {$ifndef OPENSSLSTATIC}
 
@@ -2718,7 +2934,7 @@ type
   end;
 
 const
-  LIBSSL_ENTRIES: array[0..55] of RawUtf8 = (
+  LIBSSL_ENTRIES: array[0..56] of PAnsiChar = (
     'SSL_CTX_new',
     'SSL_CTX_free',
     'SSL_CTX_set_timeout',
@@ -2774,7 +2990,8 @@ const
     'SSL_get_verify_result',
     'SSL_set_hostflags',
     'SSL_set1_host',
-    'SSL_add1_host');
+    'SSL_add1_host',
+    nil);
 
 var
   libssl: TLibSsl;
@@ -3280,6 +3497,7 @@ type
     PKCS12_new: function(): PPKCS12; cdecl;
     PKCS12_free: procedure(a: PPKCS12); cdecl;
     PKCS12_create: function(pass: PUtf8Char; name: PUtf8Char; pkey: PEVP_PKEY; cert: PX509; ca: Pstack_st_X509; nid_key: integer; nid_cert: integer; iter: integer; mac_iter: integer; keytype: integer): PPKCS12; cdecl;
+    PKCS12_set_mac: function(p12: PPKCS12; pass: PUtf8Char; passlen: integer; salt: PByte; saltlen: integer; iter: integer; md_type: PEVP_MD): integer; cdecl;
     PKCS12_add_cert: function(pbags: PPstack_st_PKCS12_SAFEBAG; cert: PX509): PPKCS12_SAFEBAG; cdecl;
     PKCS12_add_key: function(pbags: PPstack_st_PKCS12_SAFEBAG; key: PEVP_PKEY; key_usage: integer; iter: integer; key_nid: integer; pass: PUtf8Char): PPKCS12_SAFEBAG; cdecl;
     i2d_PKCS12_bio: function(bp: PBIO; p12: PPKCS12): integer; cdecl;
@@ -3326,12 +3544,14 @@ type
     i2d_PUBKEY_bio: function(bp: PBIO; pkey: PEVP_PKEY): integer; cdecl;
     d2i_PUBKEY_bio: function(bp: PBIO; a: PPEVP_PKEY): PEVP_PKEY; cdecl;
     RAND_bytes: function(buf: PByte; num: integer): integer; cdecl;
+    RAND_seed: procedure(buf: pointer; num: integer); cdecl;
     EVP_get_cipherbyname: function(name: PUtf8Char): PEVP_CIPHER; cdecl;
     EVP_get_digestbyname: function(name: PUtf8Char): PEVP_MD; cdecl;
     EVP_CIPHER_CTX_new: function(): PEVP_CIPHER_CTX; cdecl;
     EVP_CIPHER_CTX_reset: function(c: PEVP_CIPHER_CTX): integer; cdecl;
     EVP_CIPHER_CTX_free: procedure(c: PEVP_CIPHER_CTX); cdecl;
     EVP_CIPHER_CTX_copy: function(_out: PEVP_CIPHER_CTX; _in: PEVP_CIPHER_CTX): integer; cdecl;
+    EVP_CIPHER_CTX_set_key_length: function(x: PEVP_CIPHER_CTX; keylen: integer): integer; cdecl;
     EVP_CIPHER_CTX_ctrl: function(ctx: PEVP_CIPHER_CTX; typ: integer; arg: integer; ptr: pointer): integer; cdecl;
     EVP_CipherInit_ex: function(ctx: PEVP_CIPHER_CTX; cipher: PEVP_CIPHER; impl: PENGINE; key: PByte; iv: PByte; enc: integer): integer; cdecl;
     EVP_CipherInit_ex2: function(ctx: PEVP_CIPHER_CTX; cipher: PEVP_CIPHER;
@@ -3413,15 +3633,19 @@ type
     i2d_PKCS8PrivateKey_bio: function(bp: PBIO; x: PEVP_PKEY; enc: PEVP_CIPHER; kstr: PUtf8Char; klen: integer; cb: Ppem_password_cb; u: pointer): integer; cdecl;
     d2i_PKCS8PrivateKey_bio: function(bp: PBIO; x: PPEVP_PKEY; cb: Ppem_password_cb; u: pointer): PEVP_PKEY; cdecl;
     EVP_aes_256_cbc: function(): PEVP_CIPHER; cdecl;
+    EVP_bf_cbc: function(): PEVP_CIPHER; cdecl;
     PEM_write_bio_PUBKEY: function(bp: PBIO; x: PEVP_PKEY): integer; cdecl;
     OpenSSL_version_num: function(): cardinal; cdecl;
     OpenSSL_version: function(typ: integer): PUtf8Char; cdecl;
+    OSSL_PROVIDER_load: function(libctx: POSSL_LIB_CTX; name: PAnsiChar): POSSL_PROVIDER; cdecl;
+    OSSL_PROVIDER_set_default_search_path: function(libctx: POSSL_LIB_CTX; path: PAnsiChar): integer; cdecl;
+    OSSL_PROVIDER_available: function(libctx: POSSL_LIB_CTX; name: PAnsiChar): integer; cdecl;
     // expected to be the last entry in OpenSslInitialize() below
     X509_print: function(bp: PBIO; x: PX509): integer; cdecl;
   end;
 
 const
-  LIBCRYPTO_ENTRIES: array[0..335] of RawUtf8 = (
+  LIBCRYPTO_ENTRIES: array[0..343] of PAnsiChar = (
     'CRYPTO_malloc',
     'CRYPTO_set_mem_functions',
     'CRYPTO_free',
@@ -3622,6 +3846,7 @@ const
     'PKCS12_new',
     'PKCS12_free',
     'PKCS12_create',
+    'PKCS12_set_mac',
     'PKCS12_add_cert',
     'PKCS12_add_key',
     'i2d_PKCS12_bio',
@@ -3668,12 +3893,14 @@ const
     'i2d_PUBKEY_bio',
     'd2i_PUBKEY_bio',
     'RAND_bytes',
+    'RAND_seed',
     'EVP_get_cipherbyname',
     'EVP_get_digestbyname',
     'EVP_CIPHER_CTX_new',
     'EVP_CIPHER_CTX_reset',
     'EVP_CIPHER_CTX_free',
     'EVP_CIPHER_CTX_copy',
+    'EVP_CIPHER_CTX_set_key_length',
     'EVP_CIPHER_CTX_ctrl',
     'EVP_CipherInit_ex',
     '?EVP_CipherInit_ex2',    // OpenSSL 3.0 only
@@ -3754,10 +3981,15 @@ const
     'i2d_PKCS8PrivateKey_bio',
     'd2i_PKCS8PrivateKey_bio',
     'EVP_aes_256_cbc',
+    'EVP_bf_cbc',
     'PEM_write_bio_PUBKEY',
     'OpenSSL_version_num',
     'OpenSSL_version',
-    'X509_print');
+    '?OSSL_PROVIDER_load',                    // OpenSSL 3 only
+    '?OSSL_PROVIDER_set_default_search_path', // OpenSSL 3 only
+    '?OSSL_PROVIDER_available',               // OpenSSL 3 only
+    'X509_print',
+    nil);
 
 var
   libcrypto: TLibCrypto;
@@ -3778,7 +4010,8 @@ begin
   libcrypto.CRYPTO_free(ptr, _file, line);
 end;
 
-function CRYPTO_get_ex_new_index(class_index: integer; argl: integer; argp: pointer; new_func: PCRYPTO_EX_new; dup_func: PCRYPTO_EX_dup; free_func: PCRYPTO_EX_free): integer; cdecl;
+function CRYPTO_get_ex_new_index(class_index: integer; argl: integer; argp: pointer;
+  new_func: PCRYPTO_EX_new; dup_func: PCRYPTO_EX_dup; free_func: PCRYPTO_EX_free): integer; cdecl;
 begin
   result := libcrypto.CRYPTO_get_ex_new_index(
     class_index, argl, argp, new_func, dup_func, free_func);
@@ -4810,6 +5043,12 @@ begin
     pass, name, pkey, cert, ca, nid_key, nid_cert, iter, mac_iter, keytype);
 end;
 
+function PKCS12_set_mac(p12: PPKCS12; pass: PUtf8Char; passlen: integer;
+  salt: PByte; saltlen: integer; iter: integer; md_type: PEVP_MD): integer;
+begin
+  result := libcrypto.PKCS12_set_mac(p12, pass, passlen, salt, saltlen, iter, md_type);
+end;
+
 function PKCS12_add_cert(pbags: PPstack_st_PKCS12_SAFEBAG; cert: PX509): PPKCS12_SAFEBAG;
 begin
   result := libcrypto.PKCS12_add_cert(pbags, cert);
@@ -5064,6 +5303,11 @@ begin
   result := libcrypto.RAND_bytes(buf, num);
 end;
 
+procedure RAND_seed(buf: pointer; num: integer);
+begin
+  libcrypto.RAND_seed(buf, num);
+end;
+
 function EVP_get_cipherbyname(name: PUtf8Char): PEVP_CIPHER;
 begin
   result := libcrypto.EVP_get_cipherbyname(name);
@@ -5092,6 +5336,11 @@ end;
 function EVP_CIPHER_CTX_copy(_out: PEVP_CIPHER_CTX; _in: PEVP_CIPHER_CTX): integer;
 begin
   result := libcrypto.EVP_CIPHER_CTX_copy(_out, _in);
+end;
+
+function EVP_CIPHER_CTX_set_key_length(x: PEVP_CIPHER_CTX; keylen: integer): integer;
+begin
+  result := libcrypto.EVP_CIPHER_CTX_set_key_length(x, keylen);
 end;
 
 function EVP_CIPHER_CTX_ctrl(ctx: PEVP_CIPHER_CTX; typ: integer; arg: integer;
@@ -5520,6 +5769,11 @@ begin
   result := libcrypto.EVP_aes_256_cbc();
 end;
 
+function EVP_bf_cbc(): PEVP_CIPHER;
+begin
+  result := libcrypto.EVP_bf_cbc();
+end;
+
 function PEM_write_bio_PUBKEY(bp: PBIO; x: PEVP_PKEY): integer;
 begin
   result := libcrypto.PEM_write_bio_PUBKEY(bp, x);
@@ -5533,6 +5787,30 @@ end;
 function OpenSSL_version(typ: integer): PUtf8Char;
 begin
   result := libcrypto.OpenSSL_version(typ);
+end;
+
+function OSSL_PROVIDER_load(libctx: POSSL_LIB_CTX; name: PAnsiChar): POSSL_PROVIDER;
+begin
+  if Assigned(libcrypto.OSSL_PROVIDER_load) then
+    result := libcrypto.OSSL_PROVIDER_load(libctx, name)
+  else
+    result := nil; // unsupported
+end;
+
+function OSSL_PROVIDER_set_default_search_path(libctx: POSSL_LIB_CTX; path: PAnsiChar): integer;
+begin
+  if Assigned(libcrypto.OSSL_PROVIDER_set_default_search_path) then
+    result := libcrypto.OSSL_PROVIDER_set_default_search_path(libctx, path)
+  else
+    result := 0; // unsupported in openssl 1.1 - 0 indicates an OpenSSL error
+end;
+
+function OSSL_PROVIDER_available(libctx: POSSL_LIB_CTX; name: PAnsiChar): integer;
+begin
+  if Assigned(libcrypto.OSSL_PROVIDER_available) then
+    result := libcrypto.OSSL_PROVIDER_available(libctx, name)
+  else
+    result := 0; // unsupported in openssl 1.1 - 0 indicates an OpenSSL error
 end;
 
 function X509_print(bp: PBIO; x: PX509): integer;
@@ -5594,43 +5872,38 @@ end;
 
 {$endif OPENSSLUSERTLMM}
 
+procedure _OpenSslInitialize;
+begin
+  OpenSslInitialize; // try loading OpenSSL with default parameters
+end;
+
 function OpenSslIsAvailable: boolean;
 begin
-  case openssl_initialized of
-    osslUnTested:
-      result := OpenSslInitialize;
-    osslAvailable:
-      result := true;
-  else
-    result := false;
-  end;
+  result := LibraryAvailable(openssl_initialized, _OpenSslInitialize);
 end;
 
 function OpenSslIsLoaded: boolean;
 begin
-  result := openssl_initialized = osslAvailable;
+  result := openssl_initialized = lsAvailable;
 end;
 
 function OpenSslInitialize(const libcryptoname, libsslname: TFileName;
   const libprefix: RawUtf8): boolean;
 var
-  P: PPointerArray;
-  api: PtrInt;
-  libenv, libsys1, libsys3, libexe1, libexe3: TFileName;
+  error: string;
+  libenv, libsys1, libsys3, libexe1, libexe3, libpath, libexact, libname: TFileName;
 begin
-  result := true;
-  if openssl_initialized = osslAvailable then
-    // set it once, but allow to retry with specific alternate libnames
-    exit;
-  GlobalLock;
+  // not thread-safe: use manual GlobalLock/GlobalUnLock or OpenSslIsAvailable
+  result := openssl_initialized = lsAvailable;
+  if not result then // set it once, but can retry with specific alternate libnames
   try
     // paranoid thread-safe double check
-    if openssl_initialized = osslAvailable then
+    if openssl_initialized = lsAvailable then
       exit;
     // read and validate OPENSSL_LIBPATH environment variable
-    libenv := GetEnvironmentVariable('OPENSSL_LIBPATH');
+    libenv := OpenSslDefaultPath; // priority to the global variable
     if libenv = '' then
-      libenv := OpenSslDefaultPath;
+      libenv := GetEnvironmentVariable('OPENSSL_LIBPATH');
     if libenv <> '' then
       if DirectoryExists(libenv) then
         libenv := IncludeTrailingPathDelimiter(libenv)
@@ -5638,9 +5911,9 @@ begin
         libenv := ''; // search anywhere within system path
     // initialize library loaders
     libcrypto := TLibCrypto.Create;
-    libssl := TLibSsl.Create;
+    libssl    := TLibSsl.Create;
     try
-      // attempt to load libcrypto
+      // try to guess the potential libcrypto library names
       if libcryptoname = '' then
       begin
         {$ifndef NOOPENSSL1}
@@ -5656,7 +5929,8 @@ begin
         libsys3 := libenv + LIB_CRYPTO3;
         {$endif NOOPENSSL3}
       end;
-      libcrypto.TryLoadLibrary([
+      // attempt to load libcrypto
+      if not libcrypto.TryLoadResolve([
         // first try the exact supplied crypto library name
         libcryptoname,
         // try with the global variable
@@ -5669,93 +5943,81 @@ begin
         libsys1
         {$ifdef OSPOSIX}
         {$ifndef OSDARWIN}
-        // generic library name on most UNIX
+        // generic library name on most UNIX (but MacOS)
         , 'libcrypto.so'
         {$endif OSDARWIN}
         {$endif OSPOSIX}
-        ], EOpenSsl);
-      P := @@libcrypto.CRYPTO_malloc;
-      for api := low(LIBCRYPTO_ENTRIES) to high(LIBCRYPTO_ENTRIES) do
-        libcrypto.Resolve(libprefix, LIBCRYPTO_ENTRIES[api], @P[api], EOpenSsl);
-      if not Assigned(libcrypto.X509_print) then // last known entry
+        ], libprefix, @LIBCRYPTO_ENTRIES, @@libcrypto.CRYPTO_malloc, nil, @error) then
+        exit; // silent failure on missing library or entry
+      // validate the loaded libcrypto
+      if not Assigned(libcrypto.X509_print) then // last known entry (paranoid)
         raise EOpenSsl.Create('OpenSslInitialize: incorrect libcrypto API');
-      // attempt to load libssl
-      if libsslname = '' then
+      OpenSslVersion := libcrypto.OpenSSL_version_num;
+      OpenSslVersionHexa := IntToHex(OpenSslVersion, 8);
+      OpenSslVersionText := RawUtf8(libcrypto.OpenSSL_version(OPENSSL_VERSION_));
+      if OpenSslVersion and $ffffff00 < LIB_MIN then // paranoid check
       begin
-        {$ifndef NOOPENSSL1}
-        libexe1 := Executable.ProgramFilePath + LIB_SSL1;
-        if not FileExists(libexe1) then
-          libexe1 := '';
-        libsys1 := libenv + LIB_SSL1;
-        {$endif NOOPENSSL1}
-        {$ifndef NOOPENSSL3}
-        libexe3 := Executable.ProgramFilePath + LIB_SSL3;
-        if not FileExists(libexe3) then
-          libexe3 := '';
-        libsys3 := libenv + LIB_SSL3;
-        {$endif NOOPENSSL3}
+        error := Format('Incorrect %s version in %s - expects ' + LIB_TXT,
+          [OpenSslVersionText, libcrypto.LibraryPath]);
+        exit;
       end;
-      libssl.TryLoadLibrary([
+      // guess libssl names of the same version or name pattern from libcrypto
+      libpath := ExtractFilePath(libcrypto.LibraryPath);
+      if OpenSslVersion < OPENSSL3_VERNUM then
+        libexact := libpath + LIB_SSL1
+      else
+        libexact := libpath + LIB_SSL3;
+      libname := libpath + StringReplace(ExtractFileName(libcrypto.LibraryPath),
+        'libcrypto', 'libssl', [rfReplaceAll {$ifdef OSWINDOWS}, rfIgnoreCase{$endif}]);
+      // attempt to load libssl
+      if not libssl.TryLoadResolve([
         // first try the exact supplied ssl library name
         libsslname,
         // try with the global variable
         OpenSslDefaultSsl,
-        // try from executable folder
-        libexe3,
-        libexe1,
-        // try the library from OPENSSL_LIBPATH or somewhere in the system
-        libsys3,
-        libsys1
-        {$ifndef OSDARWIN}
+        // try same version and/or name in the libcrypto folder
+        libexact,
+        libname
         {$ifdef OSPOSIX}
-          // generic library name on most UNIX
-          , 'libssl.so'
-        {$endif OSPOSIX}
+        {$ifndef OSDARWIN}
+        // generic library name on most UNIX
+        , 'libssl.so'
         {$endif OSDARWIN}
-        ], EOpenSsl);
-      P := @@libssl.SSL_CTX_new;
-      for api := low(LIBSSL_ENTRIES) to high(LIBSSL_ENTRIES) do
-        libssl.Resolve(libprefix, LIBSSL_ENTRIES[api], @P[api], EOpenSsl);
-      if not Assigned(libssl.SSL_add1_host) then // last known entry
+        {$endif OSPOSIX}
+        ], libprefix, @LIBSSL_ENTRIES, @@libssl.SSL_CTX_new, nil, @error) then
+        exit; // silent failure on missing library or entry
+      if not Assigned(libssl.SSL_add1_host) then // last known entry (paranoid)
         raise EOpenSsl.Create('OpenSslInitialize: incorrect libssl API');
       // nothing is to be initialized with OpenSSL 1.1.*
       {$ifdef OPENSSLUSERTLMM}
       if libcrypto.CRYPTO_set_mem_functions(@rtl_malloc, @rtl_realloc, @rtl_free) = 0 then
         raise EOpenSsl.Create('CRYPTO_set_mem_functions() failure');
       {$endif OPENSSLUSERTLMM}
-      OpenSslVersion := libcrypto.OpenSSL_version_num;
-      OpenSslVersionHexa := IntToHex(OpenSslVersion, 8);
-      OpenSslVersionText := RawUtf8(libcrypto.OpenSSL_version(OPENSSL_VERSION_));
-      if OpenSslVersion and $ffffff00 < LIB_MIN then // paranoid check
-        raise EOpenSsl.CreateFmt(
-          'Incorrect %s version in %s - expects ' + LIB_TXT,
-          [OpenSslVersionText, libcrypto.LibraryPath]);
       OpenSslExIndexSsl := SSL_get_ex_new_index(0, nil, nil, nil, nil);
-      openssl_initialize_errormsg := ''; // no error with these lib paths
+      result := true; // if we reached here, everything is OK
     except
-      on E: Exception do
-      begin
-        FreeAndNil(libssl);
-        FreeAndNil(libcrypto);
-        openssl_initialize_errormsg := E.Message;
-      end;
+      on E: Exception do // EOpenSsl above are logic error and should be logged
+        error := E.Message;
     end;
   finally
-    if libssl = nil then // flag should be set the last
-      openssl_initialized := osslNotAvailable
+    if result then
+    begin
+      @NewNetTls := @NewOpenSslNetTls; // favor OpenSSL for TLS from now on
+      openssl_initialized := lsAvailable; // flag should be set the last
+    end
     else
-      openssl_initialized := osslAvailable;
-    GlobalUnLock;
-    result := libssl <> nil;
+    begin
+      FreeAndNil(libcrypto);
+      FreeAndNil(libssl);
+      openssl_initialized := lsNotAvailable
+    end;
+    openssl_initialize_errormsg := error;
   end;
 end;
 
-{$endif OPENSSLSTATIC}
+{$else}
 
-
-{ ******************** Full API via Statically linked OpenSSL Library }
-
-{$ifdef OPENSSLSTATIC}
+{ ******************** Statically linked OpenSSL Library Functions }
 
 { --------- libssl entries }
 
@@ -6021,14 +6283,15 @@ function EVP_DigestVerify(ctx: PEVP_MD_CTX; sigret: PByte; siglen: PtrUInt;
   tbs: PByte; tbslen: PtrUInt): integer; cdecl;
   external LIB_CRYPTO name _PU + 'EVP_DigestVerify';
 
-
-function EVP_SealInit(ctx: PEVP_CIPHER_CTX; typ: PEVP_CIPHER; ek: PPByte; ekl: PInteger; iv: PByte; pubk: PPEVP_PKEY; npubk: integer): integer; cdecl;
+function EVP_SealInit(ctx: PEVP_CIPHER_CTX; typ: PEVP_CIPHER; ek: PPByte; ekl: PInteger;
+  iv: PByte; pubk: PPEVP_PKEY; npubk: integer): integer; cdecl;
   external LIB_CRYPTO name _PU + 'EVP_SealInit';
 
 function EVP_SealFinal(ctx: PEVP_CIPHER_CTX; _out: PByte; outl: PInteger): integer; cdecl;
   external LIB_CRYPTO name _PU + 'EVP_SealFinal';
 
-function EVP_OpenInit(ctx: PEVP_CIPHER_CTX; typ: PEVP_CIPHER; ek: PByte; ekl: integer; iv: PByte; priv: PEVP_PKEY): integer; cdecl;
+function EVP_OpenInit(ctx: PEVP_CIPHER_CTX; typ: PEVP_CIPHER; ek: PByte; ekl: integer;
+  iv: PByte; priv: PEVP_PKEY): integer; cdecl;
   external LIB_CRYPTO name _PU + 'EVP_OpenInit';
 
 function EVP_OpenFinal(ctx: PEVP_CIPHER_CTX; _out: PByte; outl: PInteger): integer; cdecl;
@@ -6038,7 +6301,8 @@ function EVP_EncryptUpdate(ctx: PEVP_CIPHER_CTX; _out: PByte; outl: PInteger;
   _in: PByte; inl: integer): integer; cdecl;
   external LIB_CRYPTO name _PU + 'EVP_EncryptUpdate';
 
-function EVP_DecryptUpdate(ctx: PEVP_CIPHER_CTX; _out: PByte; outl: PInteger; _in: PByte; inl: integer): integer; cdecl;
+function EVP_DecryptUpdate(ctx: PEVP_CIPHER_CTX; _out: PByte; outl: PInteger;
+  _in: PByte; inl: integer): integer; cdecl;
   external LIB_CRYPTO name _PU + 'EVP_DecryptUpdate';
 
 function HMAC(evp_md: PEVP_MD; key: pointer; key_len: integer;
@@ -6183,7 +6447,8 @@ procedure X509_EXTENSION_free(a: PX509_EXTENSION); cdecl;
 procedure BASIC_CONSTRAINTS_free(a: PBASIC_CONSTRAINTS); cdecl;
   external LIB_CRYPTO name _PU + 'BASIC_CONSTRAINTS_free';
 
-function d2i_BASIC_CONSTRAINTS(a: PPBASIC_CONSTRAINTS; _in: PPByte; len: integer): PBASIC_CONSTRAINTS; cdecl;
+function d2i_BASIC_CONSTRAINTS(a: PPBASIC_CONSTRAINTS; _in: PPByte;
+  len: integer): PBASIC_CONSTRAINTS; cdecl;
   external LIB_CRYPTO name _PU + 'd2i_BASIC_CONSTRAINTS';
 
 function X509_NAME_add_entry_by_txt(name: PX509_NAME; field: PUtf8Char;
@@ -6204,10 +6469,12 @@ function X509_NAME_entry_count(name: PX509_NAME): integer; cdecl;
 function X509_NAME_get_entry(name: PX509_NAME; loc: integer): PX509_NAME_ENTRY; cdecl;
   external LIB_CRYPTO name _PU + 'X509_NAME_get_entry';
 
-function X509_NAME_get_text_by_NID(name: PX509_NAME; nid: integer; buf: PUtf8Char; len: integer): integer; cdecl;
+function X509_NAME_get_text_by_NID(name: PX509_NAME; nid: integer;
+  buf: PUtf8Char; len: integer): integer; cdecl;
   external LIB_CRYPTO name _PU + 'X509_NAME_get_text_by_NID';
 
-function X509_NAME_get_index_by_NID(name: PX509_NAME; nid: integer; lastpos: integer): integer; cdecl;
+function X509_NAME_get_index_by_NID(name: PX509_NAME; nid: integer;
+  lastpos: integer): integer; cdecl;
   external LIB_CRYPTO name _PU + 'X509_NAME_get_index_by_NID';
 
 function X509_NAME_delete_entry(name: PX509_NAME; loc: integer): PX509_NAME_ENTRY; cdecl;
@@ -6352,13 +6619,16 @@ function i2d_X509_CRL_bio(bp: PBIO; crl: PX509_CRL): integer; cdecl;
 function PEM_write_bio_X509_CRL(bp: PBIO; x: PX509_CRL): integer; cdecl;
   external LIB_CRYPTO name _PU + 'PEM_write_bio_X509_CRL';
 
-function PEM_read_bio_X509_CRL(bp: PBIO; x: PPX509_CRL; cb: Ppem_password_cb; u: pointer): PX509_CRL; cdecl;
+function PEM_read_bio_X509_CRL(bp: PBIO; x: PPX509_CRL;
+  cb: Ppem_password_cb; u: pointer): PX509_CRL; cdecl;
   external LIB_CRYPTO name _PU + 'PEM_read_bio_X509_CRL';
 
-function X509_CRL_add1_ext_i2d(x: PX509_CRL; nid: integer; value: pointer; crit: integer; flags: cardinal): integer; cdecl;
+function X509_CRL_add1_ext_i2d(x: PX509_CRL; nid: integer; value: pointer;
+  crit: integer; flags: cardinal): integer; cdecl;
   external LIB_CRYPTO name _PU + 'X509_CRL_add1_ext_i2d';
 
-function X509_CRL_get_ext_d2i(x: PX509_CRL; nid: integer; crit: PInteger; idx: PInteger): pointer; cdecl;
+function X509_CRL_get_ext_d2i(x: PX509_CRL; nid: integer; crit: PInteger;
+  idx: PInteger): pointer; cdecl;
   external LIB_CRYPTO name _PU + 'X509_CRL_get_ext_d2i';
 
 function X509_CRL_add0_revoked(crl: PX509_CRL; rev: PX509_REVOKED): integer; cdecl;
@@ -6394,10 +6664,12 @@ function X509_REVOKED_get0_serialNumber(x: PX509_REVOKED): PASN1_INTEGER; cdecl;
 function X509_REVOKED_get0_revocationDate(x: PX509_REVOKED): PASN1_TIME; cdecl;
   external LIB_CRYPTO name _PU + 'X509_REVOKED_get0_revocationDate';
 
-function X509_REVOKED_get_ext_d2i(x: PX509_REVOKED; nid: integer; crit: PInteger; idx: PInteger): pointer; cdecl;
+function X509_REVOKED_get_ext_d2i(x: PX509_REVOKED; nid: integer;
+  crit: PInteger; idx: PInteger): pointer; cdecl;
   external LIB_CRYPTO name _PU + 'X509_REVOKED_get_ext_d2i';
 
-function X509_REVOKED_add1_ext_i2d(x: PX509_REVOKED; nid: integer; value: pointer; crit: integer; flags: cardinal): integer; cdecl;
+function X509_REVOKED_add1_ext_i2d(x: PX509_REVOKED; nid: integer;
+  value: pointer; crit: integer; flags: cardinal): integer; cdecl;
   external LIB_CRYPTO name _PU + 'X509_REVOKED_add1_ext_i2d';
 
 function d2i_X509_REVOKED(a: PPX509_REVOKED; _in: PPByte; len: integer): PX509_REVOKED; cdecl;
@@ -6460,7 +6732,8 @@ function X509_LOOKUP_hash_dir(): PX509_LOOKUP_METHOD; cdecl;
 function X509_LOOKUP_file(): PX509_LOOKUP_METHOD; cdecl;
   external LIB_CRYPTO name _PU + 'X509_LOOKUP_file';
 
-function X509_LOOKUP_ctrl(ctx: PX509_LOOKUP; cmd: integer; argc: PUtf8Char; argl: integer; ret: PPUtf8Char): integer; cdecl;
+function X509_LOOKUP_ctrl(ctx: PX509_LOOKUP; cmd: integer; argc: PUtf8Char;
+  argl: integer; ret: PPUtf8Char): integer; cdecl;
   external LIB_CRYPTO name _PU + 'X509_LOOKUP_ctrl';
 
 function X509_load_cert_file(ctx: PX509_LOOKUP; _file: PUtf8Char; typ: integer): integer; cdecl;
@@ -6475,10 +6748,12 @@ function X509_load_cert_crl_file(ctx: PX509_LOOKUP; _file: PUtf8Char; typ: integ
 function X509_STORE_CTX_new(): PX509_STORE_CTX; cdecl;
   external LIB_CRYPTO name _PU + 'X509_STORE_CTX_new';
 
-function X509_STORE_CTX_init(ctx: PX509_STORE_CTX; store: PX509_STORE; x509: PX509; chain: Pstack_st_X509): integer; cdecl;
+function X509_STORE_CTX_init(ctx: PX509_STORE_CTX; store: PX509_STORE;
+  x509: PX509; chain: Pstack_st_X509): integer; cdecl;
   external LIB_CRYPTO name _PU + 'X509_STORE_CTX_init';
 
-procedure X509_STORE_CTX_set_verify_cb(ctx: PX509_STORE_CTX; verify: X509_STORE_CTX_verify_cb); cdecl;
+procedure X509_STORE_CTX_set_verify_cb(ctx: PX509_STORE_CTX;
+  verify: X509_STORE_CTX_verify_cb); cdecl;
   external LIB_CRYPTO name _PU + 'X509_STORE_CTX_set_verify_cb';
 
 procedure X509_STORE_CTX_set_cert(c: PX509_STORE_CTX; x: PX509); cdecl;
@@ -6550,13 +6825,20 @@ function PKCS12_new(): PPKCS12; cdecl;
 procedure PKCS12_free(a: PPKCS12); cdecl;
   external LIB_CRYPTO name _PU + 'PKCS12_free';
 
-function PKCS12_create(pass: PUtf8Char; name: PUtf8Char; pkey: PEVP_PKEY; cert: PX509; ca: Pstack_st_X509; nid_key: integer; nid_cert: integer; iter: integer; mac_iter: integer; keytype: integer): PPKCS12; cdecl;
+function PKCS12_create(pass: PUtf8Char; name: PUtf8Char; pkey: PEVP_PKEY;
+  cert: PX509; ca: Pstack_st_X509; nid_key: integer; nid_cert: integer;
+  iter: integer; mac_iter: integer; keytype: integer): PPKCS12; cdecl;
   external LIB_CRYPTO name _PU + 'PKCS12_create';
+
+function PKCS12_set_mac(p12: PPKCS12; pass: PUtf8Char; passlen: integer;
+  salt: PByte; saltlen: integer; iter: integer; md_type: PEVP_MD): integer; cdecl;
+  external LIB_CRYPTO name _PU + 'PKCS12_set_mac';
 
 function PKCS12_add_cert(pbags: PPstack_st_PKCS12_SAFEBAG; cert: PX509): PPKCS12_SAFEBAG; cdecl;
   external LIB_CRYPTO name _PU + 'PKCS12_add_cert';
 
-function PKCS12_add_key(pbags: PPstack_st_PKCS12_SAFEBAG; key: PEVP_PKEY; key_usage: integer; iter: integer; key_nid: integer; pass: PUtf8Char): PPKCS12_SAFEBAG; cdecl;
+function PKCS12_add_key(pbags: PPstack_st_PKCS12_SAFEBAG; key: PEVP_PKEY;
+  key_usage: integer; iter: integer; key_nid: integer; pass: PUtf8Char): PPKCS12_SAFEBAG; cdecl;
   external LIB_CRYPTO name _PU + 'PKCS12_add_key';
 
 function i2d_PKCS12_bio(bp: PBIO; p12: PPKCS12): integer; cdecl;
@@ -6568,7 +6850,8 @@ function d2i_PKCS12_bio(bp: PBIO; p12: PPPKCS12): PPKCS12; cdecl;
 function PKCS12_newpass(p12: PPKCS12; oldpass: PUtf8Char; newpass: PUtf8Char): integer; cdecl;
   external LIB_CRYPTO name _PU + 'PKCS12_newpass';
 
-function PKCS12_parse(p12: PPKCS12; pass: PUtf8Char; pkey: PPEVP_PKEY; cert: PPX509; ca: PPstack_st_X509): integer; cdecl;
+function PKCS12_parse(p12: PPKCS12; pass: PUtf8Char; pkey: PPEVP_PKEY;
+  cert: PPX509; ca: PPstack_st_X509): integer; cdecl;
   external LIB_CRYPTO name _PU + 'PKCS12_parse';
 
 function ASN1_TIME_new(): PASN1_TIME; cdecl;
@@ -6665,19 +6948,24 @@ function PEM_read_bio_RSAPrivateKey(bp: PBIO; x: PPRSA; cb: Ppem_password_cb;
   u: pointer): PRSA; cdecl;
   external LIB_CRYPTO name _PU + 'PEM_read_bio_RSAPrivateKey';
 
-function RSA_public_encrypt(flen: integer; from: PByte; _to: PByte; rsa: PRSA; padding: integer): integer; cdecl;
+function RSA_public_encrypt(flen: integer; from: PByte; _to: PByte; rsa: PRSA;
+  padding: integer): integer; cdecl;
   external LIB_CRYPTO name _PU + 'RSA_public_encrypt';
 
-function RSA_private_encrypt(flen: integer; from: PByte; _to: PByte; rsa: PRSA; padding: integer): integer; cdecl;
+function RSA_private_encrypt(flen: integer; from: PByte; _to: PByte; rsa: PRSA;
+  padding: integer): integer; cdecl;
   external LIB_CRYPTO name _PU + 'RSA_private_encrypt';
 
-function RSA_public_decrypt(flen: integer; from: PByte; _to: PByte; rsa: PRSA; padding: integer): integer; cdecl;
+function RSA_public_decrypt(flen: integer; from: PByte; _to: PByte; rsa: PRSA;
+  padding: integer): integer; cdecl;
   external LIB_CRYPTO name _PU + 'RSA_public_decrypt';
 
-function RSA_private_decrypt(flen: integer; from: PByte; _to: PByte; rsa: PRSA; padding: integer): integer; cdecl;
+function RSA_private_decrypt(flen: integer; from: PByte; _to: PByte; rsa: PRSA;
+  padding: integer): integer; cdecl;
   external LIB_CRYPTO name _PU + 'RSA_private_decrypt';
 
-function RSA_pkey_ctx_ctrl(ctx: PEVP_PKEY_CTX; optype: integer; cmd: integer; p1: integer; p2: pointer): integer; cdecl;
+function RSA_pkey_ctx_ctrl(ctx: PEVP_PKEY_CTX; optype: integer; cmd: integer;
+  p1: integer; p2: pointer): integer; cdecl;
   external LIB_CRYPTO name _PU + 'RSA_pkey_ctx_ctrl';
 
 function i2d_PrivateKey_bio(bp: PBIO; pkey: PEVP_PKEY): integer; cdecl;
@@ -6694,6 +6982,9 @@ function d2i_PUBKEY_bio(bp: PBIO; a: PPEVP_PKEY): PEVP_PKEY; cdecl;
 
 function RAND_bytes(buf: PByte; num: integer): integer; cdecl;
   external LIB_CRYPTO name _PU + 'RAND_bytes';
+
+procedure RAND_seed(buf: pointer; num: integer); cdecl;
+  external LIB_CRYPTO name _PU + 'RAND_seed';
 
 function EVP_get_cipherbyname(name: PUtf8Char): PEVP_CIPHER; cdecl;
   external LIB_CRYPTO name _PU + 'EVP_get_cipherbyname';
@@ -6712,6 +7003,9 @@ procedure EVP_CIPHER_CTX_free(c: PEVP_CIPHER_CTX); cdecl;
 
 function EVP_CIPHER_CTX_copy(_out: PEVP_CIPHER_CTX; _in: PEVP_CIPHER_CTX): integer; cdecl;
   external LIB_CRYPTO name _PU + 'EVP_CIPHER_CTX_copy';
+
+function EVP_CIPHER_CTX_set_key_length(x: PEVP_CIPHER_CTX; keylen: integer): integer; cdecl;
+  external LIB_CRYPTO name _PU + 'EVP_CIPHER_CTX_set_key_length';
 
 function EVP_CIPHER_CTX_ctrl(ctx: PEVP_CIPHER_CTX; typ: integer; arg: integer;
   ptr: pointer): integer; cdecl;
@@ -6807,7 +7101,8 @@ function BN_dec2bn(a: PPBIGNUM; str: PUtf8Char): integer; cdecl;
 function BN_to_ASN1_INTEGER(bn: PBIGNUM; ai: PASN1_INTEGER): PASN1_INTEGER; cdecl;
   external LIB_CRYPTO name _PU + 'BN_to_ASN1_INTEGER';
 
-function ASN1_bn_print(bp: PBIO; number: PUtf8Char; num: PBIGNUM; buf: PByte; off: integer): integer; cdecl;
+function ASN1_bn_print(bp: PBIO; number: PUtf8Char; num: PBIGNUM; buf: PByte;
+  off: integer): integer; cdecl;
   external LIB_CRYPTO name _PU + 'ASN1_bn_print';
 
 function ASN1_INTEGER_to_BN(ai: PASN1_INTEGER; bn: PBIGNUM): PBIGNUM; cdecl;
@@ -6842,7 +7137,7 @@ function EC_POINT_hex2point(p1: PEC_GROUP; p2: PUtf8Char; p3: PEC_POINT;
 function EC_KEY_set_public_key(key: PEC_KEY; pub: PEC_POINT): integer; cdecl;
   external LIB_CRYPTO name _PU + 'EC_KEY_set_public_key';
 
-function EC_KEY_set_public_key_affine_coordinates(key: PEC_KEY; x: PBIGNUM; y: PBIGNUM): integer; cdecl;
+function EC_KEY_set_public_key_affine_coordinates(key: PEC_KEY; x, y: PBIGNUM): integer; cdecl;
   external LIB_CRYPTO name _PU + 'EC_KEY_set_public_key_affine_coordinates';
 
 function ECDSA_verify(typ: integer; dgst: PByte; dgstlen: integer;
@@ -6876,7 +7171,8 @@ function EC_KEY_set_private_key(key: PEC_KEY; prv: PBIGNUM): integer; cdecl;
 function EC_KEY_get0_public_key(key: PEC_KEY): PEC_POINT; cdecl;
   external LIB_CRYPTO name _PU + 'EC_KEY_get0_public_key';
 
-function EC_KEY_key2buf(key: PEC_KEY; form: point_conversion_form_t; pbuf: PPByte; ctx: PBN_CTX): PtrUInt; cdecl;
+function EC_KEY_key2buf(key: PEC_KEY; form: point_conversion_form_t;
+  pbuf: PPByte; ctx: PBN_CTX): PtrUInt; cdecl;
   external LIB_CRYPTO name _PU + 'EC_KEY_key2buf';
 
 function EVP_PKEY_get0_RSA(pkey: PEVP_PKEY): Prsa_st; cdecl;
@@ -6961,14 +7257,19 @@ function PEM_write_bio_PKCS8PrivateKey(p1: PBIO; p2: PEVP_PKEY; p3: PEVP_CIPHER;
   p4: PUtf8Char; p5: integer; p6: Ppem_password_cb; p7: pointer): integer; cdecl;
   external LIB_CRYPTO name _PU + 'PEM_write_bio_PKCS8PrivateKey';
 
-function i2d_PKCS8PrivateKey_bio(bp: PBIO; x: PEVP_PKEY; enc: PEVP_CIPHER; kstr: PUtf8Char; klen: integer; cb: Ppem_password_cb; u: pointer): integer; cdecl;
+function i2d_PKCS8PrivateKey_bio(bp: PBIO; x: PEVP_PKEY; enc: PEVP_CIPHER;
+  kstr: PUtf8Char; klen: integer; cb: Ppem_password_cb; u: pointer): integer; cdecl;
   external LIB_CRYPTO name _PU + 'i2d_PKCS8PrivateKey_bio';
 
-function d2i_PKCS8PrivateKey_bio(bp: PBIO; x: PPEVP_PKEY; cb: Ppem_password_cb; u: pointer): PEVP_PKEY; cdecl;
+function d2i_PKCS8PrivateKey_bio(bp: PBIO; x: PPEVP_PKEY; cb: Ppem_password_cb;
+  u: pointer): PEVP_PKEY; cdecl;
   external LIB_CRYPTO name _PU + 'd2i_PKCS8PrivateKey_bio';
 
 function EVP_aes_256_cbc(): PEVP_CIPHER; cdecl;
   external LIB_CRYPTO name _PU + 'EVP_aes_256_cbc';
+
+function EVP_bf_cbc(): PEVP_CIPHER; cdecl;
+  external LIB_CRYPTO name _PU + 'EVP_bf_cbc';
 
 function PEM_write_bio_PUBKEY(bp: PBIO; x: PEVP_PKEY): integer; cdecl;
   external LIB_CRYPTO name _PU + 'PEM_write_bio_PUBKEY';
@@ -6978,6 +7279,15 @@ function OpenSSL_version_num(): cardinal; cdecl;
 
 function OpenSSL_version(typ: integer): PUtf8Char; cdecl;
   external LIB_CRYPTO name _PU + 'OpenSSL_version';
+
+function OSSL_PROVIDER_load(libctx: POSSL_LIB_CTX; name: PAnsiChar): POSSL_PROVIDER; cdecl;
+  external LIB_CRYPTO name _PU + 'OSSL_PROVIDER_load';
+
+function OSSL_PROVIDER_set_default_search_path(libctx: POSSL_LIB_CTX; path: PAnsiChar): integer; cdecl;
+  external LIB_CRYPTO name _PU + 'OSSL_PROVIDER_set_default_search_path';
+
+function OSSL_PROVIDER_available(libctx: POSSL_LIB_CTX; name: PAnsiChar): integer; cdecl;
+  external LIB_CRYPTO name _PU + 'OSSL_PROVIDER_available';
 
 function X509_print(bp: PBIO; x: PX509): integer; cdecl;
   external LIB_CRYPTO name _PU + 'X509_print';
@@ -7020,261 +7330,7 @@ end;
 {$endif OPENSSLSTATIC}
 
 
-{ ******************** OpenSSL Helpers }
-
-procedure OpenSSL_Free(ptr: pointer);
-begin
-  CRYPTO_free(ptr, 'mormot', 0);
-end;
-
-function OpenSSL_error(error: integer): RawUtf8;
-begin
-  OpenSSL_error(error, result);
-end;
-
-procedure OpenSSL_error(error: integer; var result: RawUtf8);
-var
-  tmp: array[0..1023] of AnsiChar;
-begin
-  result := '';
-  if error = 0 then // no error in the queue
-    exit;
-  ERR_error_string_n(error, @tmp, SizeOf(tmp));
-  FastSetString(result, @tmp, mormot.core.base.StrLen(@tmp));
-end;
-
-function OpenSSL_error_short(error: integer): ShortString;
-begin
-  result[0] := #0;
-  if error = 0 then // no error in the queue
-    exit;
-  ERR_error_string_n(error, @result[1], 254);
-  result[0] := AnsiChar(mormot.core.base.StrLen(@result[1]));
-end;
-
-// see https://www.openssl.org/docs/man1.1.1/man3/SSL_get_error.html
-function SSL_is_fatal_error(get_error: integer): boolean;
-begin
-  case get_error of
-    SSL_ERROR_NONE,
-    SSL_ERROR_WANT_READ,
-    SSL_ERROR_WANT_WRITE,
-    SSL_ERROR_WANT_CONNECT,
-    SSL_ERROR_WANT_ACCEPT:
-      result := false;
-  else
-    result := true;
-  end;
-end;
-
-const
-  // documented errors constants names after SSL_*() functions failure
-  SSL_ERROR_TEXT: array[SSL_ERROR_NONE .. SSL_ERROR_WANT_CLIENT_HELLO_CB] of RawUtf8 = (
-    'NONE',
-    'SSL',
-    'WANT_READ',
-    'WANT_WRITE',
-    'WANT_X509_LOOKUP',
-    'SYSCALL',
-    'ZERO_RETURN',
-    'WANT_CONNECT',
-    'WANT_ACCEPT',
-    'WANT_ASYNC',
-    'WANT_ASYNC_JOB',
-    'WANT_CLIENT_HELLO_CB');
-
-procedure SSL_get_error_text(get_error: integer; var result: RawUtf8);
-begin
-  if get_error in [low(SSL_ERROR_TEXT) .. high(SSL_ERROR_TEXT)] then
-  begin
-    result := SSL_ERROR_TEXT[get_error];
-    case get_error of
-      SSL_ERROR_SSL:
-        // non-recoverable protocol error
-        result := RawUtf8(format('%s (%s)',
-          [result, OpenSSL_error_short(ERR_get_error)]));
-      SSL_ERROR_SYSCALL:
-        begin
-          // non-recoverable I/O error
-          get_error := RawSocketErrNo; // try to get additional info from OS
-          if get_error <> NO_ERROR then
-            result := RawUtf8(format('%s (%d %s)',
-                        [result, get_error, GetErrorText(get_error)]));
-        end;
-    end; // non-fatal SSL_ERROR_WANT_* codes are unexpected here
-  end
-  else
-    str(get_error, AnsiString(result)); // paranoid / undocumented
-  result := 'SSL_ERROR_' + result;
-end;
-
-function SSL_get_ex_new_index(l: integer; p: pointer; newf: PCRYPTO_EX_new;
-  dupf: PCRYPTO_EX_dup; freef: PCRYPTO_EX_free): integer;
-begin
-  result := CRYPTO_get_ex_new_index(CRYPTO_EX_INDEX_SSL, l, p, newf, dupf, freef);
-end;
-
-function Digest(md: PEVP_MD; buf: pointer; buflen: integer;
-  out dig: THash512): integer;
-var
-  ctx: PEVP_MD_CTX;
-begin
-  result := 0;
-  if (buf = nil) or
-     (buflen < 0) then
-    exit;
-  ctx := EVP_MD_CTX_new;
-  if ctx = nil then
-    exit;
-  if md = nil then
-    md := EVP_sha1; // SHA-1 fingerprint by default
-  if (EVP_DigestInit_ex(ctx, md, nil) = OPENSSLSUCCESS) and
-     (EVP_DigestUpdate(ctx, buf, buflen) = OPENSSLSUCCESS) and
-     (EVP_DigestFinal_ex(ctx, @dig, nil) = OPENSSLSUCCESS) then
-    result := EVP_MD_size(md);
-  EVP_MD_CTX_free(ctx);
-end;
-
-function Digest(md: PEVP_MD; buf: pointer; buflen: integer): RawUtf8;
-var
-  dig: THash512;
-begin
-  result := MacToHex(@dig, Digest(md, buf, buflen, dig));
-end;
-
-function Digest(md: PEVP_MD; const buf: RawByteString): RawUtf8;
-begin
-  result := Digest(md, pointer(buf), length(buf));
-end;
-
-function SSL_CTX_set_session_cache_mode(ctx: PSSL_CTX; mode: integer): integer;
-begin
-  result := SSL_CTX_ctrl(ctx, SSL_CTRL_SET_SESS_CACHE_MODE, mode, nil);
-end;
-
-function SSL_CTX_add_extra_chain_cert(ctx: PSSL_CTX; cert: PX509): cardinal;
-begin
-  result := SSL_CTX_ctrl(ctx, SSL_CTRL_EXTRA_CHAIN_CERT, 0, cert);
-end;
-
-function SSL_CTX_set_tmp_dh(ctx: PSSL_CTX; dh: pointer): integer;
-begin
-  result := SSL_CTX_ctrl(ctx, SSL_CTRL_SET_TMP_DH, 0, dh);
-end;
-
-function SSL_CTX_set_tmp_ecdh(ctx: PSSL_CTX; ecdh: pointer): integer;
-begin
-  result := SSL_CTX_ctrl(ctx, SSL_CTRL_SET_TMP_ECDH, 0, ecdh);
-end;
-
-function SSL_CTX_set_ecdh_auto(ctx: PSSL_CTX; onoff: integer): integer;
-begin
-  result := 1;
-end;
-
-function SSL_CTX_set_min_proto_version(ctx: PSSL_CTX; version: integer): integer;
-begin
-  result := SSL_CTX_ctrl(ctx, SSL_CTRL_SET_MIN_PROTO_VERSION, version, nil);
-end;
-
-function SSL_CTX_set_max_proto_version(ctx: PSSL_CTX; version: integer): integer;
-begin
-  result := SSL_CTX_ctrl(ctx, SSL_CTRL_SET_MAX_PROTO_VERSION, version, nil);
-end;
-
-function SSL_set_tlsext_host_name(const s: PSSL; const name: RawUtf8): integer;
-begin
-  result := SSL_ctrl(s, SSL_CTRL_SET_TLSEXT_HOSTNAME,
-    TLSEXT_NAMETYPE_host_name, pointer(name));
-end;
-
-function SSL_CTX_set_tlsext_servername_callback(ctx: PSSL_CTX; cb: SSL_SNI_servername_cb): integer;
-begin
-  result := SSL_CTX_callback_ctrl(
-    ctx, SSL_CTRL_SET_TLSEXT_SERVERNAME_CB, SSL_CTX_callback_ctrl_(cb));
-end;
-
-function SSL_CTX_set_tlsext_servername_arg(ctx: PSSL_CTX; arg: pointer): integer;
-begin
-  result := SSL_CTX_ctrl(ctx, SSL_CTRL_SET_TLSEXT_SERVERNAME_ARG, 0, arg);
-end;
-
-function SSL_set_mode(s: PSSL; version: integer): integer;
-begin
-  result := SSL_ctrl(s, SSL_CTRL_MODE, version, nil);
-end;
-
-function SSL_get_mode(s: PSSL): integer;
-begin
-  result := SSL_ctrl(s, SSL_CTRL_MODE, 0, nil);
-end;
-
-function EVP_MD_CTX_size(ctx: PEVP_MD_CTX): integer;
-begin
-  result := EVP_MD_size(EVP_MD_CTX_md(ctx))
-end;
-
-function BN_num_bytes(bn: PBIGNUM): integer;
-begin
-  result := (BN_num_bits(bn) + 7) shr 3;
-end;
-
-function BigNumFromDecimal(const Text: RawUtf8): PBIGNUM;
-begin
-  result := nil;
-  if BN_dec2bn(@result, pointer(Text)) = 0 then
-    result := nil;
-end;
-
-function BigNumHexFromDecimal(const Text: RawUtf8): RawUtf8;
-var
-  bn: PBIGNUM;
-begin
-  bn := BigNumFromDecimal(Text);
-  result := bn^.ToHex;
-  bn^.Free;
-end;
-
-function EVP_PKEY_CTX_set_rsa_padding(ctx: PEVP_PKEY_CTX; padding: integer): integer;
-begin
-  result := {$ifndef OPENSSLSTATIC}libcrypto.{$endif}RSA_pkey_ctx_ctrl(
-    ctx, -1, EVP_PKEY_CTRL_RSA_PADDING, padding, nil);
-end;
-
-function EVP_PKEY_CTX_set_rsa_mgf1_md(ctx: PEVP_PKEY_CTX; md: PEVP_MD): integer;
-begin
-  result := RSA_pkey_ctx_ctrl(ctx,
-    EVP_PKEY_OP_TYPE_SIG or EVP_PKEY_OP_TYPE_CRYPT,
-    EVP_PKEY_CTRL_RSA_MGF1_MD, 0, md);
-end;
-
-function EVP_PKEY_CTX_set_rsa_oaep_md(ctx: PEVP_PKEY_CTX; md: PEVP_MD): integer;
-begin
-  result := EVP_PKEY_CTX_ctrl(ctx,
-    EVP_PKEY_RSA, EVP_PKEY_OP_TYPE_CRYPT, EVP_PKEY_CTRL_RSA_OAEP_MD, 0, md);
-end;
-
-function DTLSv1_get_timeout(s: PSSL; timeval: PTimeVal): time_t;
-begin
-  result := SSL_ctrl(s, DTLS_CTRL_GET_TIMEOUT, 0, timeval);
-end;
-
-procedure DTLSv1_handle_timeout(s: PSSL);
-begin
-  SSL_ctrl(s, DTLS_CTRL_HANDLE_TIMEOUT, 0, nil);
-end;
-
-function TmToDateTime(const t: tm): TDateTime;
-begin
-  result := EncodeDate(t.tm_year + 1900, t.tm_mon + 1, t.tm_mday) +
-            EncodeTime(t.tm_hour, t.tm_min, t.tm_sec, 0);
-end;
-
-function NewOpenSslStack: POPENSSL_STACK;
-begin
-  result := OPENSSL_sk_new(nil);
-end;
-
+{ ******************** OpenSSL Library Types and Structures }
 
 { OPENSSL_STACK }
 
@@ -7344,7 +7400,7 @@ end;
 
 function SSL_CIPHER.Description: RawUtf8;
 var
-  cipher: array[byte] of AnsiChar;
+  cipher: TByteToAnsiChar;
   s, d: PtrInt;
 begin
   if (@self = nil) or
@@ -7403,7 +7459,7 @@ var
 begin
   result := PX509DynArray(PeerChain.ToDynArray);
   if acquire then
-    for i := 0 to high(result) do
+    for i := 0 to length(result) - 1 do
       result[i].Acquire;
 end;
 
@@ -7455,562 +7511,6 @@ begin
   if @self <> nil then
     SSL_CTX_free(@self);
 end;
-
-
-{ EVP_PKEY }
-
-type
-  TBioSave = function(bio: PBIO; instance: pointer): integer; cdecl;
-  TBioLoad = function(bio: PBIO; instance: pointer): pointer; cdecl;
-
-function BioSave(instance: pointer; sav: TBioSave;
-  codepage: integer = CP_RAWBYTESTRING): RawByteString;
-var
-  bio: PBIO;
-begin
-  result := '';
-  if instance = nil then
-    exit;
-  bio := BIO_new(BIO_s_mem);
-  try
-    EOpenSsl.Check(sav(bio, instance));
-    bio.ToString(result, codepage);
-  finally
-    bio.Free;
-  end;
-end;
-
-function BioLoad(const mem: RawByteString; load: TBioLoad): pointer;
-var
-  bio: PBIO;
-begin
-  EOpenSsl.CheckAvailable(nil, 'BioLoad');
-  if mem = '' then
-    result := nil
-  else
-  begin
-    bio := BIO_new_mem_buf(pointer(mem), length(mem));
-    result := load(bio, nil);
-    bio.Free;
-  end;
-end;
-
-function LoadCsr(const Der: RawByteString): PX509_REQ;
-begin
-  result := BioLoad(Der, @d2i_X509_REQ_bio);
-end;
-
-function EVP_PKEY.PrivateToDer(const PassWord: SpiUtf8): RawByteString;
-var
-  bio: PBIO;
-  res: integer;
-begin
-  result := '';
-  if @self = nil then
-    exit;
-  bio := BIO_new(BIO_s_mem);
-  if PassWord = '' then
-    res := i2d_PrivateKey_bio(bio, @self)
-  else
-    res := i2d_PKCS8PrivateKey_bio(bio, @self, EVP_aes_256_cbc,
-      pointer(PassWord), Length(PassWord), nil, nil);
-  if res = OPENSSLSUCCESS then
-    bio.ToString(result);
-  bio.Free;
-end;
-
-function EVP_PKEY.PublicToDer: RawByteString;
-begin
-  result := BioSave(@self, @i2d_PUBKEY_bio);
-end;
-
-function EVP_PKEY.PrivateToPem(const PassWord: SpiUtf8): RawUtf8;
-var
-  bio: PBIO;
-  res: integer;
-begin
-  result := '';
-  if @self = nil then
-    exit;
-  bio := BIO_new(BIO_s_mem);
-  if PassWord = '' then
-    res := PEM_write_bio_PrivateKey(bio, @self, nil, nil, 0, nil, nil)
-  else
-    res := PEM_write_bio_PKCS8PrivateKey(bio, @self, EVP_aes_256_cbc,
-      pointer(PassWord), Length(PassWord), nil, nil);
-  if res = OPENSSLSUCCESS then
-    result := bio.ToUtf8;
-  bio.Free;
-end;
-
-function EVP_PKEY.PublicToPem: RawUtf8;
-begin
-  result := BioSave(@self, @PEM_write_bio_PUBKEY, CP_UTF8);
-end;
-
-procedure EVP_PKEY.ToPem(out PrivateKey, PublicKey: RawUtf8;
-  const PrivateKeyPassWord: SpiUtf8);
-begin
-  if @self = nil then
-    exit;
-  PrivateKey := PrivateToPem(PrivateKeyPassWord);
-  PublicKey := PublicToPem;
-end;
-
-function EVP_PKEY.Sign(Algo: PEVP_MD; Msg: pointer; Len: integer): RawByteString;
-var
-  ctx: PEVP_MD_CTX;
-  s: PtrUInt;
-begin
-  // expects @self to be a private key
-  // we don't check "if @self = nil" because may be called without EVP_PKEY
-  result := ''; // '' on error
-  ctx := EVP_MD_CTX_new;
-  try
-    // note: ED25519 requires single-pass EVP_DigestSign()
-    s := 0;
-    if (EVP_DigestSignInit(ctx, nil, Algo, nil, @self) = OPENSSLSUCCESS) and
-       (EVP_DigestSign(ctx, nil, s, Msg, Len) = OPENSSLSUCCESS) then
-    begin
-      SetLength(result, s); // here size is maximum s bytes
-      if EVP_DigestSign(ctx, pointer(result), s, Msg, Len) = OPENSSLSUCCESS then
-      begin
-        if s <> PtrUInt(length(result)) then
-          SetLength(result, s); // result leading zeros may trim the size
-      end
-      else
-        result := '';
-    end;
-  finally
-    EVP_MD_CTX_free(ctx);
-  end;
-end;
-
-function EVP_PKEY.Verify(Algo: PEVP_MD;
-  Sig, Msg: pointer; SigLen, MsgLen: integer): boolean;
-var
-  ctx: PEVP_MD_CTX;
-begin
-  // expects @self to be a public (or private) key
-  // we don't check "if @self = nil" because may be called without EVP_PKEY
-  // we don't check "Algo = nil" because algo may have its built-in hashing
-  ctx := EVP_MD_CTX_new;
-  try
-    // note: ED25519 requires single-pass EVP_DigestVerify()
-    result :=
-      (EVP_DigestVerifyInit(ctx, nil, Algo, nil, @self) = OPENSSLSUCCESS) and
-      (EVP_DigestVerify(ctx, Sig, SigLen, Msg, MsgLen) = OPENSSLSUCCESS);
-  finally
-    EVP_MD_CTX_free(ctx);
-  end;
-end;
-
-function EVP_PKEY.ToAltNames(const Subjects: TRawUtf8DynArray): RawUtf8;
-var
-  i: PtrInt;
-  s: RawUtf8;
-begin
-  // self instance is not used
-  result := '';
-  for i := 0 to length(Subjects) - 1 do // in-place modified
-  begin
-    s := Subjects[i];
-    if PosExChar(':', s) = 0 then
-      s := 'DNS:' + s; // e.g. DNS: email: IP: URI:
-    if result <> '' then
-      result := result + ',' + s
-    else
-      result := s;
-  end;
-end;
-
-function EVP_PKEY.CreateSelfSignedCsr(Algo: PEVP_MD;
-  const Subjects: TRawUtf8DynArray): RawByteString;
-var
-  req: PX509_REQ;
-  names: PX509_NAME;
-begin
-  // same logic as in TCryptCertOpenSsl.Generate
-  result := '';
-  if (@self = nil) or
-     (Subjects = nil) then
-    exit;
-  req := NewCertificateRequest;
-  try
-    names := X509_REQ_get_subject_name(req);
-    names^.AddEntry('CN', Subjects[0]); // first subject is the X509 Common Name
-    req.AddExtension(NID_subject_alt_name, ToAltNames(Subjects));
-    if X509_REQ_set_pubkey(req, @self) = OPENSSLSUCCESS then
-      if req.Sign(@self, Algo) <> 0 then // returns signature size in bytes
-        result := req^.ToBinary;
-  finally
-    req.Free;
-  end;
-end;
-
-function EVP_PKEY.Size: integer;
-begin
-  if @self <> nil then
-    result := EVP_PKEY_size(@self)
-  else
-    result := 0;
-end;
-
-function EVP_PKEY.AlgoName: RawUtf8;
-begin
-  if @self <> nil then
-    result := OBJ_nid2sn(EVP_PKEY_id(@self))
-  else
-    result := '';
-end;
-
-procedure EVP_PKEY.Free;
-begin
-  if @self <> nil then
-    EVP_PKEY_free(@self);
-end;
-
-type
-  // extra header for IV and plain text / key size storage
-  // - should match the very same record definition in TRsa.Seal/Open
-  // from mormot.crypt.rsa.pas, which is fully compatible with this unit
-  TRsaSealHeader = packed record
-    iv: THash128;
-    plainlen: integer;
-    encryptedkeylen: word; // typically 256 bytes for RSA-2048
-    // followed by the encrypted key then the encrypted message
-  end;
-  PRsaSealHeader = ^TRsaSealHeader;
-
-function EVP_PKEY.RsaSeal(Cipher: PEVP_CIPHER;
-  const Msg: RawByteString): RawByteString;
-var
-  ctx: PEVP_CIPHER_CTX;
-  pubk: PEVP_PKEY;
-  ek: RawByteString;
-  ekl, lu, lf, msgpos: integer;
-  p: PAnsiChar;
-  head: TRsaSealHeader;
-begin
-  // expects @self to be a public key
-  // must be RSA because it is the only OpenSSL algorithm featuring key transport
-  result := '';
-  // validate input parameters
-  head.plainlen := length(Msg);
-  if (@self = nil) or
-     (head.plainlen = 0) or
-     (head.plainlen > 128 shl 20) or // fair limitation for in-memory encryption
-     (Cipher = nil) then
-    exit;
-  // generate the ephemeral secret key and IV within the corresponding header
-  // and encrypt this ephemeral secret using the current RSA public key
-  ctx := EVP_CIPHER_CTX_new;
-  if ctx = nil then
-    exit;
-  pubk := @self;
-  SetLength(ek, EVP_PKEY_size(@self));
-  if EVP_SealInit(ctx, Cipher, @ek, @ekl, @head.iv, @pubk, 1) = OPENSSLSUCCESS then
-  begin
-    head.encryptedkeylen := ekl;
-    msgpos := SizeOf(head) + ekl;
-    FastNewRawByteString(result, msgpos + head.plainlen + 16);
-    // encrypt the message
-    if EVP_EncryptUpdate(ctx, @PByteArray(result)[msgpos], @lu,
-         pointer(Msg), head.plainlen) = OPENSSLSUCCESS then
-    begin
-      // concatenate the header, encrypted key and message
-      PRsaSealHeader(result)^ := head;
-      MoveFast(pointer(ek)^, PByteArray(result)[SizeOf(head)], ekl);
-      p := @PByteArray(result)[msgpos + lu];
-      if EVP_SealFinal(ctx, pointer(p), @lf) = OPENSSLSUCCESS then
-        FakeLength(result, p + lf - pointer(result))
-      else
-        result := '';
-    end
-    else
-      result := '';
-  end;
-  EVP_CIPHER_CTX_free(ctx);
-end;
-
-{ for reference, some matching code in python with OpenSSL 3.x:
-
-  crt = x509.load_pem_x509_certificate(pem, default_backend())
-  rsa = crt.public_key()
-  apadding = padding.PKCS1v15()
-  aes_key = os.urandom(16)
-  aes_iv = os.urandom(16)
-  cipher = Cipher(algorithms.AES(aes_key), modes.CTR(aes_iv), backend=default_backend())
-  encryptor = cipher.encryptor()
-  encrypted_data = encryptor.update(content) + encryptor.finalize()
-  encrypted_aes_key = rsa.encrypt(aes_key, apadding)
-  header = TRsaSealHeader(iv=aes_iv, plainlen=len(content), encryptedkeylen=len(encrypted_aes_key))
-  final_message = header.pack() + encrypted_aes_key + encrypted_data
-}
-
-function EVP_PKEY.RsaOpen(Cipher: PEVP_CIPHER;
-  const Msg: RawByteString; CodePage: integer): RawByteString;
-var
-  ctx: PEVP_CIPHER_CTX;
-  msgpos, lu, lf, lm: integer;
-  head: PRsaSealHeader absolute Msg;
-  input: PByteArray absolute Msg;
-begin
-  // expects @self to be a private key
-  result := '';
-  // decode and validate the header
-  lm := length(Msg);
-  if (@self = nil) or
-     (Cipher = nil) or
-     (lm < SizeOf(head^)) or
-     (head^.plainlen <= 0) or
-     (head^.plainlen > 128 shl 20) then
-    exit;
-  msgpos := SizeOf(head^) + head^.encryptedkeylen;
-  if lm < msgpos + head^.plainlen then
-    exit; // avoid buffer overflow on malformatted/forged input
-  // decrypt the ephemeral key, then the message
-  ctx := EVP_CIPHER_CTX_new;
-  if ctx = nil then
-    exit;
-  if EVP_OpenInit(ctx, Cipher, @input[SizeOf(head^)],
-       head.encryptedkeylen, @head.iv, @self) = OPENSSLSUCCESS then
-  begin
-    FastSetStringCP(result, nil, head^.plainlen, CodePage);
-    if (EVP_DecryptUpdate(ctx,
-         pointer(result), @lu, @input[msgpos], lm - msgpos) <> OPENSSLSUCCESS) or
-       (EVP_OpenFinal(ctx,
-         @PByteArray(result)[{%H-}lu], @lf) <> OPENSSLSUCCESS) or
-       (lu + {%H-}lf <> head^.plainlen) then
-      result:= '';
-  end;
-  EVP_CIPHER_CTX_free(ctx);
-end;
-
-procedure RsaSetPadding(ctx: PEVP_PKEY_CTX; md: PEVP_MD);
-begin
-  EOpenSsl.Check(
-    EVP_PKEY_CTX_set_rsa_padding(ctx, RSA_PKCS1_OAEP_PADDING),
-    'EVP_PKEY_CTX_set_rsa_padding');
-  if OpenSslVersion < OPENSSL3_VERNUM then
-  begin
-    EOpenSsl.Check(
-      EVP_PKEY_CTX_set_rsa_mgf1_md(ctx, md), 'EVP_PKEY_CTX_set_rsa_mgf1_md');
-    EOpenSsl.Check(
-      EVP_PKEY_CTX_set_rsa_oaep_md(ctx, md), 'EVP_PKEY_CTX_set_rsa_oaep_md');
-  end;
-end;
-
-function EVP_PKEY.RsaEncrypt(const Content: RawByteString; MD: PEVP_MD): RawByteString;
-var
-  ctx: PEVP_PKEY_CTX;
-  len: PtrUInt;
-begin
-  // to be used for a very small content since this may be very slow
-  result := '';
-  if @self = nil then
-    exit;
-  ctx := EVP_PKEY_CTX_new(@self, nil);
-  if assigned(ctx) then
-  try
-    EOpenSsl.Check(
-      EVP_PKEY_encrypt_init(ctx), 'EVP_PKEY_encrypt_init');
-    RsaSetPadding(ctx, MD);
-    EOpenSsl.Check( // first call to retrieve the maximum output length
-      EVP_PKEY_encrypt(ctx, nil, len, pointer(Content), Length(Content)),
-      'EVP_PKEY_encrypt1');
-    FastNewRawByteString(result, len); // allocate
-    EOpenSsl.Check( // second call to make the actual encryption
-      EVP_PKEY_encrypt(ctx, pointer(result), len, pointer(Content), Length(Content)),
-      'EVP_PKEY_encrypt2');
-    FakeSetLength(result, len); // previous len was the max, now is final size
-  finally
-    EVP_PKEY_CTX_free(ctx);
-  end;
-end;
-
-function EVP_PKEY.RsaDecrypt(const Content: RawByteString; MD: PEVP_MD;
-  CodePage: integer): RawByteString;
-var
-  ctx: PEVP_PKEY_CTX;
-  len: PtrUInt;
-begin
-  result := '';
-  if @self = nil then
-    exit;
-  ctx := EVP_PKEY_CTX_new(@self, nil);
-  if assigned(ctx) then
-  try
-    EOpenSsl.Check(
-      EVP_PKEY_decrypt_init(ctx), 'EVP_PKEY_decrypt_init');
-    RsaSetPadding(ctx, MD);
-    EOpenSsl.Check(
-      EVP_PKEY_decrypt(ctx, nil, len, pointer(Content), Length(Content)),
-      'EVP_PKEY_decrypt1');
-    FastSetStringCP(result, nil, len, CodePage);
-    EOpenSsl.Check(
-      EVP_PKEY_decrypt(ctx, pointer(result), len, pointer(Content), Length(Content)),
-      'EVP_PKEY_decrypt2');
-    FakeSetLength(result, len);
-  finally
-    EVP_PKEY_CTX_free(ctx);
-  end;
-end;
-
-procedure EVP_PKEY.RsaGetPubKey(out e, n: RawByteString);
-var
-  n_num, e_num: PBIGNUM;
-begin
-  if @self = nil then
-    exit;
-  RSA_get0_key(EVP_PKEY_get0_RSA(@self), @n_num, @e_num, nil);
-  e_num.ToBin(e);
-  n_num.ToBin(n);
-end;
-
-procedure EVP_PKEY.EccGetPubKeyCompressed(out k: RawByteString);
-var
-  pub: PByte;
-  publen: integer;
-begin
-  if @self = nil then
-    exit;
-  pub := nil;
-  publen := EC_KEY_key2buf(EVP_PKEY_get0_EC_KEY(@self),
-    POINT_CONVERSION_COMPRESSED, @pub, nil);
-  FastSetRawByteString(k, pub, publen);
-  OPENSSL_free(pub);
-end;
-
-procedure EVP_PKEY.EccGetPubKeyUncompressed(out x, y: RawByteString);
-var
-  pub: PAnsiChar;
-  publen: integer;
-begin
-  if @self = nil then
-    exit;
-  pub := nil;
-  publen := EC_KEY_key2buf(EVP_PKEY_get0_EC_KEY(@self),
-    POINT_CONVERSION_UNCOMPRESSED, @pub, nil);
-  if publen = 0 then
-    exit;
-  publen := (publen - 1) shr 1; // skip first byte, it's key compression marker
-  FastSetRawByteString(x, pub + 1, publen);
-  FastSetRawByteString(y, pub + publen + 1, publen);
-  OPENSSL_free(pub);
-end;
-
-
-
-function IsPem(p: PUtf8Char; up: PUtf8Char): boolean;
-begin
-  result := true;
-  repeat
-    p := PosChar(p, '-');
-    if p = nil then
-      break;
-    if NetStartWith(p, up) then // naive but good enough
-      exit;
-    inc(p);
-  until false;
-  result := false;
-end;
-
-var
-  VOID_STRING: AnsiChar; // initialized at #0 at startup
-
-function PassNotNil(const PassWord: SpiUtf8): pointer;
-begin
-  result := pointer(Password);
-  if result = nil then
-    result := @VOID_STRING; // nil would trigger the OpenSSL callback
-end;
-
-function LoadPrivateKey(PrivateKey: pointer; PrivateKeyLen: integer;
-  const Password: SpiUtf8): PEVP_PKEY;
-var
-  pw: pointer;
-  priv: PBIO;
-  pkcs12: PPKCS12;
-begin
-  if (PrivateKey = nil) or
-     (PrivateKeyLen = 0) then
-    result := nil
-  else
-  begin
-    pw := PassNotNil(Password);
-    priv := BIO_new_mem_buf(PrivateKey, PrivateKeyLen);
-    if IsPem(PrivateKey, '-----BEGIN') then
-      result := PEM_read_bio_PrivateKey(priv, nil, nil, pw)
-    else
-      result := nil;
-    if result = nil then
-    begin
-      if Password = '' then
-      begin
-        priv.Reset;
-        result := d2i_PrivateKey_bio(priv, nil); // try raw binary format
-      end;
-      if result = nil then
-      begin
-        priv.Reset;
-        result := d2i_PKCS8PrivateKey_bio(priv, nil, nil, pw); // try PKCS#8
-      end;
-      if result = nil then
-      begin
-        priv.Reset;
-        pkcs12 := d2i_PKCS12_bio(priv, nil); // try PKCS#12
-        pkcs12.Extract(Password, @result, nil, nil); // ignore cert
-        pkcs12.Free;
-      end;
-    end;
-    priv.Free;
-  end;
-end;
-
-function LoadPrivateKey(const Saved: RawByteString;
-  const Password: SpiUtf8): PEVP_PKEY;
-begin
-  if Saved <> '' then
-    result := LoadPrivateKey(pointer(Saved), length(Saved), Password)
-  else
-    result := nil;
-end;
-
-function LoadPublicKey(PublicKey: pointer; PublicKeyLen: integer;
-  const Password: SpiUtf8): PEVP_PKEY;
-var
-  pub: PBIO;
-begin
-  if (PublicKey = nil) or
-     (PublicKeyLen = 0) then
-    result := nil
-  else
-  begin
-    pub := BIO_new_mem_buf(PublicKey, PublicKeyLen);
-    if IsPem(PublicKey, '-----BEGIN') then
-      result := PEM_read_bio_PUBKEY(pub, nil, nil, PassNotNil(Password))
-    else
-      result := nil;
-    if (result = nil) and
-       (Password = '') then
-    begin
-      pub.reset;
-      result := d2i_PUBKEY_bio(pub, nil); // try raw binary format
-    end;
-    pub.Free;
-  end;
-end;
-
-function LoadPublicKey(const Saved: RawByteString;
-  const Password: SpiUtf8): PEVP_PKEY;
-begin
-  if Saved <> '' then
-    result := LoadPublicKey(pointer(Saved), length(Saved), Password)
-  else
-    result := nil;
-end;
-
 
 
 { BIO }
@@ -8094,6 +7594,41 @@ begin
     BIO_free(@self);
 end;
 
+type
+  TBioSave = function(bio: PBIO; instance: pointer): integer; cdecl;
+  TBioLoad = function(bio: PBIO; instance: pointer): pointer; cdecl;
+
+function BioSave(instance: pointer; sav: TBioSave;
+  codepage: integer = CP_RAWBYTESTRING): RawByteString;
+var
+  bio: PBIO;
+begin
+  result := '';
+  if instance = nil then
+    exit;
+  bio := BIO_new(BIO_s_mem);
+  try
+    EOpenSsl.Check(sav(bio, instance));
+    bio.ToString(result, codepage);
+  finally
+    bio.Free;
+  end;
+end;
+
+function BioLoad(const mem: RawByteString; load: TBioLoad): pointer;
+var
+  bio: PBIO;
+begin
+  EOpenSsl.CheckAvailable(nil, 'BioLoad');
+  if mem = '' then
+    result := nil
+  else
+  begin
+    bio := BIO_new_mem_buf(pointer(mem), length(mem));
+    result := load(bio, nil);
+    bio.Free;
+  end;
+end;
 
 { X509_REQ }
 
@@ -8203,7 +7738,7 @@ begin
   result := '';
   for u := low(KU_) to high(KU_) do
     if u in usages then
-      result := result + KU_[u];
+      result := Join([result, KU_[u]]);
 end;
 
 function XuText(usages: TX509Usages): RawUtf8;
@@ -8213,7 +7748,7 @@ begin
   result := '';
   for u := low(XU_) to high(XU_) do
     if u in usages then
-      result := result + XU_[u];
+      result := Join([result, XU_[u]]);
 end;
 
 function X509_REQ.SetUsageAndAltNames(
@@ -8247,7 +7782,7 @@ begin
     v := KuText(usages);
     if v <> '' then
     begin
-      v := 'critical' + v; // heading comma included
+      v := Join(['critical', v]); // heading comma included
       if not Add(NID_key_usage, pointer(v)) then
         exit;
     end;
@@ -8476,7 +8011,7 @@ begin
   if @self = nil then
     result := 0
   else
-    result := X509_REVOKED_get0_revocationDate(@self).ToDateTime;
+    result := X509_REVOKED_get0_revocationDate(@self).ToDateTime; // may be 0
 end;
 
 function X509_REVOKED.Reason: integer;
@@ -8541,7 +8076,7 @@ begin
   if @self = nil then
     result := 0
   else
-    result := X509_CRL_get_lastUpdate(@self).ToDateTime;
+    result := X509_CRL_get_lastUpdate(@self).ToDateTime; // may return 0
 end;
 
 function X509_CRL.NextUpdate: TDateTime;
@@ -9072,6 +8607,20 @@ begin
             (X509_STORE_add_cert(@self, x) = OPENSSLSUCCESS);
 end;
 
+function X509_STORE.AddCertificates(const x: PX509DynArray): boolean;
+var
+  i: PtrInt;
+begin
+  result := false;
+  if @self = nil then
+    exit;
+  for i := 0 to length(x) - 1 do
+    if x[i] <> nil then
+      if X509_STORE_add_cert(@self, x[i]) <> OPENSSLSUCCESS then
+        exit;
+  result := true;
+end;
+
 function X509_STORE.AddCrl(c: PX509_CRL): boolean;
 begin
   result := (@self <> nil) and
@@ -9245,7 +8794,7 @@ end;
 
 procedure BIGNUM.ToBin(out bin: RawByteString);
 begin
-  FastNewRawByteString(bin, Size);
+  pointer(bin) := FastNewString(Size);
   ToBin(pointer(bin));
 end;
 
@@ -9403,7 +8952,7 @@ begin
      (ASN1_TIME_to_tm(@self, @t) = OPENSSLSUCCESS) then
     result := TmToDateTime(t)
   else
-    result := 0; // deprecated
+    result := 0; // e.g. on deprecated OpenSSL without ASN1_TIME_to_tm()
 end;
 
 
@@ -9602,7 +9151,7 @@ begin
     begin
       result := RawUtf8(format('%d %s', [bits, result]));
       if nid = NID_rsassaPss then // only PS256/PS384/PS512 don't supply the MD
-        result := result + '-' + RawUtf8(OBJ_nid2sn(md));
+        result := Join([result, '-', RawUtf8(OBJ_nid2sn(md))]);
     end;
   end;
 end;
@@ -9770,7 +9319,7 @@ begin
   if @self = nil then
     result := 0
   else
-    result := X509_getm_notBefore(@self).ToDateTime;
+    result := X509_getm_notBefore(@self).ToDateTime; // 0 if no ASN1_TIME_to_tm()
 end;
 
 function X509.NotAfter: TDateTime;
@@ -9907,7 +9456,7 @@ begin
       exit;
   v := KuText(usages);
   if v <> '' then
-    if not SetExtension(NID_key_usage, 'critical' + v) then
+    if not SetExtension(NID_key_usage, Join(['critical', v])) then
       exit;
   v := XuText(usages);
   if v <> '' then
@@ -9938,7 +9487,7 @@ end;
 
 function X509.ToPkcs12(pkey: PEVP_PKEY; const password: SpiUtf8;
   CA: Pstack_st_X509; nid_key: integer; nid_cert: integer; iter: integer;
-  mac_iter: integer; const FriendlyName: RawUtf8): RawByteString;
+  mac_iter: integer; md_type: PEVP_MD; const FriendlyName: RawUtf8): RawByteString;
 var
   p12: PPKCS12;
 begin
@@ -9946,12 +9495,82 @@ begin
   if (@self = nil) or
      (pkey = nil) then
     exit;
-  p12 := NewPkcs12(
-    password, pkey, @self, CA, nid_key, nid_cert, iter, mac_iter, FriendlyName);
+  p12 := NewPkcs12(password, pkey, @self,
+           CA, nid_key, nid_cert, iter, mac_iter, FriendlyName);
   if p12 = nil then
     exit;
+  if md_type <> nil then // non-default hasher: recompute the password digest
+    // PKCS12_create() did PKCS12_set_mac(p12, pass, -1, NULL, 0, mac_iter, NULL))
+    PKCS12_set_mac(p12, pointer(password), -1, nil, 0, mac_iter, md_type);
   result := p12.ToBinary;
   p12.Free;
+end;
+
+function X509.ToPkcs12(pkey: PEVP_PKEY; const password: SpiUtf8;
+  format: TX509Pkcs12Format): RawByteString;
+var
+  nid, mac_iter: integer;
+  md_type: PEVP_MD;
+begin
+  // warning: default algorithm changed to AES-256-CBC with OpenSSL 3
+  // see https://github.com/openssl/openssl/commit/762970bd686c4aa
+  nid := 0;
+  mac_iter := 0;
+  md_type := nil;
+  case format of
+    p12Legacy:
+      // force legacy compatibility with Windows Server 2012 or MacOS/iOS
+      // - warning: OpenSSL 1.x uses legacy 40bit-RC2 by default, which is sadly
+      // incompatible with OpenSSL 3.x, so we force those safer (but still
+      // downward compatible with Windows XP) parameters on all OpenSSL versions
+      begin
+        nid := NID_pbe_WithSHA1And3_Key_TripleDES_CBC; // old SHA1-3DES algo
+        mac_iter := 1;
+        md_type := EVP_sha1;
+      end;
+    p12New:
+      // force OpenSSL 3.x new algorithm on OpenSSL 1.x (keep default otherwise)
+      if OpenSslVersion < OPENSSL3_VERNUM then
+      begin
+        nid := NID_aes_256_cbc; // new AES-256-CBC safer algo
+        mac_iter := PKCS12_DEFAULT_ITER;
+        md_type := EVP_sha256;
+      end;
+  end;
+  // perform the actual PCKS#12 binary export
+  result := ToPkcs12(pkey, password, nil, nid, nid, 0, mac_iter, md_type);
+end;
+
+function X509.ToPkcs12Ex(pkey: PEVP_PKEY; const password: SpiUtf8): RawByteString;
+var
+  pwd: RawUtf8;
+  fmt: TX509Pkcs12Format;
+begin
+  // retrieve the default global format
+  fmt := OpenSslDefaultPkcs12;
+  // allow to force a specific algorithm via a password prefix
+  if password <> '' then
+  begin
+    pwd := password;
+    if fmt <> p12PrefixDisabled then
+      case PCardinal(pwd)^ of
+        ord('3') + ord('d') shl 8 + ord('e') shl 16 + ord('s') shl 24:
+          if pwd[5] = '=' then // start with PKCS12_3DES_PREFIX = '3des='
+          begin
+            delete(pwd, 1, 5); // trim
+            fmt := p12Legacy;
+          end;
+        ord('a') + ord('e') shl 8 + ord('s') shl 16 + ord('=') shl 24:
+          begin // start with PKCS12_AES_PREFIX = 'aes='
+            delete(pwd, 1, 4);
+            fmt := p12New;
+          end;
+      end;
+  end;
+  // perform the actual PCKS#12 binary export
+  result := ToPkcs12(pkey, pwd, fmt);
+  if pointer(pwd) <> pointer(password) then
+    FillCharFast(pointer(pwd)^, length(pwd), 0); // anti-forensic
 end;
 
 function X509.Acquire: integer;
@@ -9979,6 +9598,16 @@ end;
 
 { PKCS12 }
 
+var
+  VOID_STRING: AnsiChar; // initialized at #0 at startup
+
+function PassNotNil(const PassWord: SpiUtf8): pointer;
+begin
+  result := pointer(Password);
+  if result = nil then
+    result := @VOID_STRING; // nil would trigger the OpenSSL callback
+end;
+
 function PKCS12.Extract(const password: SpiUtf8; privatekey: PPEVP_PKEY;
   cert: PPX509; ca: PPstack_st_X509): boolean;
 begin
@@ -9998,6 +9627,782 @@ begin
 end;
 
 
+{ EVP_PKEY }
+
+function EVP_PKEY.PrivateToDer(const PassWord: SpiUtf8): RawByteString;
+var
+  bio: PBIO;
+  res: integer;
+begin
+  result := '';
+  if @self = nil then
+    exit;
+  bio := BIO_new(BIO_s_mem);
+  if PassWord = '' then
+    res := i2d_PrivateKey_bio(bio, @self)
+  else
+    res := i2d_PKCS8PrivateKey_bio(bio, @self, EVP_aes_256_cbc,
+      pointer(PassWord), Length(PassWord), nil, nil);
+  if res = OPENSSLSUCCESS then
+    bio.ToString(result);
+  bio.Free;
+end;
+
+function EVP_PKEY.PublicToDer: RawByteString;
+begin
+  result := BioSave(@self, @i2d_PUBKEY_bio);
+end;
+
+function EVP_PKEY.PrivateToPem(const PassWord: SpiUtf8): RawUtf8;
+var
+  bio: PBIO;
+  res: integer;
+begin
+  result := '';
+  if @self = nil then
+    exit;
+  bio := BIO_new(BIO_s_mem);
+  if PassWord = '' then
+    res := PEM_write_bio_PrivateKey(bio, @self, nil, nil, 0, nil, nil)
+  else
+    res := PEM_write_bio_PKCS8PrivateKey(bio, @self, EVP_aes_256_cbc,
+      pointer(PassWord), Length(PassWord), nil, nil);
+  if res = OPENSSLSUCCESS then
+    result := bio.ToUtf8;
+  bio.Free;
+end;
+
+function EVP_PKEY.PublicToPem: RawUtf8;
+begin
+  result := BioSave(@self, @PEM_write_bio_PUBKEY, CP_UTF8);
+end;
+
+procedure EVP_PKEY.ToPem(out PrivateKey, PublicKey: RawUtf8;
+  const PrivateKeyPassWord: SpiUtf8);
+begin
+  if @self = nil then
+    exit;
+  PrivateKey := PrivateToPem(PrivateKeyPassWord);
+  PublicKey := PublicToPem;
+end;
+
+function EVP_PKEY.Sign(Algo: PEVP_MD; Msg: pointer; Len: integer): RawByteString;
+var
+  ctx: PEVP_MD_CTX;
+  s: PtrUInt;
+begin
+  // expects @self to be a private key
+  // we don't check "if @self = nil" because may be called without EVP_PKEY
+  result := ''; // '' on error
+  ctx := EVP_MD_CTX_new;
+  try
+    // note: ED25519 requires single-pass EVP_DigestSign()
+    s := 0;
+    if (EVP_DigestSignInit(ctx, nil, Algo, nil, @self) = OPENSSLSUCCESS) and
+       (EVP_DigestSign(ctx, nil, s, Msg, Len) = OPENSSLSUCCESS) then
+    begin
+      SetLength(result, s); // here size is maximum s bytes
+      if EVP_DigestSign(ctx, pointer(result), s, Msg, Len) = OPENSSLSUCCESS then
+      begin
+        if s <> PtrUInt(length(result)) then
+          SetLength(result, s); // result leading zeros may trim the size
+      end
+      else
+        result := '';
+    end;
+  finally
+    EVP_MD_CTX_free(ctx);
+  end;
+end;
+
+function EVP_PKEY.Verify(Algo: PEVP_MD;
+  Sig, Msg: pointer; SigLen, MsgLen: integer): boolean;
+var
+  ctx: PEVP_MD_CTX;
+begin
+  // expects @self to be a public (or private) key
+  // we don't check "if @self = nil" because may be called without EVP_PKEY
+  // we don't check "Algo = nil" because algo may have its built-in hashing
+  ctx := EVP_MD_CTX_new;
+  try
+    // note: ED25519 requires single-pass EVP_DigestVerify()
+    result :=
+      (EVP_DigestVerifyInit(ctx, nil, Algo, nil, @self) = OPENSSLSUCCESS) and
+      (EVP_DigestVerify(ctx, Sig, SigLen, Msg, MsgLen) = OPENSSLSUCCESS);
+  finally
+    EVP_MD_CTX_free(ctx);
+  end;
+end;
+
+function EVP_PKEY.ToAltNames(const Subjects: TRawUtf8DynArray): RawUtf8;
+var
+  i: PtrInt;
+  s: RawUtf8;
+begin
+  // self instance is not used
+  result := '';
+  for i := 0 to length(Subjects) - 1 do // in-place modified
+  begin
+    s := Subjects[i];
+    if PosExChar(':', s) = 0 then
+      s := Join(['DNS:', s]); // e.g. DNS: email: IP: URI:
+    if result <> '' then
+      result := Join([result, ',', s])
+    else
+      result := s;
+  end;
+end;
+
+function EVP_PKEY.CreateSelfSignedCsr(Algo: PEVP_MD;
+  const Subjects: TRawUtf8DynArray): RawByteString;
+var
+  req: PX509_REQ;
+  names: PX509_NAME;
+begin
+  // same logic as in TCryptCertOpenSsl.Generate
+  result := '';
+  if (@self = nil) or
+     (Subjects = nil) then
+    exit;
+  req := NewCertificateRequest;
+  try
+    names := X509_REQ_get_subject_name(req);
+    names^.AddEntry('CN', Subjects[0]); // first subject is the X509 Common Name
+    req.AddExtension(NID_subject_alt_name, ToAltNames(Subjects));
+    if X509_REQ_set_pubkey(req, @self) = OPENSSLSUCCESS then
+      if req.Sign(@self, Algo) <> 0 then // returns signature size in bytes
+        result := req^.ToBinary;
+  finally
+    req.Free;
+  end;
+end;
+
+function EVP_PKEY.Size: integer;
+begin
+  if @self <> nil then
+    result := EVP_PKEY_size(@self)
+  else
+    result := 0;
+end;
+
+function EVP_PKEY.AlgoName: RawUtf8;
+begin
+  if @self <> nil then
+    result := OBJ_nid2sn(EVP_PKEY_id(@self))
+  else
+    result := '';
+end;
+
+procedure EVP_PKEY.Free;
+begin
+  if @self <> nil then
+    EVP_PKEY_free(@self);
+end;
+
+type
+  // extra header for IV and plain text / key size storage
+  // - should match the very same record definition in TRsa.Seal/Open
+  // from mormot.crypt.rsa.pas, which is fully compatible with this unit
+  TRsaSealHeader = packed record
+    iv: THash128;
+    plainlen: integer;
+    encryptedkeylen: word; // typically 256 bytes for RSA-2048
+    // followed by the encrypted key then the encrypted message
+  end;
+  PRsaSealHeader = ^TRsaSealHeader;
+
+function EVP_PKEY.RsaSeal(Cipher: PEVP_CIPHER;
+  const Msg: RawByteString): RawByteString;
+var
+  ctx: PEVP_CIPHER_CTX;
+  pubk: PEVP_PKEY;
+  ek: RawByteString;
+  ekl, lu, lf, msgpos: integer;
+  p: PAnsiChar;
+  head: TRsaSealHeader;
+begin
+  // expects @self to be a public key
+  // must be RSA because it is the only OpenSSL algorithm featuring key transport
+  result := '';
+  // validate input parameters
+  head.plainlen := length(Msg);
+  if (@self = nil) or
+     (head.plainlen = 0) or
+     (head.plainlen > 128 shl 20) or // fair limitation for in-memory encryption
+     (Cipher = nil) then
+    exit;
+  // generate the ephemeral secret key and IV within the corresponding header
+  // and encrypt this ephemeral secret using the current RSA public key
+  ctx := EVP_CIPHER_CTX_new;
+  if ctx = nil then
+    exit;
+  pubk := @self;
+  SetLength(ek, EVP_PKEY_size(@self));
+  if EVP_SealInit(ctx, Cipher, @ek, @ekl, @head.iv, @pubk, 1) = OPENSSLSUCCESS then
+  begin
+    head.encryptedkeylen := ekl;
+    msgpos := SizeOf(head) + ekl;
+    pointer(result) := FastNewString(msgpos + head.plainlen + 16);
+    // encrypt the message
+    if EVP_EncryptUpdate(ctx, @PByteArray(result)[msgpos], @lu,
+         pointer(Msg), head.plainlen) = OPENSSLSUCCESS then
+    begin
+      // concatenate the header, encrypted key and message
+      PRsaSealHeader(result)^ := head;
+      MoveFast(pointer(ek)^, PByteArray(result)[SizeOf(head)], ekl);
+      p := @PByteArray(result)[msgpos + lu];
+      if EVP_SealFinal(ctx, pointer(p), @lf) = OPENSSLSUCCESS then
+        FakeLength(result, p + lf - pointer(result))
+      else
+        result := '';
+    end
+    else
+      result := '';
+  end;
+  EVP_CIPHER_CTX_free(ctx);
+end;
+
+{ for reference, some python reference code with OpenSSL 3.x:
+  crt = x509.load_pem_x509_certificate(pem, default_backend())
+  rsa = crt.public_key()
+  apadding = padding.PKCS1v15()
+  aes_key = os.urandom(16)
+  aes_iv = os.urandom(16)
+  cipher = Cipher(algorithms.AES(aes_key), modes.CTR(aes_iv), backend=default_backend())
+  encryptor = cipher.encryptor()
+  encrypted_data = encryptor.update(content) + encryptor.finalize()
+  encrypted_aes_key = rsa.encrypt(aes_key, apadding)
+  header = TRsaSealHeader(iv=aes_iv, plainlen=len(content), encryptedkeylen=len(encrypted_aes_key))
+  final_message = header.pack() + encrypted_aes_key + encrypted_data
+}
+
+function EVP_PKEY.RsaOpen(Cipher: PEVP_CIPHER;
+  const Msg: RawByteString; CodePage: integer): RawByteString;
+var
+  ctx: PEVP_CIPHER_CTX;
+  msgpos, lu, lf, lm: integer;
+  head: PRsaSealHeader absolute Msg;
+  input: PByteArray absolute Msg;
+begin
+  // expects @self to be a private key
+  result := '';
+  // decode and validate the header
+  lm := length(Msg);
+  if (@self = nil) or
+     (Cipher = nil) or
+     (lm < SizeOf(head^)) or
+     (head^.plainlen <= 0) or
+     (head^.plainlen > 128 shl 20) then
+    exit;
+  msgpos := SizeOf(head^) + head^.encryptedkeylen;
+  if lm < msgpos + head^.plainlen then
+    exit; // avoid buffer overflow on malformatted/forged input
+  // decrypt the ephemeral key, then the message
+  ctx := EVP_CIPHER_CTX_new;
+  if ctx = nil then
+    exit;
+  if EVP_OpenInit(ctx, Cipher, @input[SizeOf(head^)],
+       head.encryptedkeylen, @head.iv, @self) = OPENSSLSUCCESS then
+  begin
+    FastSetStringCP(result, nil, head^.plainlen, CodePage);
+    if (EVP_DecryptUpdate(ctx,
+         pointer(result), @lu, @input[msgpos], lm - msgpos) <> OPENSSLSUCCESS) or
+       (EVP_OpenFinal(ctx,
+         @PByteArray(result)[{%H-}lu], @lf) <> OPENSSLSUCCESS) or
+       (lu + {%H-}lf <> head^.plainlen) then
+      result:= '';
+  end;
+  EVP_CIPHER_CTX_free(ctx);
+end;
+
+procedure RsaSetPadding(ctx: PEVP_PKEY_CTX; md: PEVP_MD);
+begin
+  EOpenSsl.Check(
+    EVP_PKEY_CTX_set_rsa_padding(ctx, RSA_PKCS1_OAEP_PADDING),
+    'EVP_PKEY_CTX_set_rsa_padding');
+  if OpenSslVersion < OPENSSL3_VERNUM then
+  begin
+    EOpenSsl.Check(
+      EVP_PKEY_CTX_set_rsa_mgf1_md(ctx, md), 'EVP_PKEY_CTX_set_rsa_mgf1_md');
+    EOpenSsl.Check(
+      EVP_PKEY_CTX_set_rsa_oaep_md(ctx, md), 'EVP_PKEY_CTX_set_rsa_oaep_md');
+  end;
+end;
+
+function EVP_PKEY.RsaEncrypt(const Content: RawByteString; MD: PEVP_MD): RawByteString;
+var
+  ctx: PEVP_PKEY_CTX;
+  len: PtrUInt;
+begin
+  // to be used for a very small content since this may be very slow
+  result := '';
+  if @self = nil then
+    exit;
+  ctx := EVP_PKEY_CTX_new(@self, nil);
+  if Assigned(ctx) then
+  try
+    EOpenSsl.Check(
+      EVP_PKEY_encrypt_init(ctx), 'EVP_PKEY_encrypt_init');
+    RsaSetPadding(ctx, MD);
+    EOpenSsl.Check( // first call to retrieve the maximum output length
+      EVP_PKEY_encrypt(ctx, nil, len, pointer(Content), Length(Content)),
+      'EVP_PKEY_encrypt1');
+    pointer(result) := FastNewString(len); // allocate
+    EOpenSsl.Check( // second call to make the actual encryption
+      EVP_PKEY_encrypt(ctx, pointer(result), len, pointer(Content), Length(Content)),
+      'EVP_PKEY_encrypt2');
+    FakeSetLength(result, len); // previous len was the max, now is final size
+  finally
+    EVP_PKEY_CTX_free(ctx);
+  end;
+end;
+
+function EVP_PKEY.RsaDecrypt(const Content: RawByteString; MD: PEVP_MD;
+  CodePage: integer): RawByteString;
+var
+  ctx: PEVP_PKEY_CTX;
+  len: PtrUInt;
+begin
+  result := '';
+  if @self = nil then
+    exit;
+  ctx := EVP_PKEY_CTX_new(@self, nil);
+  if Assigned(ctx) then
+  try
+    EOpenSsl.Check(
+      EVP_PKEY_decrypt_init(ctx), 'EVP_PKEY_decrypt_init');
+    RsaSetPadding(ctx, MD);
+    EOpenSsl.Check(
+      EVP_PKEY_decrypt(ctx, nil, len, pointer(Content), Length(Content)),
+      'EVP_PKEY_decrypt1');
+    FastSetStringCP(result, nil, len, CodePage);
+    EOpenSsl.Check(
+      EVP_PKEY_decrypt(ctx, pointer(result), len, pointer(Content), Length(Content)),
+      'EVP_PKEY_decrypt2');
+    FakeSetLength(result, len);
+  finally
+    EVP_PKEY_CTX_free(ctx);
+  end;
+end;
+
+procedure EVP_PKEY.RsaGetPubKey(out e, n: RawByteString);
+var
+  n_num, e_num: PBIGNUM;
+begin
+  if @self = nil then
+    exit;
+  RSA_get0_key(EVP_PKEY_get0_RSA(@self), @n_num, @e_num, nil);
+  e_num.ToBin(e);
+  n_num.ToBin(n);
+end;
+
+procedure EVP_PKEY.EccGetPubKeyCompressed(out k: RawByteString);
+var
+  pub: PByte;
+  publen: integer;
+begin
+  if @self = nil then
+    exit;
+  pub := nil;
+  publen := EC_KEY_key2buf(EVP_PKEY_get0_EC_KEY(@self),
+    POINT_CONVERSION_COMPRESSED, @pub, nil);
+  FastSetRawByteString(k, pub, publen);
+  OPENSSL_free(pub);
+end;
+
+procedure EVP_PKEY.EccGetPubKeyUncompressed(out x, y: RawByteString);
+var
+  pub: PAnsiChar;
+  publen: integer;
+begin
+  if @self = nil then
+    exit;
+  pub := nil;
+  publen := EC_KEY_key2buf(EVP_PKEY_get0_EC_KEY(@self),
+    POINT_CONVERSION_UNCOMPRESSED, @pub, nil);
+  if publen = 0 then
+    exit;
+  publen := (publen - 1) shr 1; // skip first byte, it's key compression marker
+  FastSetRawByteString(x, pub + 1, publen);
+  FastSetRawByteString(y, pub + publen + 1, publen);
+  OPENSSL_free(pub);
+end;
+
+
+{ ******************** OpenSSL Helpers }
+
+{ TX509Cache }
+
+procedure TX509Cache.Cache(const pem: RawUtf8; out res: PX509DynArray);
+begin
+  if pem = '' then
+    exit;
+  if fPem = '' then
+    fSafe.Init; // may be needed if was allocated on stack
+  fSafe.Lock;
+  try
+    if fPem <> pem then
+    begin
+      fPem := pem;
+      PX509DynArrayFree(fX509);
+      fX509 := LoadCertificates(pem);
+    end;
+    res := fX509;
+  finally
+    fSafe.UnLock;
+  end;
+end;
+
+procedure TX509Cache.Done;
+begin
+  if fX509 <> nil then
+    PX509DynArrayFree(fX509);
+end;
+
+
+procedure OpenSSL_Free(ptr: pointer);
+begin
+  CRYPTO_free(ptr, 'mormot', 0);
+end;
+
+function OpenSSL_error(error: integer): RawUtf8;
+begin
+  OpenSSL_error(error, result);
+end;
+
+procedure OpenSSL_error(error: integer; var result: RawUtf8);
+var
+  tmp: array[0..1023] of AnsiChar;
+begin
+  result := '';
+  if error = 0 then // no error in the queue
+    exit;
+  ERR_error_string_n(error, @tmp, SizeOf(tmp));
+  FastSetString(result, @tmp, mormot.core.base.StrLen(@tmp));
+end;
+
+function OpenSSL_error_short(error: integer): ShortString;
+begin
+  result[0] := #0;
+  if error = 0 then // no error in the queue
+    exit;
+  ERR_error_string_n(error, @result[1], 254);
+  result[0] := AnsiChar(mormot.core.base.StrLen(@result[1]));
+end;
+
+// see https://www.openssl.org/docs/man1.1.1/man3/SSL_get_error.html
+function SSL_is_fatal_error(get_error: integer): boolean;
+begin
+  case get_error of
+    SSL_ERROR_NONE,
+    SSL_ERROR_WANT_READ,
+    SSL_ERROR_WANT_WRITE,
+    SSL_ERROR_WANT_CONNECT,
+    SSL_ERROR_WANT_ACCEPT:
+      result := false;
+  else
+    result := true;
+  end;
+end;
+
+const
+  // documented errors constants names after SSL_*() functions failure
+  SSL_ERROR_TEXT: array[SSL_ERROR_NONE .. SSL_ERROR_WANT_CLIENT_HELLO_CB] of RawUtf8 = (
+    'NONE',
+    'SSL',
+    'WANT_READ',
+    'WANT_WRITE',
+    'WANT_X509_LOOKUP',
+    'SYSCALL',
+    'ZERO_RETURN',
+    'WANT_CONNECT',
+    'WANT_ACCEPT',
+    'WANT_ASYNC',
+    'WANT_ASYNC_JOB',
+    'WANT_CLIENT_HELLO_CB');
+
+procedure SSL_get_error_text(get_error: integer; var result: RawUtf8);
+begin
+  if get_error in [low(SSL_ERROR_TEXT) .. high(SSL_ERROR_TEXT)] then
+  begin
+    result := SSL_ERROR_TEXT[get_error];
+    case get_error of
+      SSL_ERROR_SSL:
+        // non-recoverable protocol error
+        result := RawUtf8(format('%s (%s)',
+          [result, OpenSSL_error_short(ERR_get_error)]));
+      SSL_ERROR_SYSCALL:
+        begin
+          // non-recoverable I/O error
+          get_error := RawSocketErrNo; // try to get additional info from OS
+          if get_error <> NO_ERROR then
+            result := RawUtf8(format('%s (%d %s)',
+                        [result, get_error, GetErrorText(get_error)]));
+        end;
+    end; // non-fatal SSL_ERROR_WANT_* codes are unexpected here
+  end
+  else
+    str(get_error, AnsiString(result)); // paranoid / undocumented
+  result := Join(['SSL_ERROR_', result]);
+end;
+
+function SSL_get_ex_new_index(l: integer; p: pointer; newf: PCRYPTO_EX_new;
+  dupf: PCRYPTO_EX_dup; freef: PCRYPTO_EX_free): integer;
+begin
+  result := CRYPTO_get_ex_new_index(CRYPTO_EX_INDEX_SSL, l, p, newf, dupf, freef);
+end;
+
+function Digest(md: PEVP_MD; buf: pointer; buflen: integer;
+  out dig: THash512): integer;
+var
+  ctx: PEVP_MD_CTX;
+begin
+  result := 0;
+  if (buf = nil) or
+     (buflen < 0) then
+    exit;
+  ctx := EVP_MD_CTX_new;
+  if ctx = nil then
+    exit;
+  if md = nil then
+    md := EVP_sha1; // SHA-1 fingerprint by default
+  if (EVP_DigestInit_ex(ctx, md, nil) = OPENSSLSUCCESS) and
+     (EVP_DigestUpdate(ctx, buf, buflen) = OPENSSLSUCCESS) and
+     (EVP_DigestFinal_ex(ctx, @dig, nil) = OPENSSLSUCCESS) then
+    result := EVP_MD_size(md);
+  EVP_MD_CTX_free(ctx);
+end;
+
+function Digest(md: PEVP_MD; buf: pointer; buflen: integer): RawUtf8;
+var
+  dig: THash512;
+begin
+  result := MacToHex(@dig, Digest(md, buf, buflen, dig));
+end;
+
+function Digest(md: PEVP_MD; const buf: RawByteString): RawUtf8;
+begin
+  result := Digest(md, pointer(buf), length(buf));
+end;
+
+function SSL_CTX_set_session_cache_mode(ctx: PSSL_CTX; mode: integer): integer;
+begin
+  result := SSL_CTX_ctrl(ctx, SSL_CTRL_SET_SESS_CACHE_MODE, mode, nil);
+end;
+
+function SSL_CTX_add_extra_chain_cert(ctx: PSSL_CTX; cert: PX509): cardinal;
+begin
+  result := SSL_CTX_ctrl(ctx, SSL_CTRL_EXTRA_CHAIN_CERT, 0, cert);
+end;
+
+function SSL_CTX_set_tmp_dh(ctx: PSSL_CTX; dh: pointer): integer;
+begin
+  result := SSL_CTX_ctrl(ctx, SSL_CTRL_SET_TMP_DH, 0, dh);
+end;
+
+function SSL_CTX_set_tmp_ecdh(ctx: PSSL_CTX; ecdh: pointer): integer;
+begin
+  result := SSL_CTX_ctrl(ctx, SSL_CTRL_SET_TMP_ECDH, 0, ecdh);
+end;
+
+function SSL_CTX_set_ecdh_auto(ctx: PSSL_CTX; onoff: integer): integer;
+begin
+  result := 1;
+end;
+
+function SSL_CTX_set_min_proto_version(ctx: PSSL_CTX; version: integer): integer;
+begin
+  result := SSL_CTX_ctrl(ctx, SSL_CTRL_SET_MIN_PROTO_VERSION, version, nil);
+end;
+
+function SSL_CTX_set_max_proto_version(ctx: PSSL_CTX; version: integer): integer;
+begin
+  result := SSL_CTX_ctrl(ctx, SSL_CTRL_SET_MAX_PROTO_VERSION, version, nil);
+end;
+
+function SSL_set_tlsext_host_name(const s: PSSL; const name: RawUtf8): integer;
+begin
+  result := SSL_ctrl(s, SSL_CTRL_SET_TLSEXT_HOSTNAME,
+    TLSEXT_NAMETYPE_host_name, pointer(name));
+end;
+
+function SSL_CTX_set_tlsext_servername_callback(ctx: PSSL_CTX; cb: SSL_SNI_servername_cb): integer;
+begin
+  result := SSL_CTX_callback_ctrl(
+    ctx, SSL_CTRL_SET_TLSEXT_SERVERNAME_CB, SSL_CTX_callback_ctrl_(cb));
+end;
+
+function SSL_CTX_set_tlsext_servername_arg(ctx: PSSL_CTX; arg: pointer): integer;
+begin
+  result := SSL_CTX_ctrl(ctx, SSL_CTRL_SET_TLSEXT_SERVERNAME_ARG, 0, arg);
+end;
+
+function SSL_set_mode(s: PSSL; version: integer): integer;
+begin
+  result := SSL_ctrl(s, SSL_CTRL_MODE, version, nil);
+end;
+
+function SSL_get_mode(s: PSSL): integer;
+begin
+  result := SSL_ctrl(s, SSL_CTRL_MODE, 0, nil);
+end;
+
+function EVP_MD_CTX_size(ctx: PEVP_MD_CTX): integer;
+begin
+  result := EVP_MD_size(EVP_MD_CTX_md(ctx))
+end;
+
+function BN_num_bytes(bn: PBIGNUM): integer;
+begin
+  result := (BN_num_bits(bn) + 7) shr 3;
+end;
+
+function BigNumFromDecimal(const Text: RawUtf8): PBIGNUM;
+begin
+  result := nil;
+  if BN_dec2bn(@result, pointer(Text)) = 0 then
+    result := nil;
+end;
+
+function BigNumHexFromDecimal(const Text: RawUtf8): RawUtf8;
+var
+  bn: PBIGNUM;
+begin
+  bn := BigNumFromDecimal(Text);
+  result := bn^.ToHex;
+  bn^.Free;
+end;
+
+function EVP_PKEY_CTX_set_rsa_padding(ctx: PEVP_PKEY_CTX; padding: integer): integer;
+begin
+  result := {$ifndef OPENSSLSTATIC}libcrypto.{$endif}RSA_pkey_ctx_ctrl(
+    ctx, -1, EVP_PKEY_CTRL_RSA_PADDING, padding, nil);
+end;
+
+function EVP_PKEY_CTX_set_rsa_mgf1_md(ctx: PEVP_PKEY_CTX; md: PEVP_MD): integer;
+begin
+  result := RSA_pkey_ctx_ctrl(ctx,
+    EVP_PKEY_OP_TYPE_SIG or EVP_PKEY_OP_TYPE_CRYPT,
+    EVP_PKEY_CTRL_RSA_MGF1_MD, 0, md);
+end;
+
+function EVP_PKEY_CTX_set_rsa_oaep_md(ctx: PEVP_PKEY_CTX; md: PEVP_MD): integer;
+begin
+  result := EVP_PKEY_CTX_ctrl(ctx,
+    EVP_PKEY_RSA, EVP_PKEY_OP_TYPE_CRYPT, EVP_PKEY_CTRL_RSA_OAEP_MD, 0, md);
+end;
+
+function DTLSv1_get_timeout(s: PSSL; timeval: PTimeVal): time_t;
+begin
+  result := SSL_ctrl(s, DTLS_CTRL_GET_TIMEOUT, 0, timeval);
+end;
+
+procedure DTLSv1_handle_timeout(s: PSSL);
+begin
+  SSL_ctrl(s, DTLS_CTRL_HANDLE_TIMEOUT, 0, nil);
+end;
+
+function TmToDateTime(const t: tm): TDateTime;
+begin
+  result := EncodeDate(t.tm_year + 1900, t.tm_mon + 1, t.tm_mday) +
+            EncodeTime(t.tm_hour, t.tm_min, t.tm_sec, 0);
+end;
+
+function NewOpenSslStack: POPENSSL_STACK;
+begin
+  result := OPENSSL_sk_new(nil);
+end;
+
+function LoadCsr(const Der: RawByteString): PX509_REQ;
+begin
+  result := BioLoad(Der, @d2i_X509_REQ_bio);
+end;
+
+function LoadPrivateKey(PrivateKey: pointer; PrivateKeyLen: integer;
+  const Password: SpiUtf8; Pkcs12Cert: PPX509): PEVP_PKEY;
+var
+  pw: pointer;
+  priv: PBIO;
+  pkcs12: PPKCS12;
+begin
+  if (PrivateKey = nil) or
+     (PrivateKeyLen = 0) then
+    result := nil
+  else
+  begin
+    pw := PassNotNil(Password);
+    priv := BIO_new_mem_buf(PrivateKey, PrivateKeyLen);
+    if NetIsPem(PrivateKey) then
+      result := PEM_read_bio_PrivateKey(priv, nil, nil, pw)
+    else
+      result := nil;
+    if result = nil then
+    begin
+      if Password = '' then
+      begin
+        priv.Reset;
+        result := d2i_PrivateKey_bio(priv, nil); // try raw binary format
+      end;
+      if result = nil then
+      begin
+        priv.Reset;
+        result := d2i_PKCS8PrivateKey_bio(priv, nil, nil, pw); // try PKCS#8
+      end;
+      if result = nil then
+      begin
+        priv.Reset;
+        pkcs12 := d2i_PKCS12_bio(priv, nil); // try PKCS#12
+        pkcs12.Extract(Password, @result, Pkcs12Cert, nil); // ignore CA
+        pkcs12.Free;
+      end;
+    end;
+    priv.Free;
+  end;
+end;
+
+function LoadPrivateKey(const Saved: RawByteString;
+  const Password: SpiUtf8; Pkcs12Cert: PPX509): PEVP_PKEY;
+begin
+  if Saved <> '' then
+    result := LoadPrivateKey(pointer(Saved), length(Saved), Password, Pkcs12Cert)
+  else
+    result := nil;
+end;
+
+function LoadPublicKey(PublicKey: pointer; PublicKeyLen: integer;
+  const Password: SpiUtf8): PEVP_PKEY;
+var
+  pub: PBIO;
+begin
+  if (PublicKey = nil) or
+     (PublicKeyLen = 0) then
+    result := nil
+  else
+  begin
+    pub := BIO_new_mem_buf(PublicKey, PublicKeyLen);
+    if NetIsPem(PublicKey) then
+      result := PEM_read_bio_PUBKEY(pub, nil, nil, PassNotNil(Password))
+    else
+      result := nil;
+    if (result = nil) and
+       (Password = '') then
+    begin
+      pub.reset;
+      result := d2i_PUBKEY_bio(pub, nil); // try raw binary format
+    end;
+    pub.Free;
+  end;
+end;
+
+function LoadPublicKey(const Saved: RawByteString;
+  const Password: SpiUtf8): PEVP_PKEY;
+begin
+  if Saved <> '' then
+    result := LoadPublicKey(pointer(Saved), length(Saved), Password)
+  else
+    result := nil;
+end;
+
 const
   X509v3 = 2;    // X509_VERSION_3 has value 2 and X509_VERSION_1 has value 0 ;)
   X509reqv1 = 0; // version number should be 0 as stated by RFC 2986
@@ -10005,7 +10410,7 @@ const
 
 function NewCertificate: PX509;
 var
-  rnd: array[0..19] of byte;
+  rnd: THash160;
   bn: PBIGNUM;
   ai: PASN1_INTEGER;
   x: PX509;
@@ -10014,8 +10419,8 @@ begin
   result := nil;
   x := X509_new();
   EOpenSsl.Check(X509_set_version(x, X509v3));
-  // compute a random serial from OpenSSL PRNG
-  RAND_bytes(@rnd, 20);
+  // compute a 160-bit random serial from OpenSSL PRNG
+  RAND_bytes(@rnd, SizeOf(rnd));
   rnd[0] := rnd[0] and $7f; // ensure > 0
   bn := BN_bin2bn(@rnd, 20, nil);
   ai := BN_to_ASN1_INTEGER(bn, nil);
@@ -10027,12 +10432,22 @@ begin
     x.Free;
 end;
 
-function LoadCertificate(const Der: RawByteString): PX509;
+function LoadCertificate(const DerOrPem: RawByteString): PX509;
+var
+  x: PX509DynArray;
 begin
-  result := BioLoad(Der, @d2i_X509_bio);
+  result := nil;
+  if NetIsPem(pointer(DerOrPem)) then
+  begin
+    x := LoadCertificates(DerOrPem, {max=}1); // read first PEM
+    if x <> nil then
+      result := x[0];
+  end
+  else
+    result := BioLoad(DerOrPem, @d2i_X509_bio); // DER binary format
 end;
 
-function LoadCertificates(const Pem: RawUtf8): PX509DynArray;
+function LoadCertificates(const Pem: RawUtf8; Max: integer): PX509DynArray;
 var
   bio: PBIO;
   x: PX509;
@@ -10048,10 +10463,26 @@ begin
     if x = nil then
       break;
     PtrArrayAdd(result, x, n);
-  until false;
+  until (Max <> 0) and (n >= Max);
   if n <> 0 then
     DynArrayFakeLength(result, n);
   bio.Free;
+end;
+
+var
+  _lasts: TX509Cache;
+  _last: array[TSystemCertificateStore] of TX509Cache;
+
+function LoadCertificatesFromSystemStore(CertStores: TSystemCertificateStores;
+  FlushCache, OnlySystemStore: boolean): PX509DynArray;
+begin
+  _lasts.Cache(GetSystemStoreAsPem(CertStores, FlushCache, OnlySystemStore), result);
+end;
+
+function LoadCertificatesFromOneSystemStore(CertStore: TSystemCertificateStore;
+  FlushCache: boolean): PX509DynArray;
+begin
+  _last[CertStore].Cache(GetOneSystemStoreAsPem(CertStore, FlushCache), result);
 end;
 
 function NewCertificateStore: PX509_STORE;
@@ -10128,6 +10559,15 @@ begin
   result := BioLoad(Der, @d2i_PKCS12_bio);
 end;
 
+function ParsePkcs12(const Saved: RawByteString; const Password: SpiUtf8;
+  out Cert: PX509; out PrivateKey: PEVP_PKEY): boolean;
+var
+  pkcs12: PPKCS12;
+begin
+  pkcs12 := LoadPkcs12(Saved);
+  result := pkcs12.Extract(Password, @PrivateKey, @Cert, nil); // ignore CA
+  pkcs12.Free;
+end;
 
 function PX509DynArrayToPem(const X509: PX509DynArray): RawUtf8;
 var
@@ -10151,7 +10591,7 @@ var
 begin
   result := '';
   for i := 0 to length(X509) - 1 do
-    result := result +  X509[i].PeerInfo + '---------'#13#10;
+    result := Join([result, X509[i].PeerInfo, '---------'#13#10]);
 end;
 
 procedure PX509DynArrayFree(var X509: PX509DynArray);
@@ -10161,97 +10601,6 @@ begin
   for i := 0 to length(X509) - 1 do
     X509[i].Free;
   X509 := nil;
-end;
-
-
-{ EOpenSsl }
-
-class procedure EOpenSsl.Check(caller: TObject; const method: shortstring;
-  res: integer; errormsg: PRawUtf8; ssl: pointer);
-begin
-  if res <> OPENSSLSUCCESS then
-    CheckFailed(caller, method, errormsg, ssl, res);
-end;
-
-class procedure EOpenSsl.Check(res: integer; const method: shortstring;
-  ssl: pointer);
-begin
-  if res <> OPENSSLSUCCESS then
-    CheckFailed(nil, method, nil, ssl, res);
-end;
-
-class procedure EOpenSsl.CheckFailed(caller: TObject; const method: shortstring;
-  errormsg: PRawUtf8; ssl: pointer; sslretcode: integer);
-var
-  res: integer;
-  msg: RawUtf8;
-  exc: EOpenSsl;
-begin
-  if ssl = nil then
-  begin
-    // generic OpenSSL error (e.g. within cryptography context)
-    res := ERR_get_error;    // unqueue earliest error code, or 0 if no more
-    OpenSSL_error(res, msg); // get corresponding text from library
-  end
-  else
-  begin
-    // specific error within the context of ssl_*() methods
-    res := SSL_get_error(ssl, sslretcode);
-    SSL_get_error_text(res, msg); // recognize SSL_ERROR_* constant and more
-    PSSL(ssl).IsVerified(@msg); // append cert verif error text to msg if needed
-  end;
-  if errormsg <> nil then
-  begin
-    if errormsg^ <> '' then // caller may have set additional information
-      msg := msg + errormsg^;
-    errormsg^ := msg;
-  end;
-  if caller = nil then
-    exc := CreateFmt('OpenSSL %s error %d [%s]', [OpenSslVersionHexa, res, msg])
-  else
-    exc := CreateFmt('%s.%s: OpenSSL %s error %d [%s]',
-      [ClassNameShort(caller)^, method, OpenSslVersionHexa, res, msg]);
-  exc.fLastError := res;
-  raise exc;
-end;
-
-{$ifdef OPENSSLSTATIC} // OpenSSL is always available when statically linked
-
-class procedure EOpenSsl.TryNotAvailable(caller: TClass; const method: shortstring);
-begin
-end;
-
-class procedure EOpenSsl.CheckAvailable(caller: TClass; const method: shortstring);
-begin
-end;
-
-{$else}
-
-class procedure EOpenSsl.TryNotAvailable(caller: TClass; const method: shortstring);
-var
-  name: shortstring;
-begin
-  if OpenSslIsAvailable then
-    exit;
-  if caller = nil then
-    name := method
-  else
-    name := ClassNameShort(caller)^ + '.' + method;
-  raise CreateFmt('%s: OpenSSL ' + LIB_TXT + ' not available [%s]',
-    [name, openssl_initialize_errormsg])
-end;
-
-class procedure EOpenSsl.CheckAvailable(caller: TClass; const method: shortstring);
-begin
-  if openssl_initialized <> osslAvailable then
-    TryNotAvailable(caller, method);
-end;
-
-{$endif OPENSSLSTATIC}
-
-class function EOpenSsl.GetOpenSsl: string;
-begin
-  result := OpenSslVersionHexa;
 end;
 
 
@@ -10269,9 +10618,9 @@ type
     fCtx: PSSL_CTX;
     fSsl: PSSL;
     fPeer: PX509;
-    fCipherName: RawUtf8;
+    fCipherName, fServerAddress: RawUtf8;
     fDoSslShutdown: boolean;
-    procedure Check(const method: shortstring; res: integer);
+    procedure Check(const method: ShortString; res: integer);
       {$ifdef HASINLINE} inline; {$endif}
     function CheckSsl(res: integer): TNetResult;
     procedure SetupCtx(var Context: TNetTlsContext; Bind: boolean);
@@ -10280,7 +10629,8 @@ type
     // INetTls methods
     procedure AfterConnection(Socket: TNetSocket; var Context: TNetTlsContext;
       const ServerAddress: RawUtf8);
-    procedure AfterBind(var Context: TNetTlsContext);
+    procedure AfterBind(Socket: TNetSocket; var Context: TNetTlsContext;
+      const ServerAddress: RawUtf8);
     procedure AfterAccept(Socket: TNetSocket; const BoundContext: TNetTlsContext;
       LastError, CipherName: PRawUtf8);
     function GetCipherName: RawUtf8;
@@ -10354,10 +10704,10 @@ begin
   end;
 end;
 
-procedure TOpenSslNetTls.Check(const method: shortstring; res: integer);
+procedure TOpenSslNetTls.Check(const method: ShortString; res: integer);
 begin
   if res <> OPENSSLSUCCESS then
-    EOpenSslNetTls.CheckFailed(self, method, fLastError, fSsl, res);
+    EOpenSslNetTls.CheckFailed(self, method, fLastError, fSsl, res, fServerAddress);
 end;
 
 const
@@ -10397,6 +10747,7 @@ begin
   // reset output information
   ResetNetTlsContext(Context);
   fLastError := @Context.LastError;
+  fServerAddress := ServerAddress;
   // prepare TLS connection properties
   fCtx := SSL_CTX_new(TLS_client_method);
   SetupCtx(Context, {bind=}false);
@@ -10503,6 +10854,9 @@ end;
 procedure TOpenSslNetTls.SetupCtx(var Context: TNetTlsContext; Bind: boolean);
 var
   v, mode: integer;
+  cert: RawByteString;
+  x: PX509;
+  pk: PEVP_PKEY;
 begin
   _PeerVerify := self; // safe and simple context for the callbacks
   if Context.IgnoreCertificateErrors then
@@ -10523,6 +10877,12 @@ begin
     if FileExists(TFileName(Context.CACertificatesFile)) then
       SSL_CTX_load_verify_locations(
         fCtx, pointer(Context.CACertificatesFile), nil)
+    else if Context.CASystemStores <> [] then
+      SSL_CTX_get_cert_store(fCtx)^.AddCertificates(
+        LoadCertificatesFromSystemStore(Context.CASystemStores)) // cached
+    else if Context.CACertificatesRaw <> nil then
+      SSL_CTX_get_cert_store(fCtx)^.AddCertificates(
+        PX509DynArray(Context.CACertificatesRaw))
     else
       SSL_CTX_set_default_verify_paths(fCtx);
     if not Bind then
@@ -10531,15 +10891,42 @@ begin
         SSL_CTX_set_options(fCtx, SSL_OP_LEGACY_SERVER_CONNECT);
     end;
   end;
-  if FileExists(TFileName(Context.CertificateFile)) then
-    EOpenSslNetTls.Check(self, 'SetupCtx CertificateFile',
-      SSL_CTX_use_certificate_file(
-        fCtx, pointer(Context.CertificateFile), SSL_FILETYPE_PEM))
+  pk := nil;
+  cert := Context.CertificateBin;
+  if (cert = '') and
+     (Context.CertificateFile <> '') then
+    cert := StringFromFile(TFileName(Context.CertificateFile));
+  if cert <> '' then
+  begin
+    x := LoadCertificate(cert); // PEM or DER
+    if x <> nil then
+    try
+      EOpenSslNetTls.Check(self, 'SetupCtx Certificate',
+        SSL_CTX_use_certificate(fCtx, x));
+    finally
+      x^.Free;
+    end
+    else if (Context.PrivateKeyRaw = nil) and
+            (Context.PrivateKeyFile = '') and
+            ParsePkcs12(cert, Context.PrivatePassword, x, pk) then
+      try // was .pfx/pkcs#12 format as with SChannel
+        SSL_CTX_use_certificate(fCtx, x);
+        SSL_CTX_use_PrivateKey(fCtx, pk);
+        EOpenSslNetTls.Check(self, 'SetupCtx pfx',
+          SSL_CTX_check_private_key(fCtx), @Context.LastError);
+      finally
+        x^.Free;
+        pk^.Free;
+      end
+    else
+      EOpenSslNetTls.CheckFailed(self, 'SetupCtx: unsupported Certificate',
+        nil, nil, 0, fServerAddress);
+  end
   else if Context.CertificateRaw <> nil then
     EOpenSslNetTls.Check(self, 'SetupCtx CertificateRaw',
       SSL_CTX_use_certificate(fCtx, Context.CertificateRaw))
   else if Bind then
-    raise EOpenSslNetTls.Create('AfterBind: CertificateFile required');
+    raise EOpenSslNetTls.Create('AfterBind: Certificate required');
   if FileExists(TFileName(Context.PrivateKeyFile)) then
   begin
     if Assigned(Context.OnPrivatePassword) then
@@ -10558,8 +10945,8 @@ begin
     EOpenSslNetTls.Check(self, 'SetupCtx check_private_key raw',
       SSL_CTX_check_private_key(fCtx), @Context.LastError);
   end
-  else if Bind then
-    raise EOpenSslNetTls.Create('AfterBind: PrivateKeyFile required');
+  else if Bind and (pk = nil) then
+    raise EOpenSslNetTls.Create('AfterBind: PrivateKey required');
   if Context.CipherList = '' then
     Context.CipherList := SAFE_CIPHERLIST[HasHWAes];
   EOpenSslNetTls.Check(self, 'SetupCtx set_cipher_list',
@@ -10591,10 +10978,12 @@ begin
       result := SSL_TLSEXT_ERR_NOACK; // requested servername has been rejected
 end;
 
-procedure TOpenSslNetTls.AfterBind(var Context: TNetTlsContext);
+procedure TOpenSslNetTls.AfterBind(Socket: TNetSocket;
+  var Context: TNetTlsContext; const ServerAddress: RawUtf8);
 begin
   // we don't store fSocket/fContext bound socket
   Context.LastError := '';
+  fServerAddress := ServerAddress;
   // prepare global TLS connection properties, as reused by AfterAccept()
   fCtx := SSL_CTX_new(TLS_server_method);
   SetupCtx(Context, {bind=}true);
@@ -10776,7 +11165,7 @@ begin
       c.Free;
     end;
   finally
-    ns.ShutdownAndClose(true);
+    ns.ShutdownAndClose(false);
   end;
 end;
 
@@ -10798,6 +11187,14 @@ begin
   PX509DynArrayFree(chain);
 end;
 
+procedure FinalizeUnit;
+var
+  s: TSystemCertificateStore;
+begin
+  _lasts.Done;
+  for s := low(s) to high(s) do
+    _last[s].Done;
+end;
 
 
 initialization
@@ -10808,6 +11205,7 @@ initialization
     @NewNetTls := @NewOpenSslNetTls;
 
 finalization
+  FinalizeUnit;
   {$ifndef OPENSSLSTATIC}
   FreeAndNil(libssl);
   FreeAndNil(libcrypto);
@@ -10827,7 +11225,6 @@ function OpenSslInitialize(const libcryptoname: string = '';
   const libsslname: string = ''; const libprefix: Utf8String = ''): boolean;
 function OpenSslIsAvailable: boolean;
 function OpenSslIsLoaded: boolean;
-procedure RegisterOpenSsl;
 
 
 implementation
@@ -10846,10 +11243,6 @@ end;
 function OpenSslIsLoaded: boolean;
 begin
   result := false;
-end;
-
-procedure RegisterOpenSsl;
-begin
 end;
 
 {$endif USE_OPENSSL}

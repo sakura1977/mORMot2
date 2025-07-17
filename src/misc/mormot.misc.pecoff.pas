@@ -248,10 +248,8 @@ type
   /// Common OptionalHeader (union for 32/64 bit)
   TImageOptionalHeader = record
     case integer of
-      0:
-        (PHeader32: PImageOptionalHeader32);
-      1:
-        (PHeader64: PImageOptionalHeader64);
+      0: (PHeader32: PImageOptionalHeader32);
+      1: (PHeader64: PImageOptionalHeader64);
   end;
   PImageOptionalHeader = ^TImageOptionalHeader;
 
@@ -276,12 +274,9 @@ type
   /// Common NtHeaders (union for 32/64 bit)
   TImageNtHeaders = record
     case integer of
-      0:
-        (PHeaders32: PImageNtHeaders32);
-      1:
-        (PHeaders64: PImageNtHeaders64);
-      2:
-        (PHeaders: pointer);
+      0: (PHeaders32: PImageNtHeaders32);
+      1: (PHeaders64: PImageNtHeaders64);
+      2: (PHeaders: pointer);
   end;
   PImageNtHeaders = ^TImageNtHeaders;
 
@@ -398,10 +393,8 @@ type
     // Nested record to use a variable part not at the end of the record
     Identifier: record
       case integer of
-        0:
-          (NameOffset: cardinal);
-        1:
-          (Id: cardinal);
+        0: (NameOffset: cardinal);
+        1: (Id: cardinal);
     end;
     OffsetToData: cardinal;
     /// Check if the entry is a directory entry or a data entry
@@ -745,7 +738,7 @@ end;
 function _IMAGE_RESOURCE_DIRECTORY.GetEntry(Index: integer): PImageResourceDirectoryEntry;
 begin
   if cardinal(Index) >= NumberOfEntries then
-    raise EPeCoffLoader.Create('_IMAGE_RESOURCE_DIRECTORY');
+    EPeCoffLoader.RaiseU('_IMAGE_RESOURCE_DIRECTORY');
   result := @PByteArray(@self)[
     SizeOf(self) + Index * SizeOf(TImageResourceDirectoryEntry)];
 end;
@@ -767,7 +760,7 @@ function _IMAGE_RESOURCE_DIRECTORY_ENTRY.Directory(
   StartAddress: pointer): PImageResourceDirectory;
 begin
   if not IsDirectory then
-    raise EPeCoffLoader.Create('_IMAGE_RESOURCE_DIRECTORY_ENTRY.Directory?');
+    EPeCoffLoader.RaiseU('_IMAGE_RESOURCE_DIRECTORY_ENTRY.Directory?');
   result := @PByteArray(StartAddress)[OffsetToDirectory];
 end;
 
@@ -775,7 +768,7 @@ function _IMAGE_RESOURCE_DIRECTORY_ENTRY.Data(
   StartAddress: pointer): PImageResourceDataEntry;
 begin
   if IsDirectory then
-    raise EPeCoffLoader.Create('_IMAGE_RESOURCE_DIRECTORY_ENTRY.Data?');
+    EPeCoffLoader.RaiseU('_IMAGE_RESOURCE_DIRECTORY_ENTRY.Data?');
   result := @PByteArray(StartAddress)[OffsetToData];
 end;
 
@@ -815,7 +808,7 @@ function TSynPELoader.GetSectionHeader(SectionId: cardinal): PImageSectionHeader
 begin
   if (fSectionHeadersStart = nil) or
      (SectionId >= NumberOfSections) then
-    raise EPeCoffLoader.Create('_IMAGE_RESOURCE_DIRECTORY_ENTRY.Data?');
+    EPeCoffLoader.RaiseU('_IMAGE_RESOURCE_DIRECTORY_ENTRY.Data?');
   result := pointer(PAnsiChar(fSectionHeadersStart) +
                       SizeOf(TImageSectionHeader) * SectionId);
 end;
@@ -1143,7 +1136,7 @@ begin
         // read original signature
         dec(certlen, SizeOf(wc));
         SetLength(result, certlen);
-        if cardinal(M.Read(pointer(result)^, certlen)) <> certlen then
+        if not StreamReadAll(M, pointer(result), certlen) then
           EStuffExe.RaiseUtf8('% certificate reading', [MainFile]);
         // note: don't remove ending #0 padding because some may be needed
         if lenoffs <> nil then
@@ -1185,7 +1178,7 @@ begin
 end;
 
 function Asn1Next(var p: PAnsiChar; expected: byte; moveafter: boolean;
-  const Ctxt: shortstring): PtrInt;
+  const Ctxt: ShortString): PtrInt;
 begin
   if p^ <> AnsiChar(expected) then
     EStuffExe.RaiseUtf8('Parsing %: % instead of %',
@@ -1256,7 +1249,7 @@ var
 begin
   // limitation: CertName is ignored and 'Dummy Cert' is forced
   result := '';
-  FastNewRawByteString(dummy, _DUMMYLEN);
+  pointer(dummy) := FastNewString(_DUMMYLEN);
   if RleUnCompress(@_DUMMY, pointer(dummy), SizeOf(_DUMMY)) <> _DUMMYLEN then
     exit;
   p := pointer(dummy);

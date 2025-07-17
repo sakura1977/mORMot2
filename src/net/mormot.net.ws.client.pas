@@ -94,11 +94,11 @@ type
 
   /// WebSockets processing thread used on client side
   // - will handle any incoming callback
-  TWebSocketProcessClientThread = class(TSynThread)
+  TWebSocketProcessClientThread = class(TLoggedThread)
   protected
     fThreadState: TWebSocketProcessClientThreadState;
     fProcess: TWebSocketProcessClient;
-    procedure Execute; override;
+    procedure DoExecute; override;
   public
     constructor Create(aProcess: TWebSocketProcessClient); reintroduce;
   end;
@@ -135,7 +135,7 @@ type
       aTLSContext: PNetTlsContext = nil): THttpClientWebSockets; overload;
     /// common initialization of all constructors
     // - this overridden method will set the UserAgent with some default value
-    constructor Create(aTimeOut: PtrInt = 10000); override;
+    constructor Create(aTimeOut: integer = 10000); override;
     /// finalize the connection
     destructor Destroy; override;
     /// process low-level REST request, either on HTTP/1.1 or via WebSockets
@@ -291,9 +291,8 @@ type
     // - with error interception and optional logging, returning nil on error,
     // or a new TSocketsIOClient instance on success
     // - never call the Create constructor, but one of the Open() factory methods
-    class function Open(const aHost, aPort: RawUtf8;
+    class function Open(const aHost, aPort: RawUtf8; aLog: TSynLogClass = nil;
       aOptions: TSocketsIOClientOptions = SCI_DEFAULT;
-      aLog: TSynLogClass = nil; const aLogContext: RawUtf8 = '';
       const aRoot: RawUtf8 = ''; const aCustomHeaders: RawUtf8 = '';
       aTls: boolean = false; aTLSContext: PNetTlsContext = nil): pointer; overload;
     /// low-level client WebSockets connection factory for host and port
@@ -305,8 +304,8 @@ type
     // - never call the Create constructor, but one of the Open() factory methods
     class function Open(const aUri: RawUtf8; aLog: TSynLogClass = nil;
       aOptions: TSocketsIOClientOptions = SCI_DEFAULT;
-      const aLogContext: RawUtf8 = ''; const aCustomHeaders: RawUtf8 = '';
-      aTls: boolean = false; aTLSContext: PNetTlsContext = nil): pointer; overload;
+      const aCustomHeaders: RawUtf8 = '';
+      aTLSContext: PNetTlsContext = nil): pointer; overload;
     /// finalize this instance and release its associated Client instance
     destructor Destroy; override;
     /// return the array of connected remote namespaces as text
@@ -419,7 +418,7 @@ var
   {%H-}log: ISynLog;
 begin
   t := fOwnerThread as TWebSocketProcessClientThread;
-  log := WebSocketLog.Enter('Destroy: ThreadState=%', [ToText(t.fThreadState)^], self);
+  WebSocketLog.EnterLocal(log, 'Destroy: ThreadState=%', [ToText(t.fThreadState)^], self);
   try
     // focConnectionClose would be handled in this thread -> close client thread
     t.Terminate;
@@ -456,10 +455,11 @@ constructor TWebSocketProcessClientThread.Create(aProcess: TWebSocketProcessClie
 begin
   fProcess := aProcess;
   fProcess.fOwnerThread := self;
-  inherited Create({suspended=}false); // eventually launch the thread
+  inherited Create({suspended=}false, nil, nil, WebSocketLog, FormatUtf8(
+    '% % %', [fProcess.fProcessName, self, fProcess.Protocol.Name]));
 end;
 
-procedure TWebSocketProcessClientThread.Execute;
+procedure TWebSocketProcessClientThread.DoExecute;
 var
   log: TSynLog;
   retry: string;
@@ -469,8 +469,6 @@ begin
   try
     fThreadState := sRun;
     maxwaitms := 10000 + Random32(5000); // wait up to 10-15 seconds pace
-    SetCurrentThreadName(
-      '% % %', [fProcess.fProcessName, self, fProcess.Protocol.Name]);
     repeat
       // main processing loop
       log := WebSocketLog.Add;
@@ -530,9 +528,9 @@ end;
 
 { THttpClientWebSockets }
 
-constructor THttpClientWebSockets.Create(aTimeOut: PtrInt);
+constructor THttpClientWebSockets.Create(aTimeOut: integer);
 begin
-  inherited;
+  inherited Create(aTimeOut);
   fSettings.SetDefaults;
   fSettings.CallbackAnswerTimeOutMS := aTimeOut;
 end;
@@ -633,8 +631,8 @@ begin
     else
       block := wscBlockWithAnswer;
     result := fProcess.NotifyCallback(Ctxt, block);
-    if IdemPChar(pointer(Ctxt.OutContentType), JSON_CONTENT_TYPE_UPPER) then
-      HeaderSetText(Ctxt.OutCustomHeaders)
+    if IsContentTypeJsonU(Ctxt.OutContentType) then
+      HeaderSetText(Ctxt.OutCustomHeaders) // OutContentType='' means JSON
     else
       HeaderSetText(Ctxt.OutCustomHeaders, Ctxt.OutContentType);
     Http.ContentLength := length(Ctxt.OutContent);
@@ -704,7 +702,7 @@ begin
       aProtocol.OnBeforeIncomingFrame := fOnBeforeIncomingFrame;
       // send initial upgrade request
       RequestSendHeader(aWebSocketsURI, 'GET');
-      RandomBytes(@key, SizeOf(key)); // Lecuyer is enough for public random
+      SharedRandom.Fill(@key, SizeOf(key)); // Lecuyer is enough for public random
       bin1 := BinToBase64(@key, SizeOf(key));
       SockSendLine(['Content-Length: 0'#13#10 +
                     'Connection: Upgrade'#13#10 +
@@ -811,8 +809,9 @@ end;
 { TSocketsIOClient }
 
 class function TSocketsIOClient.Open(const aHost, aPort: RawUtf8;
-  aOptions: TSocketsIOClientOptions; aLog: TSynLogClass; const aLogContext,
-  aRoot, aCustomHeaders: RawUtf8; aTls: boolean; aTLSContext: PNetTlsContext): pointer;
+  aLog: TSynLogClass; aOptions: TSocketsIOClientOptions;
+  const aRoot, aCustomHeaders: RawUtf8;
+  aTls: boolean; aTLSContext: PNetTlsContext): pointer;
 var
   c: THttpClientWebSockets;
   proto: TWebSocketSocketIOClientProtocol;
@@ -822,8 +821,8 @@ begin
   proto.fClient := Create;
   proto.fClient.fDefaultWaitTimeoutSec := 2;
   proto.fClient.fOptions := aOptions;
-  c := THttpClientWebSockets.WebSocketsConnect(
-    aHost, aPort, proto, aLog, aLogContext, EngineIOHandshakeUri(aRoot),
+  c := THttpClientWebSockets.WebSocketsConnect(aHost, aPort, proto,
+    aLog, 'TSocketsIOClient.Open', EngineIOHandshakeUri(aRoot),
     aCustomHeaders, aTls, aTLSContext);
   if c = nil then
     exit; // WebSocketsConnect() made proto.Free on Open() failure
@@ -833,15 +832,15 @@ begin
   result := proto.fClient;
 end;
 
-class function TSocketsIOClient.Open(const aUri: RawUtf8;
-  aLog: TSynLogClass; aOptions: TSocketsIOClientOptions; const aLogContext,
-  aCustomHeaders: RawUtf8; aTls: boolean; aTLSContext: PNetTlsContext): pointer;
+class function TSocketsIOClient.Open(const aUri: RawUtf8; aLog: TSynLogClass;
+  aOptions: TSocketsIOClientOptions; const aCustomHeaders: RawUtf8;
+  aTLSContext: PNetTlsContext): pointer;
 var
   uri: TUri;
 begin
   if uri.From(aUri) then // detect both https:// and wss:// schemes
-    result := Open(uri.Server, uri.Port, aOptions, aLog, aLogContext,
-      uri.Address, aCustomHeaders, aTls, aTLSContext)
+    result := Open(uri.Server, uri.Port, aLog, aOptions,
+      uri.Address, aCustomHeaders, uri.Https, aTLSContext)
   else
     result := nil;
 end;
@@ -989,7 +988,7 @@ constructor TWebSocketReconnectClientThread.Create(aClient: TSocketsIOClient);
 begin
   fClient := aClient;
   FreeOnTerminate := true;
-  inherited Create({suspended=}false, TSynLog, 'Reconnect');
+  inherited Create({suspended=}false, nil, nil, TSynLog, 'Reconnect');
 end;
 
 procedure TWebSocketReconnectClientThread.DoExecute;

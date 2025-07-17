@@ -95,7 +95,8 @@ type
     function ToTextFunc(Value: double): string;
     /// swap two by-reference floating-point values
     // - would validate pointer use instead of XMM1/XMM2 registers on x86-64
-    procedure Swap(var n1, n2: double);
+    // - also that /calculator/swap would be processed by ICalculator._Swap()
+    procedure _Swap(var n1, n2: double);
     /// test unaligned stack access
     function StackIntMultiply(n1, n2, n3, n4, n5, n6, n7, n8, n9, n10: integer): Int64;
     /// test float stack access
@@ -325,7 +326,7 @@ type
   public
     function Add(n1, n2: integer): integer;
     function Subtract(n1, n2: double): double;
-    procedure Swap(var n1, n2: double);
+    procedure _Swap(var n1, n2: double);
     function Multiply(n1, n2: Int64): Int64;
     procedure ToText(Value: Currency; var Result: RawUtf8);
     function ToTextFunc(Value: double): string;
@@ -445,7 +446,7 @@ begin
   result := n1 - n2;
 end;
 
-procedure TServiceCalculator.Swap(var n1, n2: double);
+procedure TServiceCalculator._Swap(var n1, n2: double);
 var
   tmp: double;
 begin
@@ -500,7 +501,7 @@ end;
 function TServiceCalculator.RepeatJsonArray(
   const item: RawUtf8; count: integer): RawJson;
 var
-  buf: array[word] of byte;
+  buf: TBuffer64K;
 begin
   with TJsonWriter.CreateOwnedStream(@buf, SizeOf(buf)) do
   try
@@ -522,7 +523,7 @@ end;
 function TServiceCalculator.RepeatTextArray(
   const item: RawUtf8; count: integer): RawUtf8;
 var
-  buf: array[word] of byte; // 64KB temp buffer
+  buf: TBuffer64K;
 begin
   with TJsonWriter.CreateOwnedStream(@buf, SizeOf(buf)) do
   try
@@ -642,6 +643,8 @@ const
 
 function TServiceComplexCalculator.TestRawJson(
   len, value: integer; const j: RawJson): RawJson;
+var
+  p: PByteArray;
 begin
   if fMethodThread = 0 then
     fMethodThread := GetThreadID;
@@ -652,10 +655,10 @@ begin
     result:= '';
     exit;
   end;
-  FastSetString(RawUtf8(result), nil, len + 2);
-  result[1] := '"';
-  FillcharFast(PByteArray(result)[1], len, value);
-  result[len + 2] := '"';
+  p := FastSetString(RawUtf8(result), len + 2);
+  p[0] := ord('"');
+  FillcharFast(p[1], len, value);
+  p[len + 1] := ord('"');
 end;
 
 function TServiceComplexCalculator.GetCurrentThreadID: PtrUInt;
@@ -933,7 +936,7 @@ const
     TRestServerRoutingRest, TRestServerRoutingJsonRpc);
 const
   ExpectedURI: array[0..5] of RawUtf8 = (
-    'Add', 'Multiply', 'Subtract', 'ToText', 'ToTextFunc', 'Swap');
+    'Add', 'Multiply', 'Subtract', 'ToText', 'ToTextFunc', '_Swap');
   ExpectedParCount: array[0..5] of Integer = (
     4, 4, 4, 3, 3, 3);
   ExpectedArgs: array[0..5] of TInterfaceMethodValueTypes = (
@@ -979,6 +982,9 @@ begin
   Check(GuidToString(S.InterfaceIID) = '{9A60C8ED-CEB2-4E09-87D4-4A16F496E5FE}');
   Check(GuidToRawUtf8(S.InterfaceIID) = '{9A60C8ED-CEB2-4E09-87D4-4A16F496E5FE}');
   Check(S.InterfaceMangledURI = '7chgmrLOCU6H1EoW9Jbl_g');
+  i := S.ServiceMethodIndex('swap');
+  Check(i > 0);
+  CheckEqual(S.ServiceMethodIndex('_swap'), i); // /calc/swap -> ICalc._Swap
   result.Server.Services.ExpectMangledURI := true;
   Check(result.Server.Services[S.InterfaceMangledURI] = S);
   result.Server.Services.ExpectMangledURI := false;
@@ -989,7 +995,7 @@ begin
     exit;
   //JsonReformatToFile(S.Contract, 'contract.json');
   //FileFromString(S.ContractHash, 'contract.hash');
-  CheckEqual(S.ContractHash, '"8AB8C2407CD836D7"');
+  CheckEqual(S.ContractHash, '"F8E920FC746C9E88"');
   Check(TServiceCalculator(nil).Test(1, 2) = '3');
   Check(TServiceCalculator(nil).ToTextFunc(777) = '777');
   for i := 0 to high(ExpectedURI) do // SpecialCall interface not checked
@@ -1110,7 +1116,7 @@ procedure TTestServiceOrientedArchitecture.Test(
     d1, d2: IDocDict;
   begin
     Setlength(Ints, 2);
-    CSVToRawUtf8DynArray('one,two,three', Strs1);
+    CsvToRawUtf8DynArray('one,two,three', Strs1);
     CheckEqual(length(strs1), 3);
     for t := 1 to Iterations do
     begin
@@ -1125,7 +1131,7 @@ procedure TTestServiceOrientedArchitecture.Test(
       s2 := n2;
       CheckSame(s1, n1);
       CheckSame(s2, n2);
-      I.Swap(s1, s2);
+      I._Swap(s1, s2);
       CheckSame(s1, n2);
       CheckSame(s2, n1);
       cu := i1 * 0.01;
@@ -1485,14 +1491,12 @@ var
   O: TObject;
   sign, sign2, ok: RawUtf8;
   stat: TSynMonitorInputOutput;
-  timer: TPrecisionTimer;
 begin
   if CheckFailed(aClient <> nil) then
     exit;
   FillCharFast(Inst, SizeOf(Inst), 0);
   Inst.ClientSide := aClient.ClientSide;
   ok := '!';
-  timer.Start;
   try
     Check(aClient.ServiceRegister([TypeInfo(ICalculator)], sicShared));
     Check(aClient.ServiceRegister([TypeInfo(IComplexCalculator)], sicSingle));
@@ -1566,8 +1570,7 @@ begin
     Check(stat.TaskCount > 0);
     ok := '';
   finally
-    if aClient.Name <> '' then
-      NotifyProgress([ok, aClient.Name, '=', timer.StopInMicroSec div 1000, 'ms']);
+    NotifyProgress([ok, aClient.Name]);
   end;
 end;
 
@@ -1837,7 +1840,6 @@ var
   i: integer;
   opt: TRestHttpServerOptions;
   URI: TRestServerUriDynArray;
-  timer: TPrecisionTimer;
 const
   SERVICES: array[0..4] of RawUtf8 = (
     'Calculator',
@@ -1855,7 +1857,6 @@ begin
     useBidirAsync, // HTTP_DEFAULT_MODE,
     8, secNone, '', '', opt);
   try
-    timer.Start;
     Check(srv.HttpServer <> nil);
     if withlog then
     begin
@@ -1921,8 +1922,7 @@ begin
       Check(clt.ServiceRetrieveAssociated(ITestSession, URI));
       Check(length(URI) = 1);
       Test(Inst, 100);
-      if aClient.Name <> '' then
-        NotifyProgress([aClient.Name, '=', timer.StopInMicroSec div 1000, 'ms']);
+      NotifyProgress([aClient.Name]);
     finally
       Finalize(Inst);
       clt.Free;
@@ -2138,6 +2138,7 @@ var
   end;
 
 begin
+  CheckEqual(SizeOf(TMvcAction), SizeOf(TServiceCustomAnswer));
   Init(direct);
   Parent := nil;
   Check(ParentDestroyed = false);

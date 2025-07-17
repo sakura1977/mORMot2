@@ -8,6 +8,7 @@
 {$ifdef FPC}
   // disabled some FPC paranoid warnings
   {$WARN 7119 off : Exported/global symbols should be accessed via the GOT }
+  // REL works in fact when accessing global variables defined within this unit
   {$WARN 7121 off : Check size of memory operand "$1: memory-operand-size is $2 bits, but expected [$3 bits]" }
   {$WARN 7122 off : Check size of memory operand "$1: memory-operand-size is $2 bits, but expected [$3 bits + $4 byte offset]" }
   {$WARN 7123 off : Check "$1: offset of memory operand is negative "$2 byte" }
@@ -15,17 +16,22 @@
 
 {$ifdef ASMX64}
 
+{$ifndef FPC_PICX64} // MoveFast/FillCharFast use non-PIC compatible @jmptab
+
 {
  FillCharFast/MoveFast implementation notes:
- - assume ERBMS is available (cpuid flag may not be propagated within VMs)
+ - assume ERMSB is available (cpuid flag may not be propagated within VMs)
  - use branchless sub-functions for smallest buffers, then SSE2 up to 255 bytes
  - use "rep movsb" for 256..512K input (should work on all CPUs, even oldest)
  - don't use backward "std rep movsb" since it is not involved by ERMBS (slow)
  - use non-temporal SSE2 or AVX loop >= 512KB (to not pollute the CPU cache)
  - will check X64CpuFeatures global to adjust the algorithm if cpuAVX is set
+ - our @jmptab trick is not PIC-compatible so we fallback to the RTL there
  - regarding benchmark, run TTestLowLevelCommon.CustomRTL on x86_64
   -> FillCharFast/MoveFast seems faster, especially for small lengths (strings)
   -> Delphi RTL is slower than FPC's, and it does not support AVX assembly yet
+  -> about the weird "byte ptr [X64CpuFeatures wrt..gotpcrel]" syntax, see
+     http://www.tortall.net/projects/yasm/manual/html/objfmt-elf64.html
 }
 
 const
@@ -50,14 +56,11 @@ const
   // - see also mormot.core.fpcx64mm.pas as reference
   SSE2MAXSIZE = 256;
 
-  // identify Intel/AMD AVX2+BMI support at Haswell level
-  CPUAVX2HASWELL = [cfAVX2, cfSSE42, cfBMI1, cfBMI2, cfCLMUL];
-
 procedure MoveFast(const src; var dst; cnt: PtrInt);
 {$ifdef FPC}nostackframe; assembler;
 asm {$else} asm .noframe {$endif} // rcx/rdi=src rdx/rsi=dst r8/rdx=cnt
         mov     rax, cnt             // rax=r8/rdx=cnt
-        lea     r10, [rip + @jmptab] // 0..16 dedicated sub-functions
+        lea     r10, [rip + @jmptab] // 0..16 dedicated sub-functions (non-PIC)
         sub     rax, 16
         ja      @up16                // >16 or <0
         {$ifdef WIN64ABI}    // circumvent FPC asm bug and adapt to xmm ABI
@@ -157,11 +160,19 @@ asm {$else} asm .noframe {$endif} // rcx/rdi=src rdx/rsi=dst r8/rdx=cnt
 @lrgbwd:// backward SSE2/AVX move
         cmp     rax, SSE2MAXSIZE
         jb      @bsse2 // 97/129..255 bytes is not worth AVX context transition
+        {$ifdef FPC_PICX64} // not working yet due to @jmptab relocation
+        test    byte ptr [X64CpuFeatures wrt..gotpcrel], 1 shl cpuAVX
+        {$else}
         test    byte ptr [rip + X64CpuFeatures], 1 shl cpuAVX
+        {$endif FPC_PICX64}
         jz      @bsse2
         jmp     @bavx
 @lrgfwd:// forward SSE2/AVX move
+        {$ifdef FPC_PICX64} // not working yet due to @jmptab relocation
+        test    byte ptr [X64CpuFeatures wrt..gotpcrel], 1 shl cpuAVX
+        {$else}
         test    byte ptr [rip + X64CpuFeatures], 1 shl cpuAVX
+        {$endif FPC_PICX64}
         jnz     @favx
         {$else}
 @lrgfwd:{$endif ASMX64AVXNOCONST}
@@ -388,7 +399,7 @@ procedure FillCharFast(var dst; cnt: PtrInt; value: byte);
 {$ifdef FPC}nostackframe; assembler;
 asm {$else} asm .noframe {$endif} // rcx/rdi=dst rdx/rsi=cnt r8b/dl=val
         mov     r9, $0101010101010101
-        lea     r10, [rip + @jmptab]
+        lea     r10, [rip + @jmptab] // does not work on PIC
         {$ifdef WIN64ABI}
         movzx   eax, r8b
         {$else}
@@ -449,7 +460,7 @@ asm {$else} asm .noframe {$endif} // rcx/rdi=dst rdx/rsi=cnt r8b/dl=val
 @sml10: movups  oword ptr [r8 - 16], xmm0 // last 16 bytes (may be overlapping)
         ret
 @abv255:{$ifdef WITH_ERMS}
-        cmp     rax, r9                   // non-temporal move > 512KB
+        cmp     r10, r9                   // non-temporal move > 512KB
         {$ifdef ASMX64AVXNOCONST}
         jae     @avx
         {$else}
@@ -480,7 +491,11 @@ asm {$else} asm .noframe {$endif} // rcx/rdi=dst rdx/rsi=cnt r8b/dl=val
         jae     @sse2nt                // bypass cache for cnt>512KB
         jmp     @reg
         {$ifdef ASMX64AVXNOCONST}
-@avx:   test    byte ptr [rip + X64CpuFeatures], 1 shl cpuAVX
+@avx:   {$ifdef FPC_PICX64} // not working yet due to @jmptab relocation
+        test    byte ptr [X64CpuFeatures wrt..gotpcrel], 1 shl cpuAVX
+        {$else}
+        test    byte ptr [rip + X64CpuFeatures], 1 shl cpuAVX
+        {$endif FPC_PICX64}
         jz      @sse2
         movups  oword ptr [dst], xmm0  // first unaligned 1..16 bytes
         add     dst, 16
@@ -545,6 +560,8 @@ asm {$else} asm .noframe {$endif} // rcx/rdi=dst rdx/rsi=cnt r8b/dl=val
 @05:    mov     byte ptr [dst + 4], al
 @04:    mov     dword ptr [dst], eax
 end;
+
+{$endif FPC_PICX64} // our @jmptab trick is not PIC-compatible
 
 function crc32fasttab(crc: cardinal; buf: PAnsiChar; len: cardinal;
   tab: PCrc32tab): cardinal;
@@ -637,8 +654,8 @@ function StrInt32(P: PAnsiChar; val: PtrInt): PAnsiChar;
         mov     rax, val
         cmp     val, 10
         jb      @1              // direct process of common val<10
-        lea     r8, [rip + TwoDigitLookup]
-{$ifdef FPC} align 8 {$else} .align 8 {$endif}
+        lea     r8, qword ptr [rip + TwoDigitLookup] // also for FPC_PIC
+{$ifdef FPC} align 16 {$else} .align 16 {$endif}
 @s:     lea     P, [P - 2]
         cmp     rax, 100
         jb      @2
@@ -659,7 +676,7 @@ function StrInt32(P: PAnsiChar; val: PtrInt): PAnsiChar;
         mov     byte ptr [P - 1], al
         lea     rax, [P + r10 - 1]       // includes '-' if val<0
         ret
-        {$ifdef FPC} align 8 {$else} .align 8 {$endif}
+        {$ifdef FPC} align 16 {$else} .align 16 {$endif}
 @2:     movzx   eax, word ptr [r8 + rax * 2]
         mov     byte ptr [P - 1], '-'
         mov     word ptr [P], ax
@@ -671,7 +688,7 @@ function StrUInt32(P: PAnsiChar; val: PtrUInt): PAnsiChar;
         mov     rax, val
         cmp     val, 10
         jb      @1  // direct process of common val<10
-        lea     r8, [rip + TwoDigitLookup]
+        lea     r8, qword ptr [rip + TwoDigitLookup] // also for FPC_PIC
 @s:     lea     P, [P - 2]
         cmp     rax, 100
         jb      @2
@@ -692,6 +709,7 @@ function StrUInt32(P: PAnsiChar; val: PtrUInt): PAnsiChar;
         mov     byte ptr [P], al
 @0:     mov     rax, P
         ret
+        {$ifdef FPC} align 16 {$else} .align 16 {$endif}
 @2:     movzx   eax, word ptr [r8 + rax * 2]
         mov     word ptr [P], ax
         mov     rax, P
@@ -818,7 +836,7 @@ asm     // Windows x64 calling convention expects to preserve XMM6-XMM15
         sub     r8, 1
         jmp     @align
 @ok:    {$ifdef ASMX64AVXNOCONST}
-        test    byte ptr [rip + X64CpuFeatures], 1 shl cpuAVX2
+        test    byte ptr [rip + X64CpuFeatures], 1 shl cpuAVX2 // also for PIC
         jz      @sse2
         vpshufd ymm0, ymm0, 0          // shuffle to ymm0 128-bit low lane
         vperm2f128 ymm0, ymm0, ymm0, 0 // copy to ymm0 128-bit high lane
@@ -1085,7 +1103,7 @@ function IsValidUtf8Avx2(source: PUtf8Char; sourcelen: PtrInt): boolean;
         vmovdqa ymm5, ymm4
         jmp     @trail
         // validate UTF-8 extra bytes from main loop
-{$ifdef FPC} align 8 {$else} .align 8 {$endif}
+{$ifdef FPC} align 16 {$else} .align 16 {$endif}
 @check: vpsrlw  ymm9, ymm0, 4
         vpsrlw  ymm12, ymm1, 4
         vperm2i128 ymm3, ymm3, ymm0, 21H
@@ -1136,7 +1154,7 @@ function IsValidUtf8Avx2(source: PUtf8Char; sourcelen: PtrInt): boolean;
         ja      @loop
         jmp     @trail
         // validate UTF-8 extra bytes from input ending
-{$ifdef FPC} align 8 {$else} .align 8 {$endif}
+{$ifdef FPC} align 16 {$else} .align 16 {$endif}
 @last:  vmovdqu ymm5, yword ptr [rip + @0f]
         vperm2i128 ymm3, ymm3, ymm1, 21H
         vmovdqu ymm9, yword ptr [rip + @_7]
@@ -2179,7 +2197,7 @@ function WordScanIndex(P: PWordArray; Count: PtrInt; Value: word): PtrInt;
         cmp     rdx, rax
         jbe     @no
         ret
-        // 16bit-unaligned loop (seldom called)
+        // 16bit-unaligned loop (hardly called)
 {$ifdef FPC} align 8 {$else} .align 8 {$endif}
 @unal:  lea     rcx, [rcx + rdx * 2]
         neg     rdx
@@ -2245,7 +2263,7 @@ function IntegerScanIndex(P: PCardinalArray; Count: PtrInt; Value: cardinal): Pt
         cmp     rdx, rax
         jbe     @no
         ret
-        // 32bit-unaligned loop (seldom called)
+        // 32bit-unaligned loop (hardly called)
 {$ifdef FPC} align 8 {$else} .align 8 {$endif}
 @unal:  lea     rcx, [rcx + rdx * 4]
         neg     rdx
@@ -2270,7 +2288,7 @@ function MemCmp(P1, P2: PByteArray; L: PtrInt): integer;
           mov     r9d, $FFFF             // 16 bits mask = 16 bytes
           cmp     L, -16
           ja      @sml
-{$ifdef FPC} align 8 {$else} .align 8 {$endif}
+{$ifdef FPC} align 16 {$else} .align 16 {$endif}
 @by16:    // loop comparing 16 bytes
           movups  xmm1, oword ptr [P1 + L]
           movups  xmm2, oword ptr [P2 + L]
@@ -2345,7 +2363,7 @@ function FastFindWordSorted(P: PWordArray; R: PtrInt; Value: Word): PtrInt;
         xor     r9, r9  // r9=L rax=result
         test    R, R
         jl      @ko
-{$ifdef FPC} align 8 {$else} .align 8 {$endif}
+{$ifdef FPC} align 16 {$else} .align 16 {$endif}
 @s:     lea     rax, [r9 + R]
         shr     rax, 1
         lea     r10, qword ptr [rax - 1] // branchless loop
@@ -2373,7 +2391,7 @@ function FastFindIntegerSorted(P: PIntegerArray; R: PtrInt; Value: integer): Ptr
         test    R, R
         jl      @ko
         lea     rax, [r9 + R]
-{$ifdef FPC} align 8 {$else} .align 8 {$endif}
+{$ifdef FPC} align 16 {$else} .align 16 {$endif}
 @s:     shr     rax, 1
         lea     r10, qword ptr [rax - 1]  // efficient branchless binary search
         lea     r11, qword ptr [rax + 1]
@@ -2394,7 +2412,7 @@ function FastFindInt64Sorted(P: PInt64Array; R: PtrInt; const Value: Int64): Ptr
         test    R, R
         jl      @ko
         lea     rax, [r9 + R]
-{$ifdef FPC} align 8 {$else} .align 8 {$endif}
+{$ifdef FPC} align 16 {$else} .align 16 {$endif}
 @s:     shr     rax, 1
         lea     r10, qword ptr [rax - 1]  // efficient branchless binary search
         lea     r11, qword ptr [rax + 1]
@@ -2515,8 +2533,8 @@ end;
 
 function SynLZcompress1(src: PAnsiChar; size: integer; dst: PAnsiChar): integer;
 var
-  off: TOffsets;
-  cache: array[0..4095] of cardinal; // uses 32KB+16KB=48KB on stack
+  off: TOffsets;                     // 32KB hash table
+  cache: array[0..4095] of cardinal; // 16KB = total 48KB on stack
 asm // rcx=src, edx=size, r8=dest
         {$ifdef WIN64ABI} // additional registers to preserve
         push    rdi
@@ -2529,67 +2547,62 @@ asm // rcx=src, edx=size, r8=dest
         push    rbx
         push    r12
         push    r13
-        push    r14
-        push    r15
-        mov     r15, r8            // r8=dest r15=dst_beg
+        push    r8                 // save r8=dest to compute result
         mov     rbx, rcx           // rbx=src
-        cmp     edx, 32768
+        cmp     edx, 32768         // edx=size
         jc      @03
         mov     eax, edx
+        mov     ecx, edx
         and     eax, 7FFFH
+        shr     ecx, 15
         or      eax, 8000H
-        mov     word ptr [r8], ax
-        mov     eax, edx
-        shr     eax, 15
-        mov     word ptr [r8 + 2], ax
+        shl     ecx, 16
+        or      eax, ecx
+        mov     dword ptr [r8], eax
         add     r8, 4
         jmp     @05
-@03:    mov     word ptr [r8], dx
+@03:    mov     dword ptr [r8], edx
+        add     r8, 2
         test    edx, edx
-        jnz     @04
-        mov     r15d, 2
-        jmp     @19
-        nop
-@04:    add     r8, 2
-@05:    lea     r9, [rdx + rbx]    // r9=src_end
+        jz      @18
+@05:    xor     eax, eax
+        lea     rdi, [off]
+        mov     rcx, 4096
+        cld
+        rep stosq                  // reset 32KB offsets lookup table using ERMS
+        lea     r9,  [rdx + rbx]   // r9=src_end
         lea     r10, [r9 - 11]     // r10=src_endmatch
-        mov     ecx, 1             // ecx=CWBits
         mov     r11, r8            // r11=CWpoint
-        mov     dword ptr [r8], 0
+        mov     ecx, 1             // ecx=CWBits
+        mov     dword ptr [r8], eax
         add     r8, 4
-        pxor    xmm0, xmm0
-        mov     eax, 32768 - 64
-@06:    movaps  dqword ptr [off + rax - 48], xmm0 // stack is 16 bytes aligned
-        movaps  dqword ptr [off + rax - 32], xmm0
-        movaps  dqword ptr [off + rax - 16], xmm0
-        movaps  dqword ptr [off + rax], xmm0
-        sub     eax, 64
-        jae     @06
         cmp     rbx, r10
         ja      @15
+        {$ifdef FPC} align 16 {$else} .align 16 {$endif}
 @07:    mov     edx, dword ptr [rbx]
-        mov     rax, rdx
+        mov     eax, edx
+        shr     eax, 12
+        xor     eax, edx
+        and     eax, 4095              // rax=h
         mov     r12, rdx
-        shr     rax, 12
-        xor     rax, rdx
-        and     rax, 0FFFH                     // rax=h
-        mov     r14, qword ptr [off + rax * 8] // r14=o
+        //lea [off + rax * 8] pre-compute is not faster: 2 AGUs since Nehalem
+        mov     r13, qword ptr [off + rax * 8]    // r13=o
         mov     edx, dword ptr [cache + rax * 4]
         mov     qword ptr [off + rax * 8], rbx
         mov     dword ptr [cache + rax * 4], r12d
         xor     rdx, r12
-        test    r14, r14
-        lea     rdi, [r9-1]
+        test    r13, r13
+        lea     rdi, [r9 - 1]
         je      @12
-        and     rdx, 0FFFFFFH
+        and     rdx, $00ffffff
         jne     @12
         mov     rdx, rbx
-        sub     rdx, r14
+        sub     rdx, r13
         cmp     rdx, 2
         jbe     @12
         or      dword ptr [r11], ecx
         add     rbx, 2
-        add     r14, 2
+        add     r13, 2
         mov     esi, 1
         sub     rdi, rbx
         cmp     rdi, 271
@@ -2597,7 +2610,7 @@ asm // rcx=src, edx=size, r8=dest
         mov     edi, 271
         jmp     @09
 @08:    add     rsi, 1
-@09:    mov     edx, dword ptr [r14 + rsi]
+@09:    mov     edx, dword ptr [r13 + rsi]
         cmp     dl, byte ptr [rbx + rsi]
         jnz     @10
         cmp     rsi, rdi
@@ -2651,16 +2664,14 @@ asm // rcx=src, edx=size, r8=dest
         add     r8, 1
         add     ecx, ecx
         jnz     @17
-        mov     [r8], ecx
+        mov     dword ptr [r8], ecx
         add     r8, 4
         add     ecx, 1
 @17:    cmp     rbx, r9
         jc      @16
-@18:    sub     r8, r15
-        mov     r15, r8
-@19:    mov     rax, r15
-        pop     r15
-        pop     r14
+@18:    pop     rax
+        sub     r8, rax // result := dst - dstbeg
+        mov     rax, r8
         pop     r13
         pop     r12
         pop     rbx
@@ -2672,7 +2683,7 @@ end;
 
 function SynLZdecompress1(src: PAnsiChar; size: integer; dst: PAnsiChar): integer;
 var
-  off: TOffsets;
+  off: TOffsets; // pointers are faster and use only 32KB on stack
 asm     // rcx=src, edx=size, r8=dest
         {$ifdef WIN64ABI} // additional registers to preserve
         push    rsi
@@ -2685,117 +2696,107 @@ asm     // rcx=src, edx=size, r8=dest
         push    rbx
         push    r12
         push    r13
-        push    r14
-        push    r15
         movzx   eax, word ptr [rcx]    // rcx=src   eax=result
         lea     r9, [rcx + rdx]        // r9=src_end
         test    eax, eax
-        je      @35
+        je      @36
         add     rcx, 2
         mov     r10d, eax
-        and     r10d, 8000H
-        jz      @21
+        and     r10d, $8000
+        jz      @21                   // dest size < 32768
         movzx   ebx, word ptr [rcx]
         shl     ebx, 15
-        mov     r10d, eax
-        and     r10d, 7FFFH
-        or      r10d, ebx
-        mov     eax, r10d
+        and     eax, $7fff
+        or      eax, ebx
         add     rcx, 2
-@21:    lea     r10, [r8 - 1]          // r10=last_hashed  r8=dest
+@21:    push    rax                    // save result for function exit
+        lea     rax, [r8 - 1]          // rax=last_hashed  r8=dest
 @22:    mov     edi, dword ptr [rcx]   // edi=CW
         add     rcx, 4
-        mov     r13d, 1                // r13d=CWBit
+        mov     r10d, 1                // r10d=CWBit
         cmp     rcx, r9
         jnc     @35
-@23:    test    r13d, edi
+        {$ifdef FPC} align 16 {$else} .align 16 {$endif}
+@23:    test    r10d, edi
         jnz     @25
-        mov     bl, byte ptr [rcx]
+        mov     bl, byte ptr [rcx]    // CWBit was not set: copy byte and hash
         mov     byte ptr [r8], bl
         add     rcx, 1
         lea     rbx, [r8 - 2]
         add     r8, 1
         cmp     rcx, r9
         jnc     @35
-        cmp     rbx, r10
+        cmp     rbx, rax
         jbe     @24
-        add     r10, 1
-        mov     esi, dword ptr [r10]
-        mov     rbx, rsi
+        add     rax, 1
+        mov     esi, dword ptr [rax]
+        mov     ebx, esi
         shr     esi, 12
         xor     ebx, esi
-        and     ebx, 0FFFH
-        mov     qword ptr [off + rbx * 8], r10
-@24:    shl     r13d, 1
+        and     ebx, 4095
+        mov     qword ptr [off + rbx * 8], rax
+@24:    shl     r10d, 1
         jnz     @23
         jmp     @22
-@25:    movzx   r11, word ptr [rcx]    // r11=t
+@25:    movzx   rbx, word ptr [rcx] // CWBit was set: copy bytes from offset
         add     rcx, 2
-        mov     ebx, r11d              // ebx=h
-        shr     ebx, 4
-        and     r11, 0FH
+        mov     r11, rbx
+        shr     ebx, 4                 // ebx=h
+        and     r11, 0FH               // r11=t
         lea     r11, [r11 + 2]
         jnz     @26
         movzx   r11, byte ptr [rcx]
         add     rcx, 1
-        lea     r11, [r11 + 12H]
-@26:    mov     r14, qword ptr [off + rbx * 8] // r14=o
+        lea     r11, [r11 + (16 + 2)]
+@26:    mov     r13, qword ptr [off + rbx * 8] // r13=o
         mov     rbx, r8
         xor     rsi, rsi
-        sub     rbx, r14
+        sub     rbx, r13
         mov     r12, r11
-        mov     r15, r11
         cmp     rbx, r11
-        jc      @29
+        jc      @29       // PtrUInt(dst - o) < t overlap -> MoveByOne
+        mov     rbx, qword ptr [r13]
+        mov     qword ptr [r8], rbx
+        sub     r12, 8
+        jbe     @31       // 1..8 bytes
+        mov     rbx, qword ptr [r13 + r12] // last 8 bytes (may overlap)
+        mov     qword ptr [r8 + r12], rbx
+        cmp     r12, 8
+        jbe     @31      // 9..16 bytes
         shr     r12, 3
-        jz      @30
-{$ifdef FPC} align 8 {$else} .align 8 {$endif}
-@27:    mov     rbx, qword ptr [r14 + rsi] // inline move by 8 bytes
+@27:    add     rsi, 8
+        mov     rbx, qword ptr [r13 + rsi] // inlined move by 8 bytes
         mov     qword ptr [r8 + rsi], rbx
-        add     rsi, 8
         sub     r12, 1
         jnz     @27
-        mov     rbx, qword ptr [r14 + rsi] // 1..7 remaining bytes
-        and     r15, 7
-        jz      @31
-@28:    mov     byte ptr [r8 + rsi], bl
-        shr     rbx, 8
-        add     rsi, 1
-        sub     r15, 1
-        jnz     @28
-        jmp     @31
-{$ifdef FPC} align 8 {$else} .align 8 {$endif}
-@29:    mov     bl, byte ptr [r14 + rsi] // overlaping move
+@31:    cmp     rcx, r9
+        jz      @35
+        cmp     rax, r8
+        jnc     @34
+        {$ifdef FPC} align 16 {$else} .align 16 {$endif}
+@32:    add     rax, 1               // hash decompressed bytes
+        mov     ebx, dword ptr [rax]
+        mov     esi, ebx
+        shr     ebx, 12
+        xor     esi, ebx
+        and     esi, 4095
+        mov     qword ptr [off + rsi * 8], rax
+        cmp     rax, r8
+        jc      @32
+@34:    add     r8, r11
+        lea     rax, [r8 - 1]
+        shl     r10d, 1
+        jnz     @23
+        jmp     @22
+        {$ifdef FPC} align 16 {$else} .align 16 {$endif}
+@29:    mov     bl, byte ptr [r13 + rsi] // overlaping move
         mov     byte ptr [r8 + rsi], bl
         add     rsi, 1
         sub     r12, 1
         jnz     @29
-        cmp     rcx, r9
-        jnz     @33
-        jmp     @35
-@30:    mov     rbx, qword ptr [r14]
-        mov     qword ptr [r8], rbx
-@31:    cmp     rcx, r9
-        jz      @35
-        cmp     r10, r8
-        jnc     @34
-@32:    add     r10, 1
-        mov     ebx, dword ptr [r10]
-        mov     rsi, rbx
-        shr     ebx, 12
-        xor     esi, ebx
-        and     esi, 0FFFH
-        mov     qword ptr [off + rsi * 8], r10
-@33:    cmp     r10, r8
-        jc      @32
-@34:    add     r8, r11
-        lea     r10, [r8 - 1]
-        shl     r13d, 1
-        jnz     @23
-        jmp     @22
-@35:    pop     r15
-        pop     r14
-        pop     r13
+        jmp     @31
+@35:    pop     rax     // returns stored dest length
+@36:    pop     r13
         pop     r12
         pop     rbx
         {$ifdef WIN64ABI} // additional registers to preserve

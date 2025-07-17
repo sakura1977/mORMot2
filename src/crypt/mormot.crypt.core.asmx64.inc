@@ -8,7 +8,6 @@
 {$ifdef FPC}
   // disabled some FPC paranoid warnings
   {$WARN 7102 off : Use of +offset(%ebp) for parameters invalid here }
-  {$WARN 7119 off : Exported/global symbols should be accessed via the GOT }
   {$WARN 7121 off : Check size of memory operand "$1: memory-operand-size is $2 bits, but expected [$3 bits]" }
   {$WARN 7122 off : Check size of memory operand "$1: memory-operand-size is $2 bits, but expected [$3 bits + $4 byte offset]" }
   {$WARN 7123 off : Check "$1: offset of memory operand is negative "$2 byte" }
@@ -6859,7 +6858,7 @@ end;
 {$ifdef USEAESNIHASH}
 
 var
-  /// filled with random at startup so collisions will be harder to engineer
+  // random 256 bytes filled at startup to make collisions harder to engineer
   // - to avoid hash flooding http://ocert.org/advisories/ocert-2012-001.html
   // - set by GetMemAligned() - mandatory on Delphi which doesn't align properly
   AESNIHASHKEYSCHED: pointer;
@@ -6890,7 +6889,7 @@ function _AesNiHash32(seed: cardinal; data: pointer; len: PtrUInt): cardinal;
         jmp     _AesNiHashXmm0 // returns in both xmm0 and eax
 end;
 
-// 128-bit aeshash as implemented in Go runtime, using aesni/sse4.1 opcodes
+// 128-bit aeshash as implemented in GoLang runtime, using aesni/sse4.1 opcodes
 // adapted from https://tip.golang.org/src/runtime/asm_amd64.s original code
 procedure _AesNiHashXmm0(seedfromhash32: cardinal; data: pointer; len: PtrUInt);
 {$ifdef WIN64ABI}

@@ -194,6 +194,12 @@ function Ecc256r1DoVerify(const pub: TEccPublicKey; unc: PEccPublicKeyUncompress
 
 
 /// pascal function to create a secp256r1 public/private key pair
+// - is not optimized for performance, but for secrecy: the private key is
+// generated with a very safe SHA-256 diffusion of 1024-bit of randomness from
+// the Operating System and our TAesPrng
+// - our idea was to minimize the chances that two consecutive key generations
+// have any similarity, even if performance is not the ultimate goal
+// - ephemeral keys (e.g. in ECDHE) could use faster OpenSSL instead
 function ecc_make_key_pas(out PublicKey: TEccPublicKey;
   out PrivateKey: TEccPrivateKey): boolean;
 
@@ -1100,6 +1106,7 @@ begin
   _modMultP(Y2, Y2, X2);       // t4 = (y2 - y1)*(B - x3)
   _modSubP(Y2, Y2, Y1);        // t4 = y3
   _mv(X2, t5);
+  // now (X2, Y2) is P + Q
 end;
 
 // Input P = (x1, y1, Z), Q = (x2, y2, Z)
@@ -1205,6 +1212,7 @@ var
   priv: THash256Rec;
   pub: TEccPoint;
   tries: integer;
+  kdf: THmacSha256;
 begin
   result := false;
   tries := MAX_TRIES;
@@ -1212,7 +1220,15 @@ begin
     dec(tries);
     if tries = 0 then
       exit;
-    TAesPrng.Fill(THash256(priv));
+    // generate a 256-bit secret key with HMAC-SHA-256 over random sources
+    // - keys may be ephemeral so entropy sources should better be fast
+    kdf.Init(@StartupEntropy, SizeOf(StartupEntropy));
+    kdf.Update(@tries, SizeOf(tries)); // salt
+    TAesPrng.Main.Fill(priv.b); // 256-bit from our AES-PRNG (max key size)
+    kdf.Update(@priv, SizeOf(priv));
+    _Fill256FromOs(priv);       // 256-bit padding from fast OS entropy sources
+    kdf.Update(@priv, SizeOf(priv));
+    kdf.Done(priv.b);           // apply the HMAC key derivation function
     if _isZero(priv) or
        _equals(priv, _1) or
        _equals(priv, _11) then
@@ -1320,7 +1336,7 @@ var
   product: TEccPoint;
   rnd: THash256Rec;
 begin
-  TAesPrng.Fill(THash256(rnd));
+  TAesPrng.Main.Fill(rnd.b); // no SHA-256 diffusion needed if ephemeral
   _bswap256(@priv, @PrivateKey);
   EccPointMult(product, TEccPoint(PublicPoint), priv, @rnd);
   _bswap256(@Secret, @product.x);
@@ -1412,7 +1428,7 @@ begin
   tries := 0;
   repeat
     inc(tries);
-    TAesPrng.Fill(THash256(k));
+    TAesPrng.Main.Fill(k.b);
     if tries >= MAX_TRIES then
       exit; // the random generator seems broken
     if _isZero(k) or
@@ -1920,7 +1936,7 @@ begin
       // include Info content from the stream
       result := (s.Read(Info, 4) = 4) and
                 (Info.DataLen <= SizeOf(Info.Data)) and
-                (s.Read(Info.Data, Info.DataLen) = Info.DataLen);
+                StreamReadAll(s, @Info.Data, Info.DataLen);
 end;
 
 
@@ -2071,11 +2087,11 @@ initialization
   assert(SizeOf(TEccCertificateContentV1) = 173); // on all platforms/compilers
   assert(SizeOf(TEccSignatureCertifiedContent) = 100);
   // register our branchless pascal code by default
-  @Ecc256r1MakeKey := @ecc_make_key_pas;
+  @Ecc256r1MakeKey      := @ecc_make_key_pas;
   @Ecc256r1SharedSecret := @ecdh_shared_secret_pas;
-  @Ecc256r1Sign := @ecdsa_sign_pas;
-  @Ecc256r1Verify := @ecdsa_verify_pas;
-  @Ecc256r1Uncompress := @ecc_uncompress_key_pas;
+  @Ecc256r1Sign         := @ecdsa_sign_pas;
+  @Ecc256r1Verify       := @ecdsa_verify_pas;
+  @Ecc256r1Uncompress   := @ecc_uncompress_key_pas;
   @Ecc256r1VerifyUncomp := @ecdsa_verify_uncompressed_pas;
 
 end.

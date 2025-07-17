@@ -303,7 +303,7 @@ type
     ulDeviceError: CK_ULONG;
   end;
 
-function ToText(f: CKT_FLAGS): shortstring; overload;
+function ToText(f: CKT_FLAGS): ShortString; overload;
 
 
 { ---------- 3.4 Object types }
@@ -1995,7 +1995,7 @@ type
     function(Sender: TPkcs11; Slot: TPkcs11SlotID): boolean of object;
 
   /// can load and use a PKCS#11 library
-  // - need to explicitely call Safe.Lock/UnLock in a multi-thread context
+  // - need to explicitly call Safe.Lock/UnLock in a multi-thread context
   TPkcs11 = class(TSynLocked)
   protected
     fC: CK_FUNCTION_LIST_PTR;
@@ -2228,7 +2228,7 @@ implementation
 
 { ***************** Low-Level PKCS#11 / Cryptoki API Definitions }
 
-function ToText(f: CKT_FLAGS): shortstring;
+function ToText(f: CKT_FLAGS): ShortString;
 begin
   GetSetNameShort(TypeInfo(CKT_FLAGS), f, result);
 end;
@@ -3455,15 +3455,15 @@ end;
 
 { ***************** PKCS#11 High-Level Wrappers }
 
-procedure UnPad(p: PUtf8Char; max: integer; var text: RawUtf8);
+procedure UnPad(p: PUtf8Char; max: PtrInt; var text: RawUtf8);
 begin
   FastSetString(text, p, max);
   TrimSelf(text);
 end;
 
-function Pad(const text: RawUtf8; max: integer): RawUtf8;
+function Pad(const text: RawUtf8; max: PtrInt): RawUtf8;
 var
-  len: integer;
+  len: PtrInt;
 begin
   FastSetString(result, max);
   len := length(text);

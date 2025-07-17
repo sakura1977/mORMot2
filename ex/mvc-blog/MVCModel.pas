@@ -451,7 +451,7 @@ var
   f, r: integer;
 begin
   fName := GetNextItem(Text, ' ');
-  CSVToRawUtf8DynArray(Pointer(GetNextItem(Text, ']')), fFields);
+  CsvToRawUtf8DynArray(Pointer(GetNextItem(Text, ']')), fFields);
   fFieldCount := length(fFields);
   Text := GotoNextLine(Text);
   P := pointer(Text);
@@ -470,7 +470,7 @@ begin
   for f := 0 to fFieldCount - 1 do
   begin
     SetResultsSafe(f, pointer(fFields[f]));
-    SetFieldType(f, sftUTF8Text);
+    SetFieldType(f, oftUTF8Text);
   end;
   for r := 1 to fRowCount do
   begin
@@ -635,7 +635,7 @@ var
               GetUrl(P + 8);
               FN := PublicFolder +
                 UTF8ToString(StringReplaceChars(url, '/', PathDelim));
-              EnsureDirectoryExists(ExtractFilePath(FN));
+              EnsureDirectoryExists(ExtractFilePath(FN), nil, {noexpand=}true);
               if not FileExists(FN) then
                 FileFromString(HttpGet(aDotClearRoot + '/public/' + url, nil,
                   {forceNotSocket=}true), FN);
@@ -710,9 +710,7 @@ var
 begin
   if aStaticFolder <> '' then
   begin
-    PublicFolder :=
-      IncludeTrailingPathDelimiter(aStaticFolder) + 'public' + PathDelim;
-    EnsureDirectoryExists(PublicFolder);
+    PublicFolder := EnsureDirectoryExists([aStaticFolder, 'public']);
     HTTP_DEFAULT_RESOLVETIMEOUT := 1000; // don't wait forever
     HTTP_DEFAULT_CONNECTTIMEOUT := 1000;
     HTTP_DEFAULT_RECEIVETIMEOUT := 2000;
@@ -751,9 +749,9 @@ begin
   aTagsLookup.Init(Rest); // reload after initial fill
   batch.Reset(TOrmArticle, 5000);
   tag_post_id := tagTable.FieldIndexExisting('post_id');
-  T.SortFields(tag_post_id, true, nil, sftInteger);
+  T.SortFields(tag_post_id, true, nil, oftInteger);
   postTable := data.GetObjectFrom('post');
-  postTable.SortFields('post_creadt', true, nil, sftDateTime);
+  postTable.SortFields('post_creadt', true, nil, oftDateTime);
   post_id := postTable.FieldIndexExisting('post_id');
   post_url := postTable.FieldIndexExisting('post_url');
   if postTable.Step(true) then

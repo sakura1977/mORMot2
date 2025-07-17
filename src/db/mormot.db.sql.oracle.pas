@@ -248,10 +248,10 @@ type
     // to retrieve the data rows
     // - raise an ESqlDBOracle on any error
     // - if aSql requires a trailing ';', you should end it with ';;' e.g. for
-    // $ DB.ExecuteNoResult(
-    // $  'CREATE OR REPLACE FUNCTION ORA_POC(MAIN_TABLE IN VARCHAR2, REC_COUNT IN NUMBER, BATCH_SIZE IN NUMBER) RETURN VARCHAR2' +
-    // $  ' AS LANGUAGE JAVA' +
-    // $  ' NAME ''OraMain.selectTable(java.lang.String, int, int) return java.lang.String'';;', []);
+    // ! DB.ExecuteNoResult(
+    // !  'CREATE OR REPLACE FUNCTION ORA_POC(MAIN_TABLE IN VARCHAR2, REC_COUNT IN NUMBER, BATCH_SIZE IN NUMBER) RETURN VARCHAR2' +
+    // !  ' AS LANGUAGE JAVA' +
+    // !  ' NAME ''OraMain.selectTable(java.lang.String, int, int) return java.lang.String'';;', []);
     procedure Prepare(const aSql: RawUtf8; ExpectResults: boolean = false); overload; override;
     /// Execute a prepared SQL statement
     // - parameters marked as ? should have been already bound with Bind*() functions
@@ -474,7 +474,7 @@ const
   type_Credential: array[boolean] of integer = (
     OCI_CRED_RDBMS, OCI_CRED_EXT);
 begin
-  log := SynDBLog.Enter(self, 'Connect');
+  SynDBLog.EnterLocal(log, self, 'Connect');
   Disconnect; // force fTrans=fError=fServer=fContext=nil
   Props := Properties as TSqlDBOracleConnectionProperties;
   with OCI do
@@ -592,7 +592,7 @@ constructor TSqlDBOracleConnection.Create(aProperties: TSqlDBConnectionPropertie
 var
   {%H-}log: ISynLog;
 begin
-  log := SynDBLog.Enter(self, 'Create');
+  SynDBLog.EnterLocal(log, self, 'Create');
   if not aProperties.InheritsFrom(TSqlDBOracleConnectionProperties) then
     ESqlDBOracle.RaiseUtf8('Invalid %.Create(%)', [self, aProperties]);
   inherited Create(aProperties);
@@ -688,7 +688,7 @@ procedure TSqlDBOracleConnection.StartTransaction;
 var
   log: ISynLog;
 begin
-  log := SynDBLog.Enter(self, 'StartTransaction');
+  SynDBLog.EnterLocal(log, self, 'StartTransaction');
   if TransactionCount > 0 then
     ESqlDBOracle.RaiseUtf8('Invalid %.StartTransaction: nested ' +
       'transactions are not supported by the Oracle driver', [self]);
@@ -1407,8 +1407,8 @@ begin
                 ftDate:
                   begin
                     VDBType := SQLT_DAT;
-                    FastNewRawByteString(VData, fParamsArrayCount * SizeOf(TOracleDate));
-                    oData := pointer(VData);
+                    oData := FastNewRawByteString(
+                      VData, fParamsArrayCount * SizeOf(TOracleDate));
                     oLength := SizeOf(TOracleDate);
                   end;
                 ftInt64:
@@ -1416,8 +1416,8 @@ begin
                   begin
                     // starting with 11.2, OCI supports NUMBER conversion to/from Int64
                     VDBType := SQLT_INT;
-                    FastNewRawByteString(VData, fParamsArrayCount * SizeOf(Int64));
-                    oData := pointer(VData);
+                    oData := FastNewRawByteString(
+                      VData, fParamsArrayCount * SizeOf(Int64));
                     oLength := SizeOf(Int64);
                   end;
                   // prior to 11.2, we will stay with the default SQLT_STR type
@@ -1471,8 +1471,7 @@ begin
                 SQLT_STR:
                   begin
                     inc(oLength); // space for #0 terminator
-                    FastNewRawByteString(VData, oLength * fParamsArrayCount);
-                    oData := pointer(VData); // in-place quote removal in text
+                    oData := FastNewRawByteString(VData, oLength * fParamsArrayCount);
                     oDataSTR := oData;
                     for j := 0 to fParamsArrayCount - 1 do
                     begin
@@ -1482,8 +1481,7 @@ begin
                   end;
                 SQLT_LVB:
                   begin
-                    FastNewRawByteString(VData, oLength * fParamsArrayCount);
-                    oData := pointer(VData);
+                    oData := FastNewRawByteString(VData, oLength * fParamsArrayCount);
                     oDataSTR := oData;
                     for j := 0 to fParamsArrayCount - 1 do
                     begin
@@ -1537,8 +1535,8 @@ begin
                   ociArrays[ociArraysCount]),
                 fError);
               inc(ociArraysCount);
-              FastNewRawByteString(param.VData, Length(param.VArray) * SizeOf(Int64));
-              oData := pointer(param.VData);
+              oData := FastNewRawByteString(
+                param.VData, Length(param.VArray) * SizeOf(Int64));
               for j := 0 to Length(param.VArray) - 1 do
                 case param.VType of
                   ftInt64:

@@ -498,7 +498,7 @@ end;
 {$ifdef UNICODE}
 function TryStringToBcd(const Text: string; out Bcd: TBcd): boolean;
 var
-  tmp: array[byte] of byte; // no memory allocation needed
+  tmp: TByteToByte; // no memory allocation needed
   i, L: PtrInt;
 begin
   result := false;
@@ -586,11 +586,7 @@ begin
   begin
     strm := f.DataSet.CreateBlobStream(f, bmRead);
     try
-      if strm.Size > 0 then
-      begin
-        SetLength(result, strm.Size);
-        strm.Read(pointer(result)^, strm.Size);
-      end;
+      result := StreamToRawByteString(strm);
     finally
       strm.Free;
     end;

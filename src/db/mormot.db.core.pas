@@ -395,10 +395,14 @@ type
     procedure SetCapacity(max: integer);
   end;
 
-/// set an error message for the current thread
+/// set a database error message for the current thread
 // - using an internal TLastError store and an associated TLastErrorID threadvar
 // since we can't create any string/RawUtf8 threadvar
-procedure SetDbError(const text: RawUtf8);
+procedure SetDbError(const text: RawUtf8); overload;
+
+/// set a database error message for the current thread from an exception
+// - could be used when E was not created via CreateU/CreateUtf8/RaiseUtf8
+procedure SetDbError(E: Exception); overload;
 
 /// unset the error message for the current thread
 procedure ClearDbError;
@@ -925,7 +929,7 @@ type
     // to the generated JSON stream (for faster unserialization of huge content)
     procedure AddColumns(aKnownRowsCount: integer = 0);
     /// write or init field names for appropriate JSON Expand later use
-    // - accept a name directly supplied by the DB provider
+    // - accept a name directly supplied by the DB provider - e.g. by SQLite3
     // - if Expand is true, will set ColNames[] with the expected format
     // - on Expand=false format, will directly write aColName to W
     procedure AddColumn(aColName: PUtf8Char; aColIndex, aColCount: PtrInt);
@@ -1060,7 +1064,7 @@ type
   /// the recognized WHERE expressions for TSelectStatement
   TSelectStatementWhereDynArray = array of TSelectStatementWhere;
 
-  /// used to parse a SELECT SQL statement, following the SQlite3 syntax
+  /// used to parse a SELECT SQL statement, following the SQLite3 syntax
   // - handle basic REST commands, i.e. a SELECT over a single table (no JOIN)
   // with its WHERE clause, and result column aliases
   // - handle also aggregate functions like "SELECT Count( * ) FROM TableName"
@@ -1988,6 +1992,11 @@ begin
   LastDbErrorID := LastDbError.NewMsg(text); // store in current threadvar
 end;
 
+procedure SetDbError(E: Exception);
+begin
+  SetDbError(FormatUtf8('%.%', [E, E.Message]));
+end;
+
 procedure ClearDbError;
 begin
   LastDbErrorID := 0; // reset
@@ -2235,8 +2244,7 @@ begin
   result := '';
   if Date <= 0 then
     exit;
-  FastSetString(result, 13);
-  PCardinal(pointer(result))^ := JSON_SQLDATE_MAGIC_C;
+  PCardinal(FastSetString(result, 13))^ := JSON_SQLDATE_MAGIC_C;
   DateToIso8601PChar(Date, PUtf8Char(pointer(result)) + 3, True);
 end;
 
@@ -2247,8 +2255,7 @@ begin
      (Month - 1 > 11) or
      (Day - 1 > 30) then
     exit;
-  FastSetString(result, 13);
-  PCardinal(pointer(result))^ := JSON_SQLDATE_MAGIC_C;
+  PCardinal(FastSetString(result, 13))^ := JSON_SQLDATE_MAGIC_C;
   DateToIso8601PChar(PUtf8Char(pointer(result)) + 3, True, Year, Month, Day);
 end;
 
@@ -2257,8 +2264,7 @@ var
   l: PtrInt;
 begin
   l := length(iso);
-  FastSetString(result, l + 3);
-  PCardinal(pointer(result))^ := JSON_SQLDATE_MAGIC_C;
+  PCardinal(FastSetString(result, l + 3))^ := JSON_SQLDATE_MAGIC_C;
   MoveFast(pointer(iso)^, PByteArray(result)^[3], l);
 end;
 
@@ -2497,12 +2503,12 @@ begin
       if n = 1 then
       begin
         if inlined then
-          AddShorter('=:(')
+          AddDirect('=', ':', '(')
         else
           AddDirect('=');
         AddQuotedStr(pointer(Values[0]), length(Values[0]), '''');
         if inlined then
-          AddShorter('):');
+          AddDirect(')', ':');
       end
       else
       begin
@@ -2513,7 +2519,7 @@ begin
             AddDirect(':', '(');
           AddQuotedStr(pointer(Values[i]), length(Values[i]), '''');
           if inlined then
-            AddShorter('):,')
+            AddDirect(')', ':', ',')
           else
             AddComma;
         end;
@@ -2542,12 +2548,12 @@ begin
       if n = 1 then
       begin
         if ValuesInlinedMax > 1 then
-          AddShorter('=:(')
+          AddDirect('=', ':', '(')
         else
           AddDirect('=');
         Add(Values[0]);
         if ValuesInlinedMax > 1 then
-          AddShorter('):');
+          AddDirect(')', ':');
       end
       else
       begin
@@ -2558,7 +2564,7 @@ begin
             AddDirect(':', '(');
           Add(Values[i]);
           if ValuesInlinedMax > n then
-            AddShorter('):,')
+            AddDirect(')', ':', ',')
           else
             AddComma;
         end;
@@ -2655,9 +2661,8 @@ begin
     exit;
   end;
   // compute GenericSql from SQL, converting :(...): into ?
-  FastSetString(GenericSQL, length(SQL)); // private copy
+  P := FastSetString(GenericSQL, length(SQL)); // private copy
   dec(i);
-  P := pointer(GenericSQL); // in-place string unescape (keep SQL untouched)
   MoveFast(pointer(SQL)^, P^, i);
   Gen := P + i;   // Gen^ just before :(
   P := @PUtf8Char(pointer(SQL))[i + 2];  // P^ just after :(
@@ -2851,27 +2856,25 @@ end;
 procedure TResultsWriter.AddColumns(aKnownRowsCount: integer);
 var
   i, len: PtrInt;
-  c: PPointer;
-  new: PAnsiChar;
+  c: PPAnsiChar;
 begin
   if fExpand then
   begin
     c := pointer(ColNames);
     for i := 1 to length(ColNames) do
     begin
-      len := PStrLen(PAnsiChar(c^) - _STRLEN)^; // ColNames[] <> ''
+      len := PStrLen(c^ - _STRLEN)^; // ColNames[] <> ''
       if twoForceJsonExtended in CustomOptions then
       begin
-        SetLength(RawUtf8(c^), len + 1); // reallocate in-place
-        PAnsiChar(c^)[len] := ':';
+        SetLength(PRawUtf8(c)^, len + 1); // colname: in-place
+        c^[len] := ':';
       end
       else
       begin
-        new := FastNewString(len + 3, CP_UTF8);
-        new[0] := '"';
-        MoveFast(c^^, new[1], len);
-        PCardinal(new + len + 1)^ := ord('"') + ord(':') shl 8;
-        FastAssignNew(c^, new);
+        SetLength(PRawUtf8(c)^, len + 3); // "colname": in-place
+        MoveFast(c^[0], c^[1], len);
+        c^[0] := '"';
+        PWord(c^ + len + 1)^ := ord('"') + ord(':') shl 8;
       end;
       inc(c);
     end;
@@ -2890,12 +2893,10 @@ begin
     for i := 0 to length(ColNames) - 1 do
     begin
       AddString(ColNames[i]);
-      AddShorter('","');
+      AddDirect('"', ',', '"')
     end;
     CancelLastChar;
     fStartDataPosition := PtrInt(fStream.Position) + PtrInt(B - fTempBuf);
-     // B := buf-1 at startup -> need ',val11' position in
-     // "values":["col1","col2",val11,' i.e. current pos without the ','
   end;
 end;
 
@@ -2941,7 +2942,7 @@ begin
       fStartDataPosition := PtrInt(fStream.Position) + PtrInt(B - fTempBuf);
     end
     else
-      AddShorter('","');
+      AddDirect('"', ',', '"')
   end;
 end;
 
@@ -2978,14 +2979,14 @@ var
   P, PBegin, PEnd: PUtf8Char;
 begin
   if (self = nil) or
-     not fStream.InheritsFrom(TMemoryStream) or
+     not fStream.InheritsFrom(TCustomMemoryStream) or
      fExpand or
      (fStartDataPosition = 0) then
     exit;
   // go to begin of first row
   FlushToStream; // we need the data to be in fStream memory
   // PBegin^=val11 in { "fieldCount":1,"values":["col1","col2",val11,"val12",val21,..] }
-  PBegin := TMemoryStream(fStream).Memory;
+  PBegin := TCustomMemoryStream(fStream).Memory;
   PEnd := PBegin + fStream.Position;
   PEnd^ := #0; // mark end of current values
   inc(PBegin, fStartDataPosition + 1); // +1 to include ',' of ',val11'
@@ -3803,8 +3804,8 @@ begin
         end;
       F := FieldCount;
       if F = MAX_SQLFIELDS then
-        raise EJsonObjectDecoder.Create('Too many inlines in TJsonObjectDecoder');
-      FieldNames[F] := info.Value;
+        EJsonObjectDecoder.RaiseU('Too many inlines in TJsonObjectDecoder');
+      FieldNames[F]  := info.Value;
       FieldNamesL[F] := info.Valuelen;
       ParseSqlValue(info, Params, FieldTypeApproximation[F], FieldValues[F]);
       if FieldIsRowID then
@@ -3818,9 +3819,9 @@ begin
     if info.Json = nil then
       exit;
     if RowID > 0 then
-      raise EJsonObjectDecoder.Create('TJsonObjectDecoder(expanded) won''t handle RowID');
+      EJsonObjectDecoder.RaiseU('TJsonObjectDecoder(expanded) won''t handle RowID');
     if length(Fields) > MAX_SQLFIELDS then
-      raise EJsonObjectDecoder.Create('Too many inlines in TJsonObjectDecoder');
+      EJsonObjectDecoder.RaiseU('Too many inlines in TJsonObjectDecoder');
     DecodedFieldNames := pointer(Fields);
     FieldCount := length(Fields);
     for F := 0 to FieldCount - 1 do
@@ -3875,10 +3876,10 @@ var
   procedure AddValue;
   begin
     if InlinedParams = pInlined then
-      W.AddShorter(':(');
+      W.AddDirect(':', '(');
     W.AddString(FieldValues[f]);
     if InlinedParams = pInlined then
-      W.AddShorter('):,')
+      W.AddDirect(')', ':', ',')
     else
       W.AddComma;
   end;
@@ -3991,6 +3992,8 @@ end;
 procedure TJsonObjectDecoder.AddFieldValue(const FieldName, FieldValue: RawUtf8;
   FieldType: TJsonObjectDecoderFieldType);
 begin
+  if FieldName = '' then
+    EJsonObjectDecoder.RaiseUtf8('TJsonObjectDecoder.AddField()', []);
   if FieldCount = MAX_SQLFIELDS then
     EJsonObjectDecoder.RaiseUtf8(
       'Too many fields for TJsonObjectDecoder.AddField(%) max=%',
@@ -4183,14 +4186,14 @@ begin
       dMariaDB:
         W.AddShort('insert ignore into ')
     else
-      W.AddShort('insert or ignore into '); // SQlite3
+      W.AddShort('insert or ignore into '); // SQLite3
     end
   else if boInsertOrReplace in BatchOptions then
     case DB of
       dFirebird:
         W.AddShort('update or insert into ');
     else
-      W.AddShort('replace into '); // SQlite3 and MySQL+MariaDB
+      W.AddShort('replace into '); // SQLite3 and MySQL+MariaDB
     end
   else
     W.AddShort('insert into ');

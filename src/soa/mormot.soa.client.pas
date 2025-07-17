@@ -483,7 +483,7 @@ end;
 procedure TInterfacedObjectFakeClient.FakeCallGetJsonFromStack(
   var ctxt: TFakeCallContext; var Json: RawUtf8);
 begin
-  if ctxt.Method^.ArgsInputIsOctetStream and
+  if (imfInputIsOctetStream in ctxt.Method^.Flags) and
      not fClient.ParamsAsJsonObject and
      (fClient.fClient <> nil) and
      (csiAsOctetStream in
@@ -612,7 +612,7 @@ function TServiceFactoryClient.InternalInvoke(const aMethod: RawUtf8;
   aFakeID: PInterfacedObjectFakeID; aServiceCustomAnswer: PServiceCustomAnswer;
   aClient: TRest): boolean;
 var
-  baseuri, uri, sent, resp, clientDrivenID, head, error, ct: RawUtf8;
+  baseuri, uri, sent, resp, clientDrivenID, head, error: RawUtf8;
   Values: array[0..1] of TValuePUtf8Char;
   status, m: integer;
   service: PInterfaceMethod;
@@ -670,7 +670,7 @@ begin
   if withinput then
     // include non-sensitive input in log
     p := aParams;
-  log := fClient.LogClass.Enter('InternalInvoke I%.%(%) %',
+  fClient.LogClass.EnterLocal(log, 'InternalInvoke I%.%(%) %',
     [fInterfaceUri, aMethod, {%H-}p, clientDrivenID], self);
   // call remote server according to current routing scheme
   if fForcedUri <> '' then
@@ -682,7 +682,7 @@ begin
   ctxt := [];
   if (service <> nil) and
      not ParamsAsJsonObject and
-     service^.ArgsInputIsOctetStream then
+     (imfInputIsOctetStream in service^.Flags) then
     include(ctxt, csiAsOctetStream);
   status := 0;
   DoClientCall;
@@ -697,12 +697,19 @@ begin
     aFakeID^ := 0;
     DoClientCall;
   end;
+  // log returned content
+  if (resp <> '') and
+     (sllServiceReturn in fClient.LogLevel) and
+     not (optNoLogOutput in fExecution[m].Options) and
+     ((service = nil) or
+      ([imdOut, imdVar, imdResult] * service^.HasSpiParams = [])) then
+    fClient.InternalLogResponse(resp, 'Invoke');
   // decode result
   if aServiceCustomAnswer = nil then
   begin
     // handle errors at REST level
     if ((service = nil) or
-        not service^.ArgsResultIsServiceCustomStatus) and
+        not (imfResultIsServiceCustomStatus in service^.Flags)) and
        not StatusCodeIsSuccess(status) then
     begin
       if aErrorMsg <> nil then
@@ -728,14 +735,6 @@ begin
       exit; // leave result=false
     end;
     // decode JSON object
-    if (log <> nil) and
-       (resp <> '') and
-       not (optNoLogOutput in fExecution[m].Options) and
-       ((service = nil) or
-        ([imdConst, imdVar] * service^.HasSpiParams = [])) then
-      with fClient.LogFamily do
-        if sllServiceReturn in Level then
-          log.Log(sllServiceReturn, resp, self, MAX_SIZE_RESPONSE_LOG);
     if fResultAsJsonObject then
     begin
       if aResult <> nil then
@@ -777,19 +776,6 @@ begin
   else
   begin
     // custom answer returned in TServiceCustomAnswer
-    if (log <> nil) and
-       (resp <> '') then
-      with fClient.LogFamily do
-        if sllServiceReturn in Level then
-        begin
-          FindNameValue(head{%H-}, HEADER_CONTENT_TYPE_UPPER, ct);
-          if (resp[1] in ['[', '{', '"']) and
-             IdemPChar(pointer(ct), JSON_CONTENT_TYPE_UPPER) then
-            log.Log(sllServiceReturn, resp, self, MAX_SIZE_RESPONSE_LOG)
-          else
-            log.Log(sllServiceReturn, 'TServiceCustomAnswer=% % len=% %',
-              [status, ct, length(resp), EscapeToShort(resp)], self);
-        end;
     aServiceCustomAnswer^.status := status;
     aServiceCustomAnswer^.Header := head;
     aServiceCustomAnswer^.Content := resp;

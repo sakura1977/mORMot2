@@ -44,13 +44,14 @@ uses
 { ******************** Socket Process High-Level Encapsulation }
 
 const
-  cLocalhost = '127.0.0.1';
-  cAnyHost = '0.0.0.0';
-  cBroadcast = '255.255.255.255';
+  cLocalhost  = '127.0.0.1';
+  cAnyHost    = '0.0.0.0';
+  cBroadcast  = '255.255.255.255';
   c6Localhost = '::1';
-  c6AnyHost = '::';
+  c6AnyHost   = '::';
   c6Broadcast = 'ffff::1';
-  cAnyPort = '0';
+  cAnyPort    = '0';
+
   cLocalhost32 = $0100007f;
 
   {$ifdef OSWINDOWS}
@@ -166,6 +167,9 @@ type
     // opaque wrapper with len: sockaddr_un=110 (POSIX) or sockaddr_in6=28 (Win)
     Addr: array[0..SOCKADDR_SIZE - 1] of byte;
   public
+    /// fill the meaningful bytes of the internal data structure with zeros
+    procedure Clear;
+      {$ifdef HASINLINE}inline;{$endif}
     /// initialize this address from standard IPv4/IPv6 or nlUnix textual value
     // - calls NewSocketIP4Lookup if available from mormot.net.dns (with a 32
     // seconds cache) or the proper getaddrinfo/gethostbyname OS API
@@ -195,15 +199,22 @@ type
     // - returns 0 (i.e. 0.0.0.0) for AF_INET6 or AF_UNIX
     function IP4: cardinal;
       {$ifdef FPC}inline;{$endif}
+    /// convert an IPv4 value into text, or '' for AF_INET6 or AF_UNIX
+    function IP4Short: TShort16;
+      {$ifdef FPC} inline; {$endif}
     /// convert this address into its shortstring IPv4/IPv6 textual representation
     function IPShort(withport: boolean = false): ShortString; overload;
       {$ifdef HASINLINE}inline;{$endif}
       /// convert this address into its shortstring IPv4/IPv6 textual representation
     procedure IPShort(out result: ShortString; withport: boolean = false); overload;
     /// convert this address into its 'IPv4/IPv6:port' textual representation
-    function IPWithPort: RawUtf8;
+    function IPWithPort: RawUtf8; overload;
+      {$ifdef HASINLINE}inline;{$endif}
+    /// convert this address into its 'IPv4/IPv6:port' textual representation
+    procedure IPWithPort(var Text: RawUtf8); overload;
     /// returns the network port (0..65535) of this address
     function Port: TNetPort;
+      {$ifdef FPC}inline;{$endif}
     /// set the network port (0..65535) of this address
     function SetPort(p: TNetPort): TNetResult;
     /// compute the number of bytes actually used in this address buffer
@@ -290,6 +301,8 @@ type
       async: boolean): TNetResult;
     /// retrieve the current address associated on this connected socket
     function GetName(out addr: TNetAddr): TNetResult;
+    /// retrieve this connected socket address as 'ip[:port]' text
+    function GetIP(out ip: RawUtf8; withport: boolean = true): TNetResult;
     /// retrieve the peer address associated on this connected socket
     function GetPeer(out addr: TNetAddr): TNetResult;
     /// change the socket state to non-blocking
@@ -299,9 +312,11 @@ type
     /// change the socket state to blocking
     function MakeBlocking: TNetResult;
     /// low-level sending of some data via this socket
-    function Send(Buf: pointer; var len: integer): TNetResult;
+    function Send(Buf: pointer; var len: integer;
+      rawError: system.PInteger = nil): TNetResult;
     /// low-level receiving of some data from this socket
-    function Recv(Buf: pointer; var len: integer): TNetResult;
+    function Recv(Buf: pointer; var len: integer;
+      rawError: system.PInteger = nil): TNetResult;
     /// low-level UDP sending to an address of some data
     function SendTo(Buf: pointer; len: integer; const addr: TNetAddr): TNetResult;
     /// low-level UDP receiving from an address of some data
@@ -318,6 +333,7 @@ type
     // RecvPending() to check for the actual state of the connection
     function HasData: integer;
     /// wrapper around WaitFor / RecvPending / Recv methods for a given time
+    // - will return up to 64KB of pending data in the socket receiving queue
     function RecvWait(ms: integer; out data: RawByteString;
       terminated: PTerminated = nil): TNetResult;
     /// low-level receiving of some data of known length from this socket
@@ -330,8 +346,10 @@ type
     // - i.e. check if it is likely to be accept Send() and Recv() calls
     // - calls WaitFor(neRead) then Recv() to check e.g. WSACONNRESET on Windows
     function Available(loerr: system.PInteger = nil): boolean;
+    /// call shutdown() on this socket - may be used to simulate a disconnection
+    procedure RawShutdown;
     /// finalize a socket, calling Close after shutdown() if needed
-    function ShutdownAndClose(rdwr: boolean): TNetResult;
+    function ShutdownAndClose(rdwr: boolean; waitms: integer = 0): TNetResult;
     /// close the socket - consider ShutdownAndClose() for clean closing
     function Close: TNetResult;
     /// access to the raw socket handle, i.e. @self
@@ -363,6 +381,8 @@ type
     /// you can call this method to change the default timeout of 10 minutes
     // - is likely to flush the cache
     procedure SetTimeOut(aSeconds: integer);
+    /// you can force a customized IP resolution for this host name
+    procedure Force(const Host, IP: RawUtf8);
   end;
 
 
@@ -375,6 +395,9 @@ function NetLastError(AnotherNonFatal: integer = NO_ERROR;
 
 /// internal low-level function retrieving the latest socket error message
 function NetLastErrorMsg(AnotherNonFatal: integer = NO_ERROR): ShortString;
+
+/// internal low-level function using known operating system error
+function NetErrorFromSystem(SystemError, AnotherNonFatal: integer): TNetResult;
 
 /// create a new Socket connected or bound to a given ip:port
 function NewSocket(const address, port: RawUtf8; layer: TNetLayer;
@@ -445,8 +468,8 @@ var
   DefaultListenBacklog: integer;
 
   /// defines if a connection from the loopback should be reported as ''
-  // - loopback connection will have no Remote-IP - for the default true
-  // - or loopback connection will be explicitly '127.0.0.1' - if equals false
+  // - with default true, loopback connection will have no RemoteIP address ('')
+  // - or it will be explicitly '127.0.0.1' - if equals false
   // - used by both TCrtSock.AcceptRequest and THttpApiServer.Execute servers
   RemoteIPLocalHostAsVoidInServers: boolean = true;
 
@@ -521,15 +544,15 @@ function IP4Netmask(prefix: integer): cardinal; overload;
 function IP4Netmask(prefix: integer; out mask: cardinal): boolean; overload;
   {$ifdef HASINLINE} inline; {$endif}
 
-/// compute a subnet value from a 32-bit IP4 and its associated NetMask
+/// compute a subnet/CIDR value from a 32-bit IPv4 and its associated NetMask
 // - e.g. ip4=192.168.0.16 and mask4=255.255.255.0 returns '192.168.0.0/24'
-function IP4Subnet(ip4, netmask4: cardinal): shortstring; overload;
+function IP4Subnet(ip4, netmask4: cardinal): ShortString; overload;
 
-/// compute a subnet value from an IP4 and its associated NetMask
+/// compute a subnet/CIDR value from an IPv4 and its associated NetMask
 // - e.g. ip4='192.168.0.16' and mask4='255.255.255.0' returns '192.168.0.0/24'
 function IP4Subnet(const ip4, netmask4: RawUtf8): RawUtf8; overload;
 
-/// check if an IP4 match a sub-network
+/// check if an IPv4 text match a CIDR sub-network
 // - e.g. IP4Match('192.168.1.1', '192.168.1.0/24') = true
 function IP4Match(const ip4, subnet: RawUtf8): boolean;
 
@@ -594,10 +617,6 @@ function GetIPAddresses(Kind: TIPAddress = tiaIPv4): TRawUtf8DynArray;
 // - an internal cache of the result is refreshed every 32 seconds
 function GetIPAddressesText(const Sep: RawUtf8 = ' ';
   Kind: TIPAddress = tiaIPv4): RawUtf8;
-
-/// check if Host is in 127.0.0.0/8 range - warning: Host should be not nil
-function IsLocalHost(Host: PUtf8Char): boolean;
-  {$ifdef HASINLINE} inline; {$endif}
 
 type
   /// the network interface type, as stored in TMacAddress.Kind
@@ -673,7 +692,12 @@ type
     // - not available on BSD
     Kind: TMacAddressKind;
   end;
+  PMacAddress = ^TMacAddress;
   TMacAddressDynArray = array of TMacAddress;
+
+const
+  /// identify each TMacAddressKind as one uppercase letter
+  MAK_TXT: array[TMacAddressKind] of AnsiChar = '?EWTPCS';
 
 /// enumerate all network MAC addresses and their associated IP information
 // - an internal 65-seconds cache is used, with explicit MacIPAddressFlush
@@ -687,6 +711,7 @@ function GetMacAddressesText(WithoutName: boolean = true;
 /// flush the GetIPAddressesText/GetMacAddresses internal caches
 // - may be called to force detection after HW configuration change (e.g. when
 // wifi has been turned on)
+// - this method is thread-safe about its internal caches
 procedure MacIPAddressFlush;
 
 {$ifdef OSWINDOWS}
@@ -700,7 +725,7 @@ function GetRemoteMacAddress(const IP: RawUtf8): RawUtf8;
 /// get the local MAC address used to reach a computer, from its IP or Host name
 // - return the local interface as a TMacAddress, with all its available info
 // - under Windows, will call the GetBestInterface() API to retrieve a IfIndex
-// - on POSIX, will call GetLocalIpAddress() to retrive a local IP
+// - on POSIX, will call GetLocalIpAddress() to retrieve a local IP
 // - always eventually makes a lookup to the GetMacAddresses() list per IfIndex
 // (Windows) or IP (POSIX)
 function GetLocalMacAddress(const Remote: RawUtf8; var Mac: TMacAddress): boolean;
@@ -795,19 +820,19 @@ type
   // - currently only properly implemented by mormot.lib.openssl11 - SChannel
   // on Windows only recognizes IgnoreCertificateErrors and sets CipherName
   // - typical usage is the following:
-  // $ with THttpClientSocket.Create do
-  // $ try
-  // $   TLS.WithPeerInfo := true;
-  // $   TLS.IgnoreCertificateErrors := true;
-  // $   TLS.CipherList := 'ECDHE-RSA-AES256-GCM-SHA384';
-  // $   ConnectUri('https://synopse.info');
-  // $   ConsoleWrite(TLS.PeerInfo);
-  // $   ConsoleWrite(TLS.CipherName);
-  // $   ConsoleWrite([Get('/forum/', 1000), ' len=', ContentLength]);
-  // $   ConsoleWrite(Get('/fossil/wiki/Synopse+OpenSource', 1000));
-  // $ finally
-  // $   Free;
-  // $ end;
+  // ! with THttpClientSocket.Create do
+  // ! try
+  // !   TLS.WithPeerInfo := true;
+  // !   TLS.IgnoreCertificateErrors := true;
+  // !   TLS.CipherList := 'ECDHE-RSA-AES256-GCM-SHA384';
+  // !   ConnectUri('https://synopse.info');
+  // !   ConsoleWrite(TLS.PeerInfo);
+  // !   ConsoleWrite(TLS.CipherName);
+  // !   ConsoleWrite([Get('/forum/', 1000), ' len=', ContentLength]);
+  // !   ConsoleWrite(Get('/fossil/wiki/Synopse+OpenSource', 1000));
+  // ! finally
+  // !   Free;
+  // ! end;
   // - for passing a PNetTlsContext, use InitNetTlsContext for initialization
   TNetTlsContext = record
     /// output: set by ConnectUri/OpenBind method once TLS is established
@@ -848,10 +873,15 @@ type
     // ICryptCert.SaveToFile(FileName, cccCertWithPrivateKey, ', ccfBinary) or
     // openssl pkcs12 -inkey privkey.pem -in cert.pem -export -out mycert.pfx
     CertificateFile: RawUtf8;
+    /// input: PEM/PFX content of a certificate to be loaded
+    // - on OpenSSL client or server, calls SSL_CTX_use_certificat() API
+    // - not used on SChannel client
+    // - on SChannel server, expects a .pfx / PKCS#12 binary content
+    CertificateBin: RawByteString;
     /// input: opaque pointer containing a certificate to be used
     // - on OpenSSL client or server, calls SSL_CTX_use_certificate() API
     // expecting the pointer to be of PX509 type
-    // - not used on SChannel client
+    // - not used on SChannel
     CertificateRaw: pointer;
     /// input: PEM file name containing a private key to be loaded
     // - (Delphi) warning: encoded as UTF-8 not UnicodeString/TFileName
@@ -875,6 +905,24 @@ type
     // - on OpenSSL, calls the SSL_CTX_load_verify_locations() API
     // - not used on SChannel
     CACertificatesFile: RawUtf8;
+    /// input: opaque pointers containing a set of CA certificates
+    // - on OpenSSL client or server, calls SSL_CTX_get_cert_store() API then
+    // X509_STORE_add_cert() on all pointers of PX509 type - i.e. expecting
+    // here a PX509DynArray e.g. from LoadCertificates() as such:
+    // ! var certs: PX509DynArray;
+    // ! ...
+    // !   certs := LoadCertificates(CA_CHAIN);
+    // !   aTlsContext.CACertificatesRaw := TPointerDynArray(certs);
+    // !   // ... eventually ...
+    // !   PX509DynArrayFree(certs);
+    // - not used on SChannel client
+    CACertificatesRaw: TPointerDynArray;
+    /// input: defines a set of CA certificates to be retrieved from the OS
+    // - on OpenSSL, calls and uses our cached LoadCertificatesFromSystemStore()
+    // which is more versatile than default SSL_CTX_set_default_verify_paths(),
+    // especially on Windows
+    // - not used on SChannel client
+    CASystemStores: TSystemCertificateStores;
     /// input: preferred Cipher List
     // - not used on SChannel
     CipherList: RawUtf8;
@@ -946,7 +994,8 @@ type
       const ServerAddress: RawUtf8);
     /// method called once the socket has been bound on server side
     // - will set Context.AcceptCert with reusable server certificates info
-    procedure AfterBind(var Context: TNetTlsContext);
+    procedure AfterBind(Socket: TNetSocket; var Context: TNetTlsContext;
+      const ServerAddress: RawUtf8);
     /// method called for each new connection accepted on server side
     // - should make the proper server-side TLS handshake and create a session
     // - should raise an exception on error
@@ -976,11 +1025,14 @@ type
     function Send(Buffer: pointer; var Length: integer): TNetResult;
   end;
 
-
 /// initialize a stack-allocated TNetTlsContext instance
-procedure InitNetTlsContext(var TLS: TNetTlsContext; Server: boolean = false;
-  const CertificateFile: TFileName = ''; const PrivateKeyFile: TFileName = '';
-  const PrivateKeyPassword: RawUtf8 = ''; const CACertificatesFile: TFileName = '');
+procedure InitNetTlsContext(var TLS: TNetTlsContext); overload;
+
+/// initialize a stack-allocated TNetTlsContext instance with auth parameters
+procedure InitNetTlsContext(var TLS: TNetTlsContext; Server: boolean;
+  const CertificateFile: TFileName = '';
+  const PrivateKeyFile: TFileName = ''; const PrivateKeyPassword: RawUtf8 = '';
+  const CACertificatesFile: TFileName = ''); overload;
 
 /// purge all output fields for a TNetTlsContext instance for proper reuse
 procedure ResetNetTlsContext(var TLS: TNetTlsContext);
@@ -1024,15 +1076,20 @@ type
   /// abstract parent class of both TSocketStream and TCrtSocketStream
   TSocketStreamAbstract = class(TStreamWithNoSeek)
   protected
+    fLastRawError: integer;
     fLastResult: TNetResult;
     fOwned: TObject;
   public
-    /// the low-level result code of the last Read() or Write() method call
-    property LastResult: TNetResult
-      read fLastResult;
     /// optional class instance for which Destroy will call Owned.Free
     property Owned: TObject
       read fOwned write fOwned;
+  published
+    /// the low-level result code of the last Read() or Write() method call
+    property LastResult: TNetResult
+      read fLastResult;
+    /// the raw socket error code of the last Read() or Write() method call
+    property LastRawError: integer
+      read fLastRawError;
   end;
 
   /// encapsulate a raw (TLS-encrypted) Socket to a TStream class
@@ -1372,7 +1429,7 @@ type
   EWinIocp = class(ExceptionWithProps);
 
   /// define the events TWinIocp can monitor
-  // - all wieCustom* events are user-triggered events via EnqueueCustom()
+  // - all wieCustom* events are user-triggered events via TWinIocp.Enqueue()
   TWinIocpEvent = (
     wieRecv,
     wieSend,
@@ -1381,8 +1438,7 @@ type
     wieCustom1,
     wieCustom2,
     wieCustom3,
-    wieCustom4,
-    wieCustom5);
+    wieCustom4);
 
   /// opaque pointer to one TWinIocp.Subscribe state
   PWinIocpSubscription = ^TWinIocpSubscription;
@@ -1398,7 +1454,7 @@ type
     /// return the TNetSocket associated with a Subscribe() call
     function Socket: TNetSocket;
     /// check the overlapped status of a Subscribe() call
-    function CurrentStatus: TPollSocketEvents;
+    function CurrentStatus(event: TWinIocpEvent): TPollSocketEvents;
   end;
 
   /// allow to customize TWinIocp process
@@ -1440,7 +1496,8 @@ type
     function Subscribe(socket: TNetSocket;
       tag: TPollSocketTag): PWinIocpSubscription;
     /// unsubscribe for events on a given socket
-    function Unsubscribe(one: PWinIocpSubscription): boolean;
+    // - will also set one := nil to avoid any dangling pointer
+    function Unsubscribe(var one: PWinIocpSubscription): boolean;
     /// notify IOCP that it needs to track the next event on this subscription
     // - typically called after socket recv/send to re-subscribe for events
     // - for wieRecv events, you should better not supply any buf/buflen to
@@ -1451,11 +1508,12 @@ type
     // will allocate one in the method)
     // - for wieConnect, you need to specify a TNetSocket (not already bound) in
     // netsock and a TNetAddr in buf/buflen
-    function PrepareNext(one: PWinIocpSubscription; event: TWinIocpEvent;
+    function PrepareNext(const ctxt: ShortString;
+      one: PWinIocpSubscription; event: TWinIocpEvent;
       buf: pointer = nil; buflen: integer = 0; netsock: TNetSocket = nil): boolean;
     /// add manually an event to the IOCP queue
     // - it won't make any actual access to a socket, just append an event to
-    // the queue, as regular wieRecv/wieSend/wieAccept/wieConnect or any wieCustom*
+    // the queue, as regular wieRecv .. wieConnect event or any wieCustom*
     function Enqueue(one: PWinIocpSubscription; event: TWinIocpEvent;
       bytes: cardinal = 0): boolean;
     /// pick a pending task from the internal queue within a specified timeout
@@ -1560,7 +1618,8 @@ type
     function Root: RawUtf8;
     /// comute the root resource Address as a resource "file" name
     // - e.g. '10' for '/category/name/10?param=1'
-    // - warning: no TFileName nor UrlDecode() conversion is performed
+    // - warning: no TFileName nor UrlDecode() conversion is performed - call
+    // ExtractResourceName() from mormot.net.client.pas for proper sanitation
     function ResourceName: RawUtf8;
     /// returns BinToBase64(User + ':' + Password) encoded value
     // - as used for "Authorization: Basic" and "Proxy-Authorization: Basic"
@@ -1568,7 +1627,7 @@ type
   end;
   PUri = ^TUri;
 
-  /// 32-bit binary storage of a IPv4 sub-network for fast comparison
+  /// 32-bit binary storage of a IPv4 CIDR sub-network for fast comparison
   {$ifdef USERECORDWITHMETHODS}
   TIp4SubNet = record
   {$else}
@@ -1578,15 +1637,76 @@ type
     ip: cardinal;
     /// 32-bit IP mask, e.g. 255.255.255.0 for '1.2.3.4/24'
     mask: cardinal;
-    /// check and decode the supplied address text from its format '1.2.3.4/24'
+    /// check and decode the supplied CIDR address text from its format '1.2.3.4/24'
     // - e.g. as 32-bit 1.2.3.0 into ip and 255.255.255.0 into mask
+    // - plain IP address like '1.2.3.4' will be decoded with mask=255.255.255.255
     function From(const subnet: RawUtf8): boolean;
-    /// check if an 32-bit IP4 matches a decoded sub-network
+    /// check if an 32-bit IPv4 matches a decoded CIDR sub-network
     function Match(ip4: cardinal): boolean; overload;
       {$ifdef HASINLINE} inline; {$endif}
-    /// check if a textual IPv4 matches a decoded sub-network
+    /// check if a textual IPv4 matches a decoded CIDR sub-network
     function Match(const ip4: RawUtf8): boolean; overload;
   end;
+
+  /// store one TIp4SubNets CIDR mask definition
+  TIp4SubNetMask = record
+    /// 32-bit IP mask, e.g. 255.255.255.0 for '1.2.3.4/24'
+    Mask: cardinal;
+    /// how many 32-bit masked IP are actually stored in IP[]
+    IPCount: integer;
+    /// list of 32-bit masked IPs, e.g. 1.2.3.0 for '1.2.3.4/24'
+    // - sorted to allow efficient O(log(n)) binary search in TIp4SubNets.Match
+    IP: TIntegerDynArray;
+  end;
+  PIp4SubNetMask = ^TIp4SubNetMask;
+  TIp4SubNetMasks = array of TIp4SubNetMask;
+
+  /// store several CIDR sub-network mask definitions for efficient search
+  // - to handle typically a blacklist of IP ranges e.g. from spamhaus.org
+  TIp4SubNets = class(TSynPersistent)
+  protected
+    fSubNet: TIp4SubNetMasks;
+    function FindMask(mask4: cardinal): PIp4SubNetMask;
+  public
+    /// decode and register the supplied CIDR address text e.g. as '1.2.3.4/24'
+    function Add(const subnet: RawUtf8): boolean; overload;
+    /// decode and register the supplied CIDR address as TIp4SubNet
+    // - by definition, private IP like 192.168.x.x are not added
+    function Add(const subnet: TIp4SubNet): boolean; overload;
+    /// decode and add all IP and CIDR listed in a text content
+    // - i.e. netsets as IP or CIDR with # or ; comments e.g. as in
+    // https://www.spamhaus.org/drop/drop.txt or
+    // https://github.com/firehol/blocklist-ipsets/blob/master/firehol_level1.netset
+    // - by definition, private IP like 192.168.x.x are not included
+    // - returns the number of added IP or CIDR, merging with existing content
+    function AddFromText(const text: RawUtf8): integer;
+    /// ensure all length(SubNet[].IP) = IPCount after Add/AddFromText usage
+    // - returns the current total number of stored IP or CIDR
+    function AfterAdd: integer;
+    /// check if a 32-bit IPv4 matches a registered CIDR sub-network
+    // - reach 16M/s per core with spamhaus or firehol databases
+    function Match(ip4: cardinal): boolean; overload;
+    /// check if a textual IPv4 matches a registered CIDR sub-network
+    function Match(const ip4: RawUtf8): boolean; overload;
+    // remove all registered CIDR sub-networks
+    procedure Clear;
+    /// persist this list as optimized binary
+    function SaveToBinary: RawByteString;
+    /// clear and retrieve from a binary buffer persisted via SaveToBinary
+    function LoadFromBinary(const bin: RawByteString): boolean;
+    /// low-level access to the internal storage
+    // - warning: length(IP) may be > IPCount - do not use "for in SubNet[].IP"
+    // pattern unless you called AfterAdd or LoadFromBinary
+    property SubNet: TIp4SubNetMasks
+      read fSubNet;
+  end;
+
+/// check if a 32-bit IPv4 matches a registered CIDR sub-network binary buffer
+// - directly parse TIp4SubNets.SaveToBinary output for conveniency
+function IP4SubNetMatch(P: PIntegerArray; ip4: cardinal): boolean; overload;
+
+/// check if a textual IPv4 matches a registered CIDR sub-network binary buffer
+function IP4SubNetMatch(const bin: RawByteString; const ip4: RawUtf8): boolean; overload;
 
 
 const
@@ -1605,20 +1725,22 @@ const
 
 /// check is the supplied address text is on format '1.2.3.4'
 // - will optionally fill a 32-bit binary buffer with the decoded IPv4 address
-// - end text input parsing at final #0 or any char <= ' '
+// - end text input parsing at final #0 '/' or any char <= ' '
 function NetIsIP4(text: PUtf8Char; value: PByte = nil): boolean;
 
 /// parse a text input buffer until the end space or EOL
 function NetGetNextSpaced(var P: PUtf8Char): RawUtf8;
 
-/// RawUtf8-ready result := v + v + ... concatenation for FPC
-function NetConcat(const v: array of RawUtf8): RawUtf8;
-
 /// IdemPChar() like function, to avoid linking mormot.core.text
 function NetStartWith(p, up: PUtf8Char): boolean;
 
 /// BinToBase64() like function, to avoid linking mormot.core.buffers
+// - only used for TUri.UserPasswordBase64, so is not performance sensitive
 function NetBinToBase64(const s: RawByteString): RawUtf8;
+
+/// IsPem() like function, to avoid linking mormot.crypt.secure
+// - search for '-----BEGIN' text, so may hardly give some false positives
+function NetIsPem(p: PUtf8Char): boolean;
 
 
 { ********* TCrtSocket Buffered Socket Read/Write Class }
@@ -1640,6 +1762,14 @@ type
     cstaBind,
     cstaAccept);
 
+  TCrtSocketFlags = set of (
+    fAborted,
+    fWasBind,
+    fBodyRetrieved,
+    fServerTlsEnabled,
+    fProxyConnect,
+    fProxyHttp);
+
   {$M+}
   /// Fast low-level Socket implementation
   // - direct access to the OS (Windows, Linux) network layer API
@@ -1650,36 +1780,30 @@ type
   // read the (binary) content via SockInRead/SockInPending methods, which would
   // benefit of the SockIn^ input buffer to maximize reading speed
   // - use SockSend() overloaded methods, followed by a SockFlush call
-  // - CreateSockOut for write/writeln is now deprecqted because it has no buffering
-  // - since this class rely on its internal optimized buffering system,
-  // TCP_NODELAY is set to disable the Nagle algorithm
+  // - CreateSockOut for write/writeln are now deprecated because the RTL doesn't
+  // use its buffer to reduce syscalls, so explicit SockSend/SockFlush is better
+  // - since this class relies on its internal optimized SockSend/SockFlush
+  // buffering system, TCP_NODELAY option is set to disable the Nagle algorithm
   // - can use TLS (using the SChannel API on Windows, or by including
   // mormot.lib.openssl11 unit to your project) or HTTP Proxy/Tunnel
   TCrtSocket = class
   protected
-    fSock: TNetSocket;
+    fSock: TNetSocket; // wrapper to raw socket, stored as a pointer
     fServer: RawUtf8;
     fPort: RawUtf8;
+    fFlags: TCrtSocketFlags;
+    fSocketLayer: TNetLayer;
+    fSocketFamily: TNetFamily;
     fProxyUrl: RawUtf8;
     fRemoteIP: RawUtf8;    // set by OpenBind() or AcceptRequest() from TNetAddr
     fOpenUriFull: RawUtf8; // set by OpenUri()
-    fSockIn: PTextFile;
-    {$ifndef PUREMORMOT2}
-    fSockOut: PTextFile;
-    {$endif PUREMORMOT2}
-    fTimeOut: PtrInt;
+    fSockIn: PTextFile;    // allocated by CreateSockIn with its own buffer
     fBytesIn: Int64;
     fBytesOut: Int64;
     fSecure: INetTls;
-    fSockInEofError: integer;
-    fWasBind, fAborted: boolean;
-    fSocketLayer: TNetLayer;
-    fSocketFamily: TNetFamily;
-    // updated by every SockSend() call
+    fTimeOut: integer;
+    fSndBufLen: integer; // updated by every SockSend() call
     fSndBuf: RawByteString;
-    fSndBufLen: integer;
-    // updated during UDP connection, accessed via PeerAddress/PeerPort
-    fPeerAddr: PNetAddr;
     procedure SetKeepAlive(aKeepAlive: boolean); virtual;
     procedure SetLinger(aLinger: integer); virtual;
     procedure SetReceiveTimeout(aReceiveTimeout: integer); virtual;
@@ -1689,15 +1813,18 @@ type
       {$ifdef HASINLINE}inline;{$endif}
     function GetRawSocket: PtrInt;
       {$ifdef HASINLINE}inline;{$endif}
+    function GetAborted: boolean;
+      {$ifdef HASINLINE}inline;{$endif}
   public
     /// direct access to the optional low-level HTTP proxy tunnelling information
-    // - could have been assigned by a Tunnel.From() call
     // - User/Password would be taken into consideration for authentication
     // - could be populated by mormot.net.client Tunnel.From(GetSystemProxy())
     Tunnel: TUri;
     /// direct access to the optional low-level TLS Options and Information
     // - depending on the actual INetTls implementation, some fields may not
     // be used nor populated - currently only supported by mormot.lib.openssl11
+    // - reflect the raw socket layer, so TLS.Enabled may apply to the proxy
+    // connection, to the actual destination: see ServerTls method instead
     TLS: TNetTlsContext;
     /// can be assigned to TSynLog.DoLog class method for low-level logging
     OnLog: TSynLogProc;
@@ -1705,7 +1832,7 @@ type
     // - if you call it directly, you can setup all the needed parameters (e.g.
     // TLS, Tunnel, THttpClientWebSockets.Settings) then call ConnectUri()
     // - see also Open/OpenUri/Bind other constructors
-    constructor Create(aTimeOut: PtrInt = 10000); reintroduce; virtual;
+    constructor Create(aTimeOut: integer = 10000); reintroduce; virtual;
     /// constructor to create a client connection to aServer:aPort
     // - see also SocketOpen() for a wrapper catching any connection exception
     // - aTunnel could be populated by mormot.net.client GetSystemProxyUri()
@@ -1718,15 +1845,19 @@ type
       const aTunnel: RawUtf8 = ''; aTimeOut: cardinal = 10000;
       aTLSContext: PNetTlsContext = nil); virtual;
     /// constructor to bind to an address
+    // - just a wrapper around Create(aTimeOut) and BindPort()
+    constructor Bind(const aAddress: RawUtf8; aLayer: TNetLayer = nlTcp;
+      aTimeOut: integer = 10000; aReusePort: boolean = false);
+    /// address binding processing method, as called by the Bind() constructor
     // - aAddr='1234' - bind to a port on all interfaces, the same as '0.0.0.0:1234'
     // - aAddr='IP:port' - bind to specified interface only, e.g.
     // '1.2.3.4:1234'
     // - aAddr='unix:/path/to/file' - bind to unix domain socket, e.g.
-    // 'unix:/run/mormot.sock'
+    // 'unix:/run/mymormotapp.sock'
     // - aAddr='' - bind to systemd descriptor on linux - see
     // http://0pointer.de/blog/projects/socket-activation.html
-    constructor Bind(const aAddress: RawUtf8; aLayer: TNetLayer = nlTcp;
-      aTimeOut: integer = 10000; aReusePort: boolean = false);
+    procedure BindPort(const aAddress: RawUtf8; aLayer: TNetLayer = nlTcp;
+      aReusePort: boolean = false);
     /// after Create(), create a client connection to a given server URI
     // - optionally returns TUri.Address as parsed from aUri
     // - raise an ENetSock exception on error
@@ -1740,7 +1871,7 @@ type
     // mormot.lib.openssl11 unit) - with custom input options in the TLS fields
     procedure OpenBind(const aServer, aPort: RawUtf8; doBind: boolean;
       aTLS: boolean = false; aLayer: TNetLayer = nlTcp;
-      aSock: TNetSocket = TNetSocket(-1); aReusePort: boolean = false);
+      aSock: TNetSocket = TNetSocket(-1); aReusePort: boolean = false); virtual;
     /// a wrapper around Close + OpenBind() with the current settings
     // - could be used to reestablish a broken or closed connection
     // - return '' on success, or an error message on failure
@@ -1751,6 +1882,11 @@ type
     procedure AcceptRequest(aClientSock: TNetSocket; aClientAddr: PNetAddr);
     /// low-level TLS support method
     procedure DoTlsAfter(caller: TCrtSocketTlsAfter);
+    /// check if the Server is accessed using TLS
+    // - TLS.Enabled flag is about the raw socket, probably over a Tunnel/Proxy
+    // - this function reflects the actual aTLS parameter supplied to OpenBind()
+    function ServerTls: boolean;
+      {$ifdef HASINLINE} inline; {$endif}
     /// initialize SockIn for receiving with read[ln](SockIn^,...)
     // - data is buffered, filled as the data is available
     // - read(char) or readln() is indeed very fast
@@ -1764,22 +1900,10 @@ type
     // input buffering feature on this connection any more (e.g. after having
     // parsed the HTTP header, then rely on direct socket comunication)
     procedure CloseSockIn;
-    {$ifndef PUREMORMOT2}
-    /// initialize SockOut for sending with write[ln](SockOut^,....)
-    // - data is sent (flushed) after each writeln() - it's a compiler feature
-    // - use rather SockSend() + SockSendFlush to send headers at once e.g.
-    // since writeln(SockOut^,..) flush buffer each time
-    procedure CreateSockOut(OutputBufferSize: integer = 1024);
-    /// finalize SockOut receiving buffer
-    // - you may call this method when you are sure that you don't need the
-    // output buffering feature on this connection any more (e.g. after having
-    // parsed the HTTP header, then rely on direct socket comunication)
-    procedure CloseSockOut;
-    {$endif PUREMORMOT2}
     /// close and shutdown the connection
     // - called from Destroy, but is reintrant so could be called earlier
     procedure Close; virtual;
-    /// close the opened socket, and corresponding SockIn/SockOut
+    /// close the opened socket, and corresponding SockIn^ text file (if any)
     destructor Destroy; override;
     /// mark the internal Aborted flag to let any blocking loop abort ASAP
     // - will also close any associated socket at OS level
@@ -1844,14 +1968,14 @@ type
     function SockSendRemainingSize: integer;
       {$ifdef HASINLINE}inline;{$endif}
     /// fill the Buffer with Length bytes
-    // - use TimeOut milliseconds wait for incoming data
+    // - wait TimeOut milliseconds until Length bytes are actually received
     // - bypass the SockIn^ buffers
-    // - raise ENetSock exception on socket error
+    // - raise ENetSock exception on socket error, or if Length was not reached
     procedure SockRecv(Buffer: pointer; Length: integer); overload;
     /// fill a RawByteString Buffer with Length bytes
-    // - use TimeOut milliseconds wait for incoming data
+    // - wait TimeOut milliseconds until Length bytes are actually received
     // - bypass the SockIn^ buffers
-    // - raise ENetSock exception on socket error
+    // - raise ENetSock exception on socket error, or if Length was not reached
     function SockRecv(Length: integer): RawByteString; overload;
     /// check if there are some pending bytes in the input sockets API buffer
     // - returns cspSocketError/cspSocketClosed if the connection is broken/closed
@@ -1866,7 +1990,8 @@ type
     function SockReceiveHasData: integer;
     /// returns the socket input stream as a string
     // - returns up to 64KB from the OS or TLS buffers within TimeOut
-    function SockReceiveString: RawByteString;
+    function SockReceiveString(NetResult: PNetResult = nil;
+      RawError: system.PInteger = nil): RawByteString;
     /// fill the Buffer with Length bytes
     // - use TimeOut milliseconds wait for incoming data
     // - bypass the SockIn^ buffers
@@ -1877,7 +2002,8 @@ type
     // are set in Length, even if not all expected data has been received - in
     // this case, Close method won't be called
     function TrySockRecv(Buffer: pointer; var Length: integer;
-      StopBeforeLength: boolean = false; NetResult: PNetResult = nil): boolean;
+      StopBeforeLength: boolean = false; NetResult: PNetResult = nil;
+      RawError: system.PInteger = nil): boolean;
     /// call readln(SockIn^,Line) or simulate it with direct use of Recv(Sock, ..)
     // - char are read one by one if needed
     // - use TimeOut milliseconds wait for incoming data
@@ -1904,7 +2030,8 @@ type
     // - return true on success, or false on any fatal socket error - NetResult^
     // (if not nil) would contain the actual socket error
     // - bypass the SockSend() buffers
-    function TrySndLow(P: pointer; Len: integer; NetResult: PNetResult = nil): boolean;
+    function TrySndLow(P: pointer; Len: integer; NetResult: PNetResult = nil;
+      RawError: system.PInteger = nil): boolean;
     /// direct accept an new incoming connection on a bound socket
     // - instance should have been setup as a server via a previous Bind() call
     // - returns nil on error or a ResultClass instance on success
@@ -1919,15 +2046,13 @@ type
     // a custom header value set by a local proxy as retrieved by inherited
     // THttpServerSocket.GetRequest, searching the header named in
     // THttpServerGeneric.RemoteIPHeader (e.g. 'X-Real-IP' for nginx)
+    // - with SocketLayer = nlUdp, InputSock will put here the 'ip:port' of the
+    // received packet during SocketIn^ process
     property RemoteIP: RawUtf8
       read fRemoteIP write fRemoteIP;
     /// the full requested URI, as specified to OpenUri() constructor
     property OpenUriFull: RawUtf8
       read fOpenUriFull;
-    /// remote IP address of the last packet received (SocketLayer=slUDP only)
-    function PeerAddress(LocalAsVoid: boolean = false): RawUtf8;
-    /// remote IP port of the last packet received (SocketLayer=slUDP only)
-    function PeerPort: TNetPort;
     /// compute a TStream compatible class instance from this (secured) socket
     // - return nil if SockIsDefined is false, or a new TSocketStream instance
     // which should be owned and released by the caller, while keeping this
@@ -1978,16 +2103,10 @@ type
     /// after CreateSockIn, use Readln(SockIn^,s) to read a line from the opened socket
     property SockIn: PTextFile
       read fSockIn;
-    {$ifndef PUREMORMOT2}
-    /// after CreateSockOut, use Writeln(SockOut^,s) to send a line to the opened socket
-    // - deprecated: SockSend/SockSendFlush have their own more efficient buffering
-    property SockOut: PTextFile
-      read fSockOut;
-    {$endif PUREMORMOT2}
     /// equals true when the Abort method has been called
     // - could be used to abort any blocking process ASAP
     property Aborted: boolean
-      read fAborted;
+      read GetAborted;
   published
     /// low-level socket type, initialized after Open() with socket
     property SocketLayer: TNetLayer
@@ -2001,7 +2120,7 @@ type
     /// IP port, initialized after Open() with port number
     property Port: RawUtf8
       read fPort;
-    /// contains Sock, but transtyped as number for log display
+    /// contains Sock, but transtyped as number for log display or low-level API
     property RawSocket: PtrInt
       read GetRawSocket;
     /// HTTP Proxy URI used for tunnelling, from Tunnel.Server/Port values
@@ -2009,7 +2128,7 @@ type
       read fProxyUrl;
     /// if higher than 0, read loop will wait for incoming data till
     // TimeOut milliseconds (default value is 10000) - used also in SockSend()
-    property TimeOut: PtrInt
+    property TimeOut: integer
       read fTimeOut;
     /// total bytes received
     property BytesIn: Int64
@@ -2038,6 +2157,7 @@ type
     function Read(var Buffer; Count: Longint): Longint; override;
     /// send some data calling the associated TCrtSocket.SockSend()
     function Write(const Buffer; Count: Longint): Longint; override;
+  published
     /// access to the underlying TCrtSocket instance
     property Socket: TCrtSocket
       read fSocket;
@@ -2050,6 +2170,11 @@ type
 function SocketOpen(const aServer, aPort: RawUtf8; aTLS: boolean = false;
   aTLSContext: PNetTlsContext = nil; aTunnel: PUri = nil;
   aTLSIgnoreCertError: boolean = false): TCrtSocket;
+
+var
+  /// maximum chunk size for each TCrtSocket.TrySndLow/TrySockRecv syscall
+  // - 256KB seems fair enough, safer and not slower in practice
+  CrtSocketSendRecvMaxBytes: PtrInt = 256 shl 10;
 
 
 { ********* NTP / SNTP Protocol Client }
@@ -2125,19 +2250,15 @@ const
     'Connect Timeout',
     'Invalid Parameter');
 
-function NetLastError(AnotherNonFatal: integer; Error: system.PInteger): TNetResult;
-var
-  err: integer;
+function NetErrorFromSystem(SystemError, AnotherNonFatal: integer): TNetResult;
 begin
-  err := RawSocketErrNo;
-  if Error <> nil then
-    Error^ := err;
-  case err of
+  case SystemError of
     NO_ERROR:
       result := nrOK;
     {$ifdef OSWINDOWS}
     WSAETIMEDOUT,
     WSAEWOULDBLOCK,
+    WSAIOPENDING,
     {$endif OSWINDOWS}
     WSAEINPROGRESS,
     WSATRY_AGAIN:
@@ -2155,11 +2276,21 @@ begin
     WSAECONNABORTED:
       result := nrClosed;
   else
-    if err = AnotherNonFatal then
+    if SystemError = AnotherNonFatal then
       result := nrRetry
     else
       result := nrFatalError;
   end;
+end;
+
+function NetLastError(AnotherNonFatal: integer; Error: system.PInteger): TNetResult;
+var
+  err: integer;
+begin
+  err := RawSocketErrNo;
+  if Error <> nil then
+    Error^ := err;
+  result := NetErrorFromSystem(err, AnotherNonFatal);
 end;
 
 function NetLastErrorMsg(AnotherNonFatal: integer): ShortString;
@@ -2207,7 +2338,7 @@ begin
   if error <> nrOK then
   begin
     fLastError := error;
-    msg := format('%s [%s - #%d]', [msg, _NR[error], ord(error)]);
+    msg := format('%s [#%d %s]', [msg, ord(error), _NR[error]]);
     if (errnumber <> nil) and
        (error <> nrTimeout) and
        (errnumber^ <> NO_ERROR) then
@@ -2267,8 +2398,8 @@ type
   TNetHostCache = object
   {$endif USERECORDWITHMETHODS}
   public
-    Host: TRawUtf8DynArray;
     Safe: TLightLock;
+    Host: TRawUtf8DynArray;
     Tix, TixShr: cardinal;
     Count, Capacity: integer;
     IP: TCardinalDynArray;
@@ -2324,7 +2455,7 @@ begin
   if (Count = 0) or
      (hostname = '') then
     exit;
-  i := FindPropName(pointer(Host), hostname, Count);
+  i := FindPropName(pointer(Host), hostname, Count); // case insensitive lookup
   if i < 0 then
     exit;
   ip4 := IP[i];
@@ -2372,7 +2503,7 @@ begin
     begin
       i := FindPropName(pointer(Host), hostname, Count);
       if i < 0 then
-        exit;
+        exit; // case insensitive Host not found
       n := Count - 1;
       Count := n;
       Host[i] := '';
@@ -2401,46 +2532,52 @@ end;
 
 function TNetAddr.SetFromIP4(const address: RawUtf8;
   noNewSocketIP4Lookup: boolean): boolean;
+var
+  ad4: sockaddr absolute Addr;
 begin
   // allow to bind to any IPv6 address
   if address = c6AnyHost then // ::
   begin
-    PSockAddrIn6(@Addr)^.sin6_family := AF_INET6; // keep all sin6_addr[] = 0
+    ad4.sin_family := AF_INET6; 
+    FillZero(PHash128(@PSockAddrIn6(@Addr)^.sin6_addr)^); // all sin6_addr[] = 0
     result := true;
     exit;
   end;
-  // caller did set addr4.sin_port and other fields to 0
   result := false;
-  with PSockAddr(@Addr)^ do
-    if (address = cLocalhost) or
-       (address = c6Localhost) or // ::1
-       PropNameEquals(address, 'localhost') then
-      PCardinal(@sin_addr)^ := cLocalhost32 // 127.0.0.1
-    else if (address = cBroadcast) or
-            (address = c6Broadcast) then
-      PCardinal(@sin_addr)^ := cardinal(-1) // 255.255.255.255
-    else if address = cAnyHost then
-      // keep 0.0.0.0 for bind - but connect would redirect to 127.0.0.1
-    else if NetIsIP4(pointer(address), @sin_addr) or
-            GetKnownHost(address, PCardinal(@sin_addr)^) or
-            NetAddrCache.SafeFind(address, PCardinal(@sin_addr)^) then
-      // numerical IPv4, /etc/hosts, or cached entry
-    else if (Assigned(NewSocketIP4Lookup) and
-            not noNewSocketIP4Lookup and
-            NewSocketIP4Lookup(address, PCardinal(@sin_addr)^)) then
-      // cache value found from mormot.net.dns lookup for 1 shl 15 = 32 seconds
-      NetAddrCache.SafeAdd(address, PCardinal(@sin_addr)^, {tixshr=}15)
-    else
-      // return result=false if unknown
-      exit;
+  ad4.sin_family := 0; // keep sin_port
+  ad4.sin_addr.s_addr := 0; // reset
+  PInt64(@ad4.sin_zero)^ := 0; // seems mandatory on Windows
+  if (address = cLocalhost) or
+     (address = c6Localhost) or // ::1
+     PropNameEquals(address, 'localhost') then
+    ad4.sin_addr.s_addr := cLocalhost32 // 127.0.0.1
+  else if (address = cBroadcast) or
+          (address = c6Broadcast) then
+    ad4.sin_addr.s_addr := cardinal(-1) // 255.255.255.255
+  else if address = cAnyHost then
+    // keep 0.0.0.0 for bind - but connect would redirect to 127.0.0.1
+  else if NetIsIP4(pointer(address), @ad4.sin_addr) or
+          GetKnownHost(address, ad4.sin_addr.s_addr) or
+          NetAddrCache.SafeFind(address, ad4.sin_addr.s_addr) then
+    // numerical IPv4, /etc/hosts, or cached entry
+  else if (Assigned(NewSocketIP4Lookup) and
+          not noNewSocketIP4Lookup and
+          NewSocketIP4Lookup(address, ad4.sin_addr.s_addr)) then
+    // cache value found from mormot.net.dns lookup for 1 shl 15 = 32 seconds
+    NetAddrCache.SafeAdd(address, ad4.sin_addr.s_addr, {tixshr=}15)
+  else
+    // return result=false if unknown
+    exit;
   // we found the IPv4 matching this address
-  PSockAddr(@Addr)^.sin_family := AF_INET;
+  ad4.sin_family := AF_INET;
   result := true;
 end;
 
 function TNetAddr.Family: TNetFamily;
+var
+  ad4: sockaddr absolute Addr;
 begin
-  case PSockAddr(@Addr)^.sa_family of
+  case ad4.sa_family of
     AF_INET:
       result := nfIP4;
     AF_INET6:
@@ -2455,14 +2592,15 @@ begin
 end;
 
 procedure TNetAddr.IP(var res: RawUtf8; localasvoid: boolean);
+var
+  ad4: sockaddr absolute Addr;
 begin
   res := '';
-  case PSockAddr(@Addr)^.sa_family of
+  case ad4.sa_family of
     AF_INET:
-      with PSockAddr(@Addr)^ do
-        if (not localasvoid) or
-           (cardinal(sin_addr) <> cLocalhost32) then
-          IP4Text(@sin_addr, res); // detect 0.0.0.0 and 127.0.0.1
+      if (not localasvoid) or
+         (ad4.sin_addr.s_addr <> cLocalhost32) then
+        IP4Text(@ad4.sin_addr, res); // detect 0.0.0.0 and 127.0.0.1
     AF_INET6:
       begin
         IP6Text(@PSockAddrIn6(@Addr)^.sin6_addr, res); // detect :: and ::1
@@ -2484,12 +2622,23 @@ begin
 end;
 
 function TNetAddr.IP4: cardinal;
+var
+  ad4: sockaddr absolute Addr;
 begin
-  with PSockAddr(@Addr)^ do
-    if sa_family = AF_INET then
-      result := cardinal(sin_addr) // may return cLocalhost32 = 127.0.0.1
-    else
-      result := 0; // AF_INET6 or AF_UNIX return 0
+  if ad4.sa_family = AF_INET then
+    result := ad4.sin_addr.s_addr // may be cLocalhost32
+  else
+    result := 0; // AF_INET6 or AF_UNIX return 0
+end;
+
+function TNetAddr.IP4Short: TShort16;
+var
+  ad4: sockaddr absolute Addr;
+begin
+  if ad4.sa_family = AF_INET then
+    mormot.net.sock.IP4Short(@ad4.sin_addr, result)
+  else
+    result[0] := #0; // AF_INET6 or AF_UNIX return ''
 end;
 
 function TNetAddr.IPShort(withport: boolean): ShortString;
@@ -2498,67 +2647,81 @@ begin
 end;
 
 procedure TNetAddr.IPShort(out result: ShortString; withport: boolean);
+var
+  ad4: sockaddr absolute Addr;
 begin
   result[0] := #0;
-  case PSockAddr(@Addr)^.sa_family of
+  case ad4.sa_family of
     AF_INET:
-      IP4Short(@PSockAddr(@Addr)^.sin_addr, result);
+      mormot.net.sock.IP4Short(@ad4.sin_addr, result);
     AF_INET6:
       IP6Short(@PSockAddrIn6(@Addr)^.sin6_addr, result);
     {$ifdef OSPOSIX}
     AF_UNIX:
+      with psockaddr_un(@Addr)^ do
       begin
-        SetString(result, PAnsiChar(@psockaddr_un(@Addr)^.sun_path),
-          mormot.core.base.StrLen(@psockaddr_un(@Addr)^.sun_path));
+        SetString(result, PAnsiChar(@sun_path), mormot.core.base.StrLen(@sun_path));
         exit; // no port
       end;
     {$endif OSPOSIX}
   else
     exit;
   end;
-  if withport then
-  begin
-    AppendShortChar(':', @result);
-    AppendShortCardinal(port, result);
-  end;
+  if not withport then
+    exit;
+  AppendShortChar(':', @result);
+  AppendShortCardinal(Port, result);
+end;
+
+procedure TNetAddr.IPWithPort(var Text: RawUtf8);
+var
+  tmp: ShortString;
+begin
+  IPShort(tmp, {withport=}true);
+  ShortStringToAnsi7String(tmp, Text);
 end;
 
 function TNetAddr.IPWithPort: RawUtf8;
-var
-  tmp: shortstring;
 begin
-  IPShort(tmp, {withport=}true);
-  ShortStringToAnsi7String(tmp, result);
+  IPWithPort(result);
 end;
 
 function TNetAddr.Port: TNetPort;
+var
+  ad4: sockaddr absolute Addr;
 begin
-  with PSockAddr(@Addr)^ do
-    if sa_family in [AF_INET, AF_INET6] then
-      result := bswap16(sin_port)
-    else
-      result := 0;
+  if ad4.sa_family in [AF_INET, AF_INET6] then
+    result := bswap16(ad4.sin_port)
+  else
+    result := 0;
 end;
 
 function TNetAddr.SetPort(p: TNetPort): TNetResult;
+var
+  ad4: sockaddr absolute Addr;
 begin
-  with PSockAddr(@Addr)^ do
-    if (sa_family in [AF_INET, AF_INET6]) and
-       (p <= 65535) then // p may equal 0 to set ephemeral port
-    begin
-      sin_port := bswap16(p);
-      result := nrOk;
-    end
-    else
-      result := nrNotFound;
+  if (ad4.sa_family in [AF_INET, AF_INET6]) and
+     (p <= 65535) then // p may equal 0 to set ephemeral port
+  begin
+    ad4.sin_port := bswap16(p);
+    result := nrOk;
+  end
+  else
+    result := nrNotFound;
 end;
 
 function TNetAddr.SetIP4Port(ipv4: cardinal; netport: TNetPort): TNetResult;
+var
+  ad4: sockaddr absolute Addr;
 begin
-  PSockAddr(@Addr)^.sin_family := AF_INET;
-  PCardinal(@PSockAddr(@Addr)^.sin_addr)^ := ipv4;
-  PInt64(@PSockAddr(@Addr)^.sin_zero)^ := 0;
-  result := SetPort(netport);
+  ad4.sin_family := AF_INET;
+  ad4.sin_addr.s_addr := ipv4;
+  PInt64(@ad4.sin_zero)^ := 0; // seems needed on Windows
+  ad4.sin_port := bswap16(netport);
+  if netport > 65535 then
+    result := nrNotFound
+  else
+    result := nrOk;
 end;
 
 function TNetAddr.Size: integer;
@@ -2577,8 +2740,8 @@ function TNetAddr.IPEqual(const another: TNetAddr): boolean;
 begin
   case PSockAddr(@Addr)^.sa_family of
     AF_INET:
-      result := cardinal(PSockAddr(@Addr)^.sin_addr) =
-                cardinal(PSockAddr(@another)^.sin_addr);
+      result := PSockAddr(@Addr)^.sin_addr.s_addr =
+                PSockAddr(@another)^.sin_addr.s_addr;
     AF_INET6:
       result := (PHash128Rec(@PSockAddrIn6(@Addr)^.sin6_addr).Lo =
                  PHash128Rec(@PSockAddrIn6(@another)^.sin6_addr).Lo) and
@@ -2646,27 +2809,28 @@ begin
   tobecached := false;
   if layer = nlUnix then
     result := addr.SetFrom(address, '', nlUnix)
-  else if not ToCardinal(port, p, {minimal=}1) then
-    result := nrNotFound
+  else if not ToCardinal(port, p, {minimal=}1) or
+          ({%H-}p > 65535) then
+    result := nrNotFound // port should be valid
   else if (address = '') or
           IsLocalHost(pointer(address)) or
           PropNameEquals(address, 'localhost') or
           (address = cAnyHost) then // for client: '0.0.0.0' -> '127.0.0.1'
     result := addr.SetIP4Port(cLocalhost32, p)
   else if NetIsIP4(pointer(address), @ip4) then
-    result := addr.SetIP4Port(ip4, p)
+    result := addr.SetIP4Port(ip4, p) // from IPv4 '1.2.3.4"
   else
   begin
     if Assigned(NewSocketAddressCache) then
       if NewSocketAddressCache.Search(address, addr) then
       begin
         fromcache := true;
-        result := addr.SetPort(p);
+        result := addr.SetPort(p); // from cache
         exit;
       end
       else
         tobecached := true;
-    result := addr.SetFrom(address, port, layer);
+    result := addr.SetFrom(address, port, layer); // actual DNS resolution
   end;
 end;
 
@@ -2715,7 +2879,10 @@ begin
       continue;
     connect(s.Socket, @addr[n], addr[n].Size); // non-blocking connect() once
     if s.MakeBlocking <> nrOk then
+    begin
+      closesocket(s.Socket); // release handle
       continue;
+    end;
     sock[n] := s;
     inc(n);
   end;
@@ -2769,6 +2936,7 @@ begin
   // resolve the TNetAddr of the address:port layer - maybe from cache
   fromcache := false;
   tobecached := false;
+  PInteger(@addr)^ := 0; // rough init - enough for addr.IP() = ''
   if dobind then
     result := addr.SetFrom(address, port, layer)
   else
@@ -2997,7 +3165,7 @@ function TNetSocketWrap.GetName(out addr: TNetAddr): TNetResult;
 var
   len: TSockLen;
 begin
-  FillCharFast(addr, SizeOf(addr), 0);
+  addr.Clear;
   if @self = nil then
     result := nrNoSocket
   else
@@ -3007,11 +3175,20 @@ begin
   end;
 end;
 
+function TNetSocketWrap.GetIP(out ip: RawUtf8; withport: boolean): TNetResult;
+var
+  addr: TNetAddr;
+begin
+  result := GetName(addr);
+  if result = nrOK then
+    ShortStringToAnsi7String(addr.IPShort(withport), ip);
+end;
+
 function TNetSocketWrap.GetPeer(out addr: TNetAddr): TNetResult;
 var
   len: TSockLen;
 begin
-  FillCharFast(addr, SizeOf(addr), 0);
+  addr.Clear;
   if @self = nil then
     result := nrNoSocket
   else
@@ -3039,7 +3216,8 @@ begin
   result := SetIoMode(0);
 end;
 
-function TNetSocketWrap.Send(Buf: pointer; var len: integer): TNetResult;
+function TNetSocketWrap.Send(Buf: pointer; var len: integer;
+  rawError: system.PInteger): TNetResult;
 begin
   if @self = nil then
     result := nrNoSocket
@@ -3049,13 +3227,14 @@ begin
     // man send: Upon success, send() returns the number of bytes sent.
     // Otherwise, -1 is returned and errno set to indicate the error.
     if len < 0 then
-      result := NetLastError
+      result := NetLastError(NO_ERROR, rawError)
     else
       result := nrOK;
   end;
 end;
 
-function TNetSocketWrap.Recv(Buf: pointer; var len: integer): TNetResult;
+function TNetSocketWrap.Recv(Buf: pointer; var len: integer;
+  rawError: system.PInteger): TNetResult;
 begin
   if @self = nil then
     result := nrNoSocket
@@ -3071,7 +3250,7 @@ begin
       if len = 0 then
         result := nrClosed
       else
-        result := NetLastError
+        result := NetLastError(NO_ERROR, rawError)
     else
       result := nrOK;
   end;
@@ -3122,7 +3301,7 @@ function TNetSocketWrap.RecvWait(ms: integer;
   out data: RawByteString; terminated: PTerminated): TNetResult;
 var
   read: integer;
-  tmp: array[word] of byte; // use a buffer to avoid RecvPending() syscall
+  tmp: TBuffer64K; // use stack buffer to avoid RecvPending() syscall
 begin
   result := NetEventsToNetResult(WaitFor(ms, [neRead, neError]));
   if Assigned(terminated) and
@@ -3210,7 +3389,7 @@ begin
   if events = [] then
     exit; // the socket seems stable with no pending input
   if neRead in events then
-    // - on Windows, may be because of WSACONNRESET (nrClosed)
+    // - on Windows, may be WSACONNRESET (nrClosed), with recv() returning 0
     // - on POSIX, may be ESysEINPROGRESS (nrRetry) just after connect
     // - no need to MakeAsync: recv() should not block after neRead
     // - may be [neRead, neClosed] on gracefully closed HTTP/1.0 response
@@ -3221,7 +3400,13 @@ begin
   result := false; // e.g. neError or neClosed with no neRead
 end;
 
-function TNetSocketWrap.ShutdownAndClose(rdwr: boolean): TNetResult;
+procedure TNetSocketWrap.RawShutdown;
+begin
+  if @self <> nil then
+    shutdown(TSocket(@self), SHUT_RDWR);
+end;
+
+function TNetSocketWrap.ShutdownAndClose(rdwr: boolean; waitms: integer): TNetResult;
 const
   SHUT_: array[boolean] of integer = (
     SHUT_RD, SHUT_RDWR);
@@ -3235,7 +3420,13 @@ begin
     if rdwr then
     {$endif OSLINUX}
       shutdown(TSocket(@self), SHUT_[rdwr]);
-    result := Close;
+    {$ifdef OSWINDOWS}
+    if waitms <> 0 then
+      // try to close the socket as documented by Microsoft (with rdwr=true)
+      // - documented pattern is: shutdown(SD_SEND) + recv()=0 + closesocket
+      WaitFor(waitms, [neRead, neError]); // typically neRead = WSACONNRESET
+    {$endif OSWINDOWS}
+    result := Close; // eventual closesocket()
   end;
 end;
 
@@ -3264,7 +3455,7 @@ const // should be local for better code generation
 function IsPublicIP(ip4: cardinal): boolean;
 begin
   result := false;
-  case ToByte(ip4) of // ignore IANA private IP4 address spaces
+  case ToByte(ip4) of // ignore IANA private IPv4 address spaces
     10:
       exit;
     172:
@@ -3286,7 +3477,7 @@ end;
 function IP4Mask(ip4: cardinal): cardinal;
 begin
   result := $ffffffff;
-  case ToByte(ip4) of // detect IANA private IP4 address spaces
+  case ToByte(ip4) of // detect IANA private IPv4 address spaces
     10:
       result := $000000ff;
     172:
@@ -3318,7 +3509,7 @@ begin
   result := (mask <> 0);
 end;
 
-function TIp4SubNet.Match(ip4: cardinal): boolean;
+function TIp4SubNet.Match(ip4: cardinal): boolean; // defined here for inlining
 begin
   // e.g. ip4=172.16.144.160 subip=172.16.144.0 submask=255.255.255.0
   result := (ip4 and mask) = ip;
@@ -3349,7 +3540,7 @@ begin
     result := 0;
 end;
 
-function IP4Subnet(ip4, netmask4: cardinal): shortstring;
+function IP4Subnet(ip4, netmask4: cardinal): ShortString;
 var
   w: integer;
 begin
@@ -3402,14 +3593,11 @@ procedure IP4Short(ip4addr: PByteArray; var s: ShortString);
 begin
   s[0] := #0;
   AppendShortCardinal(ip4addr[0], s);
-  inc(s[0]);
-  s[ord(s[0])] := '.';
+  AppendShortChar('.', @s);
   AppendShortCardinal(ip4addr[1], s);
-  inc(s[0]);
-  s[ord(s[0])] := '.';
+  AppendShortChar('.', @s);
   AppendShortCardinal(ip4addr[2], s);
-  inc(s[0]);
-  s[ord(s[0])] := '.';
+  AppendShortChar('.', @s);
   AppendShortCardinal(ip4addr[3], s);
   PAnsiChar(@s)[ord(s[0]) + 1] := #0; // make #0 terminated (won't hurt)
 end;
@@ -3582,9 +3770,8 @@ begin
     exit;
   end;
   L := L shr 1;
-  FastSetString(result, (L * 3) - 1);
+  m := FastSetString(result, (L * 3) - 1);
   h := pointer(Hex);
-  m := pointer(result);
   repeat
     m[0] := h[0];
     if h[0] in ['A'..'Z'] then
@@ -3609,12 +3796,11 @@ var
 begin
   if maclen < 0 then
     maclen := 0;
-  FastSetString(result, maclen * 2);
+  P := FastSetString(result, maclen * 2);
   if maclen = 0 then
     exit;
   dec(maclen);
   tab := @HexCharsLower;
-  P := pointer(result);
   i := 0;
   repeat
     c := mac[i];
@@ -3626,12 +3812,6 @@ begin
     inc(P, 2);
     inc(i);
   until false;
-end;
-
-function IsLocalHost(Host: PUtf8Char): boolean;
-begin
-  result := (PCardinal(Host)^ =
-     ord('1') + ord('2') shl 8 + ord('7') shl 16 + ord('.') shl 24);
 end;
 
 procedure NetAddRawUtf8(var Values: TRawUtf8DynArray; const Value: RawUtf8);
@@ -3651,7 +3831,7 @@ var
     Tix: integer;
   end;
 
-  // GetMacAddresses / GetMacAddressesText cache
+  // GetMacAddresses / GetMacAddressesText cache - refreshed every 65 seconds
   MacAddresses: array[{UpAndDown=}boolean] of record
     Safe: TLightLock;
     Tix: integer;
@@ -3660,11 +3840,34 @@ var
   end;
 
 procedure MacIPAddressFlush;
+var
+  ip: TIPAddress;
+  ud: boolean;
 begin
-  Finalize(IPAddresses);
-  FillCharFast(IPAddresses, SizeOf(IPAddresses), 0);
-  Finalize(MacAddresses);
-  FillCharFast(MacAddresses, SizeOf(MacAddresses), 0);
+  for ip := low(ip) to high(ip) do
+    with IPAddresses[ip] do
+    begin
+      Safe.Lock;
+      try
+        Text := '';
+        Tix := 0;
+      finally
+        Safe.UnLock;
+      end;
+    end;
+  for ud := low(ud) to high(ud) do
+    with MacAddresses[ud] do
+    begin
+      Safe.Lock;
+      try
+        Addresses := nil;
+        Tix := 0;
+        Text[false] := '';
+        Text[true] := '';
+      finally
+        Safe.UnLock;
+      end;
+    end;
 end;
 
 procedure GetIPCSV(const Sep: RawUtf8; Kind: TIPAddress; out Text: RawUtf8);
@@ -3759,9 +3962,9 @@ begin
       with addr[i] do
         if Address <> '' then
         begin
-          w := NetConcat([w, Name, '=', Address, ' ']);
+          w := Join([{%H-}w, Name, '=', Address, ' ']);
           if Kind <> makSoftware then
-            wo := NetConcat([wo, Address, ' ']);
+            wo := Join([{%H-}wo, Address, ' ']);
         end;
     FakeLength(w, length(w) - 1); // trim ending spaces
     FakeLength(wo, length(wo) - 1);
@@ -3947,12 +4150,17 @@ end;
 
 { ******************** TLS / HTTPS Encryption Abstract Layer }
 
+procedure InitNetTlsContext(var TLS: TNetTlsContext); overload;
+begin
+  Finalize(TLS);
+  FillCharFast(TLS, SizeOf(TLS), 0);
+end;
+
 procedure InitNetTlsContext(var TLS: TNetTlsContext; Server: boolean;
   const CertificateFile, PrivateKeyFile: TFileName;
   const PrivateKeyPassword: RawUtf8; const CACertificatesFile: TFileName);
 begin
-  Finalize(TLS);
-  FillCharFast(TLS, SizeOf(TLS), 0);
+  InitNetTlsContext(TLS);
   TLS.IgnoreCertificateErrors := Server; // needed if no mutual auth is done
   TLS.CertificateFile := RawUtf8(CertificateFile); // RTL TFileName to RawUtf8
   TLS.PrivateKeyFile  := RawUtf8(PrivateKeyFile);
@@ -3977,7 +4185,10 @@ begin
             ((not tls1.Enabled) or
              ((tls1.IgnoreCertificateErrors = tls2.IgnoreCertificateErrors) and
               (tls1.CertificateFile         = tls2.CertificateFile) and
+              (tls1.CertificateBin          = tls2.CertificateBin) and
               (tls1.CACertificatesFile      = tls2.CACertificatesFile) and
+              (tls1.CACertificatesRaw       = tls2.CACertificatesRaw) and
+              (tls1.CASystemStores          = tls2.CASystemStores) and
               (tls1.CertificateRaw          = tls2.CertificateRaw) and
               (tls1.PrivateKeyFile          = tls2.PrivateKeyFile) and
               (tls1.PrivatePassword         = tls2.PrivatePassword) and
@@ -4013,7 +4224,7 @@ begin
   if Assigned(fSecure) then
     fLastResult := fSecure.Receive(@Buffer, Count)
   else
-    fLastResult := fSocket.Recv(@Buffer, Count);
+    fLastResult := fSocket.Recv(@Buffer, Count, @fLastRawError);
   case fLastResult of
     nrOk:
       begin
@@ -4033,7 +4244,7 @@ begin
   if Assigned(fSecure) then
     fLastResult := fSecure.Send(@Buffer, Count)
   else
-    fLastResult := fSocket.Send(@Buffer, Count);
+    fLastResult := fSocket.Send(@Buffer, Count, @fLastRawError);
   case fLastResult of
     nrOk:
       begin
@@ -4847,7 +5058,8 @@ begin
   n := 0;
   while true do
     case text^ of
-      #0 .. ' ':
+      #0 .. ' ',
+      '/': // allow CIDR '1.2.3.4/20' decoding
         if (b < 0) or
            (n <> 3) then
           exit
@@ -4906,24 +5118,6 @@ begin
   FastSetString(result, S, P - S);
 end;
 
-function NetConcat(const v: array of RawUtf8): RawUtf8;
-var
-  l, i: PtrInt;
-  p: PUtf8Char;
-begin
-  l := 0;
-  for i := 0 to high(v) do
-    inc(l, length(v[i]));
-  FastSetString(result, l);
-  p := pointer(result);
-  for i := 0 to high(v) do
-  begin
-    l := length(v[i]);
-    MoveFast(pointer(v[i])^, p^, l);
-    inc(p, l);
-  end;
-end;
-
 procedure DoEncode(rp, sp, b64: PAnsiChar; len: cardinal);
 var
   i, c, by3: cardinal;
@@ -4966,12 +5160,29 @@ const
 var
   len: cardinal;
 begin
-  result:='';
+  result := '';
   len := length(s);
   if len = 0 then
     exit;
   SetLength(result, ((len + 2) div 3) * 4);
   DoEncode(pointer(result), pointer(s), @b64, len);
+end;
+
+function NetIsPem(p: PUtf8Char): boolean;
+begin
+  result := true;
+  repeat
+    p := PosChar(p, '-'); // may use SSE2 asm
+    if p = nil then
+      break;
+    repeat
+      inc(p);
+      if (PCardinal(p)^ = $2d2d2d2d) and  // -----BEGIN
+         (PCardinal(p + 4)^ = ord('B') + ord('E') shl 8 + ord('G') shl 16 + ord('I') shl 24) then
+        exit;
+    until p^ <> '-'
+  until p^ = #0;
+  result := false;
 end;
 
 function SplitFromRight(const Text: RawUtf8; Sep: AnsiChar;
@@ -4996,14 +5207,21 @@ end;
 function TIp4SubNet.From(const subnet: RawUtf8): boolean;
 var
   ip4, sub4: RawUtf8;
-  ip32, prefix: cardinal; // local temporary ip32 is needed on Delphi XE4
+  ip32, prefix: cardinal; // local temporary ip32 is needed on Delphi XE4 :(
 begin
-  mask := 0;
-  ip32 := 0;
-  result := SplitFromRight(subnet, '/', ip4, sub4) and
-            NetIsIP4(pointer(ip4), @ip32) and
-            ToCardinal(sub4, prefix, 1) and
-            IP4Netmask(prefix{%H-}, mask);
+  if SplitFromRight(subnet, '/', ip4, sub4) then // regular '1.2.3.4/sub' mask
+  begin
+    ip32 := 0;
+    mask := 0;
+    result := NetIsIP4(pointer(ip4), @ip32) and
+              ToCardinal(sub4, prefix, 1) and
+              IP4Netmask(prefix{%H-}, mask);
+  end
+  else
+  begin
+    mask := cardinal(-1); // 255.255.255.255
+    result := NetIsIP4(pointer(subnet), @ip32); // plain '1.2.3.4' IPv4 address
+  end;
   ip := ip32 and mask; // normalize
 end;
 
@@ -5013,6 +5231,218 @@ var
 begin
   result := NetIsIP4(pointer(ip4), @ip32) and
             Match(ip32{%H-});
+end;
+
+
+{ TIp4SubNets }
+
+function TIp4SubNets.FindMask(mask4: cardinal): PIp4SubNetMask;
+var
+  n: integer;
+begin
+  result := pointer(fSubNet);
+  if result = nil then
+    exit;
+  n := PDALen(PAnsiChar(result) - _DALEN)^ + _DAOFF;
+  repeat
+    if result^.Mask = mask4 then
+      exit;
+    inc(result);
+    dec(n);
+  until n = 0;
+  result := nil;
+end;
+
+function TIp4SubNets.Add(const subnet: TIp4SubNet): boolean;
+var
+  p: PIp4SubNetMask;
+  n: PtrInt;
+begin
+  result := false;
+  if (subnet.ip = cardinal(-1)) or  // 255.255.255.255
+     not IsPublicIP(subnet.ip) then // e.g. 192.168.1.1
+    exit;
+  p := FindMask(subnet.mask);
+  if p = nil then
+  begin
+    n := length(fSubNet);
+    SetLength(fSubNet, n + 1);
+    p := @fSubNet[n];
+    p^.Mask := subnet.mask;
+  end;
+  result := AddSortedInteger(p^.IP, p^.IPCount, subnet.ip) >= 0;
+end;
+
+function TIp4SubNets.Add(const subnet: RawUtf8): boolean;
+var
+  sub: TIp4SubNet;
+begin
+  result := sub.From(subnet) and
+            Add(sub);
+end;
+
+function TIp4SubNets.Match(ip4: cardinal): boolean;
+var
+  p: PIp4SubNetMask;
+  n: integer;
+begin
+  p := pointer(fSubNet);
+  if p <> nil then
+  begin
+    result := true;
+    n := PDALen(PAnsiChar(p) - _DALEN)^ + _DAOFF; // try all masks
+    repeat
+      // O(log(n)) binary search (branchless asm on x86_64)
+      if FastFindIntegerSorted(pointer(p^.IP), p^.IPCount - 1, ip4 and P^.Mask) >= 0 then
+        exit; // not faster to use IntegerScanIndex() for small IPCount
+      inc(p);
+      dec(n);
+    until n = 0;
+  end;
+  result := false;
+end;
+
+function TIp4SubNets.Match(const ip4: RawUtf8): boolean;
+var
+  ip32: cardinal;
+begin
+  result := NetIsIP4(pointer(ip4), @ip32) and
+            Match(ip32{%H-});
+end;
+
+procedure TIp4SubNets.Clear;
+begin
+  fSubNet := nil;
+end;
+
+function TIp4SubNets.SaveToBinary: RawByteString;
+var
+  i, n, L: PtrInt;
+  p: PIntegerArray;
+begin
+  n := length(fSubNet);
+  L := n * 8 + 4;
+  for i := 0 to n - 1 do
+    inc(L, fSubNet[i].IPCount * 4);
+  p := FastNewRawByteString(result, L);
+  p^[0] := n;
+  for i := 0 to n - 1 do
+    with fSubNet[i] do
+    begin
+      p^[1] := Mask;
+      p^[2] := IPCount;
+      MoveFast(pointer(IP)^, p^[3], p^[2] * 4);
+      p := @p^[p^[2] + 2];
+    end;
+end;
+
+function TIp4SubNets.LoadFromBinary(const bin: RawByteString): boolean;
+var
+  i, n: PtrInt;
+  p: PIntegerArray;
+  d: PIp4SubNetMask;
+begin
+  result := false;
+  Clear;
+  n := length(bin);
+  if (n and 3) <> 0 then
+    exit;
+  n := n shr 2;
+  p := pointer(bin);
+  for i := 0 to p^[0] - 1 do
+  begin
+    if n < 2 then
+      exit; // avoid buffer overflow
+    dec(n, p^[2] + 2);
+    p := @p^[p^[2] + 2];
+  end;
+  if n <> 1 then
+    exit; // decoded size should be an exact match with supplied bin
+  p := pointer(bin);
+  SetLength(fSubNet, p^[0]);
+  d := pointer(fSubNet);
+  for i := 0 to p^[0] - 1 do
+  begin
+    d^.Mask := p^[1];
+    d^.IPCount := p^[2];
+    SetLength(d^.IP, p^[2]);
+    MoveFast(p^[3], pointer(d^.IP)^, p^[2] * 4);
+    p := @p^[p^[2] + 2];
+    inc(d);
+  end;
+  result := true;
+end;
+
+function TIp4SubNets.AddFromText(const text: RawUtf8): integer;
+var
+  p: PUtf8Char;
+  sub: TIp4SubNet;
+begin
+  result := 0;
+  p := pointer(text);
+  while p <> nil do
+  begin
+    while p^ in [#1 .. ' ' ] do
+      inc(p);
+    if NetIsIP4(p, @sub.ip) then // ignore any line starting e.g. with # or ;
+    begin
+      while p^ in ['0' .. '9', '.', ' '] do
+        inc(p);
+      if p^ <> '/' then
+        sub.mask := cardinal(-1) // single IP has 255.255.255.255 mask
+      else
+        sub.mask := IP4Netmask(GetCardinal(p + 1)); // CIDR
+      if (sub.mask <> 0) and
+         Add(sub) then
+        inc(result); // first time seen
+    end;
+    p := GotoNextLine(p);
+  end;
+end;
+
+function TIp4SubNets.AfterAdd: integer;
+var
+  n: integer;
+  p: PIp4SubNetMask;
+begin
+  result := 0;
+  p := pointer(fSubNet);
+  if p = nil then
+    exit;
+  n := PDALen(PAnsiChar(p) - _DALEN)^ + _DAOFF; // process all masks
+  repeat // SetLength(SubNet[].IP, SubNet[].IPCount) without any realloc
+    PDALen(PAnsiChar(pointer(p^.IP)) - _DALEN)^ := p^.IPCount - _DAOFF;
+    inc(result, p^.IPCount);
+    inc(p);
+    dec(n);
+  until n = 0;
+end;
+
+
+function IP4SubNetMatch(P: PIntegerArray; ip4: cardinal): boolean;
+var
+  n: integer;
+begin
+  if P <> nil then
+  begin
+    result := true;
+    n := P^[0]; // try all masks - warning: won't check for buffer overflow
+    repeat
+      if FastFindIntegerSorted(@P^[3], P^[2] - 1, ip4 and P^[1]) >= 0 then
+        exit;
+      P := @P^[P^[2] + 2]; // O(log(n)) search the binary buffer in-place
+      dec(n);
+    until n = 0;
+  end;
+  result := false;
+end;
+
+function IP4SubNetMatch(const bin: RawByteString; const ip4: RawUtf8): boolean;
+var
+  ip32: cardinal;
+begin
+  result := NetIsIP4(pointer(ip4), @ip32) and
+            IP4SubNetMatch(pointer(bin), ip32{%H-});
 end;
 
 
@@ -5125,19 +5555,19 @@ end;
 
 function TUri.URI: RawUtf8;
 begin
-  result := NetConcat([ServerPort, Address]);
+  Join([ServerPort, Address], result);
 end;
 
 function TUri.ServerPort: RawUtf8;
 begin
   if layer = nlUnix then
-    result := NetConcat(['http://unix:', Server, ':/'])
+    Join(['http://unix:', Server, ':/'], result)
   else if (Port = '') or
           (Port = '0') or
           (Port = DEFAULT_PORT[Https]) then
-    result := NetConcat([HTTPS_TEXT[Https], Server, '/'])
+    Join([HTTPS_TEXT[Https], Server, '/'], result)
   else
-    result := NetConcat([HTTPS_TEXT[Https], Server, ':', Port, '/']);
+    Join([HTTPS_TEXT[Https], Server, ':', Port, '/'], result);
 end;
 
 function TUri.PortInt: TNetPort;
@@ -5146,14 +5576,8 @@ begin
 end;
 
 function TUri.Root: RawUtf8;
-var
-  i: PtrInt;
 begin
-  i := PosExChar('?', Address);
-  if i = 0 then
-    result := Address
-  else
-    result := copy(Address, 1, i - 1);
+  result := Split(Address, '?');
 end;
 
 function TUri.ResourceName: RawUtf8;
@@ -5174,13 +5598,18 @@ begin
   if User = '' then
     result := ''
   else
-    result := NetBinToBase64(NetConcat([User, ':', Password]));
+    result := NetBinToBase64(Join([User, ':', Password]));
 end;
 
 
 { ********* TCrtSocket Buffered Socket Read/Write Class }
 
 { TCrtSocket }
+
+function TCrtSocket.GetAborted: boolean;
+begin
+  result := fAborted in fFlags;
+end;
 
 function TCrtSocket.GetRawSocket: PtrInt;
 begin
@@ -5212,7 +5641,7 @@ begin
   fSock.SetNoDelay(aTcpNoDelay);
 end;
 
-constructor TCrtSocket.Create(aTimeOut: PtrInt);
+constructor TCrtSocket.Create(aTimeOut: integer);
 begin
   fTimeOut := aTimeOut;
 end;
@@ -5249,20 +5678,26 @@ begin
   Open(u.Server, u.Port, nlTcp, aTimeOut, u.Https, aTLSContext, @t);
 end;
 
+constructor TCrtSocket.Bind(const aAddress: RawUtf8; aLayer: TNetLayer;
+  aTimeOut: integer; aReusePort: boolean);
+begin
+  Create(aTimeOut);
+  BindPort(aAddress, aLayer, aReusePort);
+end;
+
 const
-  BINDTXT: array[boolean] of string[4] = (
+  BINDTXT: array[boolean] of string[7] = (
     'open', 'bind');
   BINDMSG: array[boolean] of string = (
     'Is a server available on this address:port?',
     'Port may be invalid or already bound by another process!');
 
-constructor TCrtSocket.Bind(const aAddress: RawUtf8; aLayer: TNetLayer;
-  aTimeOut: integer; aReusePort: boolean);
+procedure TCrtSocket.BindPort(const aAddress: RawUtf8; aLayer: TNetLayer;
+  aReusePort: boolean);
 var
   s, p: RawUtf8;
   aSock: integer;
 begin
-  Create(aTimeOut);
   if aAddress = '' then
   begin
     {$ifdef OSLINUX} // try systemd activation
@@ -5308,6 +5743,14 @@ begin
   {$endif OSLINUX}
 end;
 
+function TCrtSocket.ServerTls: boolean;
+begin
+  result := (fServerTlsEnabled in fFlags); // properly set by OpenBind()
+end;
+
+const
+  CSTA_TXT: array[TCrtSocketTlsAfter] of AnsiChar = 'CBA';
+
 procedure TCrtSocket.DoTlsAfter(caller: TCrtSocketTlsAfter);
 begin
   if fSecure = nil then // ignore duplicated calls
@@ -5324,10 +5767,14 @@ begin
       cstaConnect:
         fSecure.AfterConnection(fSock, TLS, fServer);
       cstaBind:
-        fSecure.AfterBind(TLS);
+        fSecure.AfterBind(fSock, TLS, fServer);
       cstaAccept:
         fSecure.AfterAccept(fSock, TLS, @TLS.LastError, @TLS.CipherName)
     end;
+    if Assigned(OnLog) and
+       (caller <> cstaBind) then
+      OnLog(sllTrace, 'DoTlsAfter(%%:%): %',
+        [CSTA_TXT[caller], fServer, fPort, TLS.CipherName], self);
     TLS.Enabled := true; // set the flag AFTER fSecure has been initialized
   except
     on E: Exception do
@@ -5351,18 +5798,22 @@ begin
     aAddress^ := u.Address;
 end;
 
-procedure TCrtSocket.OpenBind(const aServer, aPort: RawUtf8; doBind: boolean;
+procedure TCrtSocket.OpenBind(const aServer, aPort: RawUtf8; doBind,
   aTLS: boolean; aLayer: TNetLayer; aSock: TNetSocket; aReusePort: boolean);
 var
   retry: integer;
-  head: RawUtf8;
+  s: RawUtf8;
   res: TNetResult;
   addr: TNetAddr;
 begin
   ResetNetTlsContext(TLS); // TLS.Enabled is set at output if aTLS=true
   fSocketLayer := aLayer;
   fSocketFamily := nfUnknown;
-  fWasBind := doBind;
+  fFlags := [];
+  if doBind then
+    include(fFlags, fWasBind);
+  if aTLS then
+    include(fFlags, fServerTlsEnabled); // for proper reconnection
   if {%H-}PtrInt(aSock) <= 0 then
   begin
     // OPEN or BIND mode -> create the socket
@@ -5379,9 +5830,10 @@ begin
             (Tunnel.Server <> fServer) and
             (aLayer = nlTcp) then
     begin
-      // handle client tunnelling via an HTTP(s) proxy
+      // HTTP(S) tunnelling via CONNECT - see also THttpClientSocket.OpenBind
       fProxyUrl := Tunnel.URI;
       if Tunnel.Https and aTLS then
+        // single TLS parameter for either the Tunnel or the destination
         raise ENetSock.Create(
           '%s.Open(%s:%s): %s proxy - unsupported dual TLS layers',
           [ClassNameShort(self)^, fServer, fPort, fProxyUrl]);
@@ -5392,18 +5844,21 @@ begin
         begin
           addr.IP(fRemoteIP, true);
           fSocketFamily := addr.Family;
+          include(fFlags, fProxyConnect);
           res := nrRefused;
+          if Tunnel.Https then
+            DoTlsAfter(cstaConnect); // the proxy requires a TLS connection
           SockSendLine(['CONNECT ', fServer, ':', fPort, ' HTTP/1.0']);
           if Tunnel.User <> '' then
             SockSendLine(['Proxy-Authorization: Basic ', Tunnel.UserPasswordBase64]);
           SockSendFlush(#13#10);
           repeat
-            SockRecvLn(head);
-            if NetStartWith(pointer(head), 'HTTP/') and
-               (length(head) > 11) and
-               (head[10] = '2') then // 'HTTP/1.1 2xx xxxx' success
+            SockRecvLn(s);
+            if NetStartWith(pointer(s), 'HTTP/') and
+               (length(s) > 11) and
+               (s[10] = '2') then // 'HTTP/1.1 2xx xxxx' success
               res := nrOK;
-          until head = '';
+          until s = ''; // end of response headers
         end;
       except
         on E: Exception do
@@ -5414,38 +5869,36 @@ begin
         raise ENetSock.Create('%s.Open(%s:%s): %s proxy error',
           [ClassNameShort(self)^, fServer, fPort, fProxyUrl], res);
       if Assigned(OnLog) then
-        OnLog(sllTrace, 'Open(%:%) via proxy %', [fServer, fPort, fProxyUrl], self);
+        OnLog(sllTrace, 'Open(%:%) via proxy CONNECT %',
+          [fServer, fPort, fProxyUrl], self);
       if aTLS then
-        DoTlsAfter(cstaConnect);
+        DoTlsAfter(cstaConnect); // raw TLS negotation after CONNECT
       exit;
     end
     else
       // direct client connection
       retry := {$ifdef OSBSD} 10 {$else} 2 {$endif};
+    s := fServer;
     {$ifdef OSPOSIX}
     // check if aServer is 'unix:/path/to/myapp.socket' with default nlTcp
     if (aLayer = nlTcp) and
-       NetStartWith(pointer(fServer), 'UNIX:') then
+       NetStartWith(pointer(s), 'UNIX:') then
     begin
       aLayer := nlUnix;
-      delete(fServer, 1, 5);
+      delete(s, 1, 5);
     end;
     {$endif OSPOSIX}
     //if Assigned(OnLog) then
     //  OnLog(sllTrace, 'Before NewSocket', [], self);
-    res := NewSocket(fServer, fPort, aLayer, doBind,
-      fTimeout, fTimeout, fTimeout, retry, fSock, @addr, aReusePort);
+    res := NewSocket(s, fPort, aLayer, doBind, fTimeout, fTimeout, fTimeout,
+                     retry, fSock, @addr, aReusePort);
     //if Assigned(OnLog) then
     //  OnLog(sllTrace, 'After NewSocket=%', [ToText(res)^], self);
-    {$ifdef OSPOSIX}
-    if aLayer = nlUnix then
-      fServer := aServer; // keep the full server name if reused after Close
-    {$endif OSPOSIX}
     addr.IP(fRemoteIP, true);
-    fSocketFamily := addr.Family;
     if res <> nrOK then
       raise ENetSock.Create('%s %s.OpenBind(%s:%s) [remoteip=%s]',
         [BINDMSG[doBind], ClassNameShort(self)^, fServer, fPort, fRemoteIP], res);
+    fSocketFamily := addr.Family;
   end
   else
   begin
@@ -5473,7 +5926,7 @@ function TCrtSocket.ReOpen(aTimeout: cardinal): string;
 begin
   try
     Close;
-    OpenBind(fServer, fPort, fWasBind, TLS.Enabled);
+    OpenBind(fServer, fPort, fWasBind in fFlags, ServerTls);
     if SockConnected then
       result := '' // success
     else
@@ -5511,24 +5964,20 @@ begin
             ({%H-}PtrInt(fSock) > 0);
 end;
 
-const
-  SOCKMINBUFSIZE = 1024; // big enough for headers (content will be read directly)
-
 type
   PTextRec = ^TTextRec;
-  PCrtSocket = ^TCrtSocket;
+  TTextRecUserData = record // consume some of TTextRec.UserData 32 bytes
+    Owner: TCrtSocket;
+    LastIoResult: integer;
+    LastRawError: integer;
+    LastNetResult: TNetResult;
+  end;
+  PTextRecUserData = ^TTextRecUserData;
 
-function OutputSock(var F: TTextRec): integer;
+function TextRecUserData(const F: TTextRec): PTextRecUserData;
+  {$ifdef HASINLINE} inline; {$endif}
 begin
-  if F.BufPos = 0 then
-    result := NO_ERROR
-  else if PCrtSocket(@F.UserData)^.TrySndLow(F.BufPtr, F.BufPos) then
-  begin
-    F.BufPos := 0;
-    result := NO_ERROR;
-  end
-  else
-    result := -1; // on socket error -> raise ioresult error
+  result := @F.UserData; // we have up to 32 bytes to store our context
 end;
 
 function InputSock(var F: TTextRec): integer;
@@ -5537,57 +5986,57 @@ function InputSock(var F: TTextRec): integer;
 // -> very optimized use for readln() in HTTP stream
 var
   size: integer;
-  sock: TCrtSocket;
+  addr: TNetAddr;
+  usr: PTextRecUserData;
 begin
   F.BufEnd := 0;
   F.BufPos := 0;
-  sock := PCrtSocket(@F.UserData)^;
-  if not sock.SockIsDefined then
-  begin
-    result := WSAECONNABORTED; // on socket error -> raise ioresult error
-    exit; // file closed = no socket -> error
-  end;
-  result := sock.fSockInEofError;
+  usr := TextRecUserData(F);
+  result := usr^.LastIoResult;
   if result <> 0 then
-    exit; // already reached error below
-  size := F.BufSize;
-  if sock.SocketLayer = nlUdp then
+    exit; // already reached error (paranoid)
+  if usr^.Owner.SockIsDefined then
   begin
-    if sock.fPeerAddr = nil then
-      New(sock.fPeerAddr); // allocated on demand (may be up to 110 bytes)
-    size := sock.Sock.RecvFrom(F.BufPtr, size, sock.fPeerAddr^);
-  end
-  else
-    // nlTcp/nlUnix
-    if not sock.TrySockRecv(F.BufPtr, size, {StopBeforeLength=}true) then
-      size := -1; // fatal socket error
-  // TrySockRecv() may return size=0 if no data is pending, but no TCP/IP error
-  if size >= 0 then
-  begin
-    F.BufEnd := size;
-    inc(sock.fBytesIn, size);
-    result := NO_ERROR;
-  end
-  else
-  begin
-    if not sock.SockIsDefined then // socket broken or closed
-      result := WSAECONNABORTED
-    else
+    size := F.BufSize;
+    if usr^.Owner.SocketLayer = nlUdp then
     begin
-      result := -RawSocketErrNo; // ioresult = low-level socket error as negative
-      if result = 0 then
-        result := WSAETIMEDOUT;
+      size := usr^.Owner.Sock.RecvFrom(F.BufPtr, size, addr);
+      if size < 0 then
+        usr^.LastNetResult := NetLastError(NO_ERROR, @usr^.LastRawError)
+      else
+        addr.IPWithPort(usr^.Owner.fRemoteIP); // set 'remoteip:port'
+    end
+    else // nlTcp/nlUnix: TrySockRecv() return size=0 on nrRetry
+      if not usr^.Owner.TrySockRecv(F.BufPtr, size, {StopBeforeLength=}true,
+                          @usr^.LastNetResult, @usr^.LastRawError) then
+        size := -1; // fatal socket error
+    if size >= 0 then
+    begin
+      F.BufEnd := size;
+      inc(usr^.Owner.fBytesIn, size);
+      result := NO_ERROR;
+      exit; // success
     end;
-    sock.fSockInEofError := result; // error -> mark end of SockIn
-    // result <0 will update ioresult and raise an exception if {$I+}
-  end;
+    if usr^.LastNetResult = nrOk then
+      usr^.LastNetResult := nrUnknownError;
+  end
+  else
+    usr^.LastNetResult := nrNoSocket;  // file closed
+  result := -usr^.LastRawError;        // ioresult = socket error as negative
+  if result = 0 then
+    result := ord(usr^.LastNetResult); // ioresult = ord(TNetResult) positive
+  usr^.LastIoResult := result;
+  // result <> 0 will update ioresult and raise an exception if {$I+}
 end;
 
 function CloseSock(var F: TTextRec): integer;
 begin
-  if PCrtSocket(@F.UserData)^ <> nil then
-    PCrtSocket(@F.UserData)^.Close;
-  PCrtSocket(@F.UserData)^ := nil;
+  with TextRecUserData(F)^ do
+    if Owner <> nil then
+    begin
+      Owner.Close;
+      Owner := nil;
+    end;
   result := NO_ERROR;
 end;
 
@@ -5595,21 +6044,17 @@ function OpenSock(var F: TTextRec): integer;
 begin
   F.BufPos := 0;
   F.BufEnd := 0;
+  F.CloseFunc := @CloseSock;
   if F.Mode = fmInput then
   begin
-    // ReadLn
+    // ReadLn - as used from SockIn^
     F.InOutFunc := @InputSock;
     F.FlushFunc := nil;
+    result := NO_ERROR;
   end
   else
-  begin
-    // WriteLn
-    F.Mode := fmOutput;
-    F.InOutFunc := @OutputSock;
-    F.FlushFunc := @OutputSock;
-  end;
-  F.CloseFunc := @CloseSock;
-  result := NO_ERROR;
+    // WriteLn - as was used from CreateSockOut/SockOut^ in mORMot 1
+    result := WSAEINVAL; // deprecated
 end;
 
 {$ifdef FPC}
@@ -5617,7 +6062,7 @@ procedure SetLineBreakStyle(var T: Text; Style: TTextLineBreakStyle);
 begin
   case Style of
     tlbsCR:
-      TextRec(T).LineEnd := #13;
+      TextRec(T).LineEnd := #13; // FPC specific
     tlbsLF:
       TextRec(T).LineEnd := #10;
     tlbsCRLF:
@@ -5626,77 +6071,48 @@ begin
 end;
 {$endif FPC}
 
+const
+  SOCKMINBUFSIZE = 1024; // big enough for headers (body is read directly)
+
 procedure TCrtSocket.CreateSockIn(LineBreak: TTextLineBreakStyle;
   InputBufferSize: integer);
+var
+  rec: PTextRec;
 begin
-  if (Self = nil) or
-     (SockIn <> nil) then
-    exit; // initialization already occurred
+  if (self = nil) or
+     (fSockIn <> nil) then
+    exit;
   if InputBufferSize < SOCKMINBUFSIZE then
     InputBufferSize := SOCKMINBUFSIZE;
-  GetMem(fSockIn, SizeOf(TTextRec) + InputBufferSize);
-  FillCharFast(SockIn^, SizeOf(TTextRec), 0);
-  with TTextRec(SockIn^) do
-  begin
-    PCrtSocket(@UserData)^ := self;
-    Mode := fmClosed;
-    // ignore internal Buffer[], which is not trailing on latest Delphi and FPC
-    BufSize := InputBufferSize;
-    BufPtr := pointer(PAnsiChar(SockIn) + SizeOf(TTextRec));
-    OpenFunc := @OpenSock;
-    Handle := {$ifdef FPC}THandle{$endif}(0); // some invalid handle
-  end;
-  SetLineBreakStyle(SockIn^, LineBreak); // http does break lines with #13#10
-  Reset(SockIn^);
+  GetMem(fSockIn, SizeOf(rec^) + InputBufferSize);
+  rec := pointer(fSockIn);
+  FillCharFast(rec^, SizeOf(rec^), 0);
+  TextRecUserData(rec^)^.Owner := self;
+  rec^.Mode := fmClosed;
+  // ignore internal Buffer[], which is not trailing on latest Delphi and FPC
+  rec^.BufSize := InputBufferSize;
+  rec^.BufPtr := pointer(PAnsiChar(rec) + SizeOf(rec^));
+  rec^.OpenFunc := @OpenSock;
+  rec^.Handle := {$ifdef FPC}THandle{$endif}(0); // some invalid handle
+  SetLineBreakStyle(fSockIn^, LineBreak); // e.g. HTTP or SMTP requires #13#10
+  Reset(fSockIn^);
 end;
-
-{$ifndef PUREMORMOT2}
-procedure TCrtSocket.CreateSockOut(OutputBufferSize: integer);
-begin
-  if SockOut <> nil then
-    exit; // initialization already occurred
-  if OutputBufferSize < SOCKMINBUFSIZE then
-    OutputBufferSize := SOCKMINBUFSIZE;
-  GetMem(fSockOut, SizeOf(TTextRec) + OutputBufferSize);
-  FillCharFast(SockOut^, SizeOf(TTextRec), 0);
-  with TTextRec(SockOut^) do
-  begin
-    PCrtSocket(@UserData)^ := self;
-    Mode := fmClosed;
-    BufSize := OutputBufferSize;
-    BufPtr := pointer(PAnsiChar(SockIn) + SizeOf(TTextRec)); // ignore Buffer[] (Delphi 2009+)
-    OpenFunc := @OpenSock;
-    Handle := {$ifdef FPC}THandle{$endif}(0); // some invalid handle
-  end;
-  SetLineBreakStyle(SockOut^, tlbsCRLF); // force e.g. for Linux platforms
-  Rewrite(SockOut^);
-end;
-
-procedure TCrtSocket.CloseSockOut;
-begin
-  if (self <> nil) and
-     (fSockOut <> nil) then
-  begin
-    Freemem(fSockOut);
-    fSockOut := nil;
-  end;
-end;
-{$endif PUREMORMOT2}
 
 procedure TCrtSocket.CloseSockIn;
 begin
-  if (self <> nil) and
-     (fSockIn <> nil) then
-  begin
-    Freemem(fSockIn);
-    fSockIn := nil;
-  end;
+  if (self = nil) or
+     (fSockIn = nil) then
+    exit;
+  Freemem(fSockIn);
+  fSockIn := nil;
 end;
 
 { $define SYNCRTDEBUGLOW2}
 
 procedure TCrtSocket.Close;
 // notice: sequential Close + OpenBind sets should work with the same instance
+var
+  rec: PTextRec;
 {$ifdef SYNCRTDEBUGLOW2}
 var // closesocket() or shutdown() are slow e.g. on Windows with wrong Linger
   start, stop: int64;
@@ -5704,20 +6120,19 @@ var // closesocket() or shutdown() are slow e.g. on Windows with wrong Linger
 begin
   // reset internal state
   fSndBufLen := 0; // always reset (e.g. in case of further Open after error)
-  fSockInEofError := 0;
   ioresult; // reset readln/writeln value
-  if fSockIn <> nil then
+  rec := pointer(fSockIn);
+  if rec <> nil then
   begin
-    PTextRec(fSockIn)^.BufPos := 0;  // reset input buffer, but keep allocated
-    PTextRec(fSockIn)^.BufEnd := 0;
+    rec^.BufPos := 0;  // reset input buffer, but keep allocated
+    rec^.BufEnd := 0;
+    with TextRecUserData(rec^)^ do // reset error flags, keeping Owner
+    begin
+      LastIoResult := 0;
+      LastRawError := 0;
+      LastNetResult := nrOk;
+    end;
   end;
-  {$ifndef PUREMORMOT2}
-  if fSockOut <> nil then
-  begin
-    PTextRec(fSockOut)^.BufPos := 0; // reset output buffer
-    PTextRec(fSockOut)^.BufEnd := 0;
-  end;
-  {$endif PUREMORMOT2}
   if not SockIsDefined then
     exit; // no opened connection, or Close already executed
   // perform the TLS shutdown on socket and release the TLS execution interface
@@ -5728,10 +6143,10 @@ begin
   QueryPerformanceMicroSeconds(start);
   {$endif SYNCRTDEBUGLOW2}
   {$ifdef OSLINUX}
-  if not fWasBind or
+  if not (fWasBind in fFlags) or
      (fPort <> '') then // no explicit shutdown necessary on Linux server side
   {$endif OSLINUX}
-    fSock.ShutdownAndClose({rdwr=}fWasBind);
+    fSock.ShutdownAndClose({rdwr=}(fWasBind in fFlags));
   {$ifdef SYNCRTDEBUGLOW2}
   QueryPerformanceMicroSeconds(stop);
   TSynLog.Add.Log(sllTrace, 'ShutdownAndClose(%): %', [fWasBind, stop-start], self);
@@ -5748,9 +6163,9 @@ end;
 procedure TCrtSocket.Abort;
 begin
   if (self = nil) or
-     fAborted then
+     (fAborted in fFlags) then
     exit;
-  fAborted := true; // global flag checked within most recv/send loops
+  include(fFlags, fAborted); // global flag checked within most recv/send loops
   if Assigned(OnLog) then
     OnLog(sllTrace, 'Abort socket=%', [fSock.Socket], self);
   if SockIsDefined then
@@ -5767,11 +6182,6 @@ destructor TCrtSocket.Destroy;
 begin
   Close;
   CloseSockIn;
-  {$ifndef PUREMORMOT2}
-  CloseSockOut;
-  {$endif PUREMORMOT2}
-  if fPeerAddr <> nil then
-    Dispose(fPeerAddr);
   inherited Destroy;
 end;
 
@@ -5779,36 +6189,39 @@ function TCrtSocket.SockInRead(Content: PAnsiChar; Length: integer;
   UseOnlySockIn: boolean): integer;
 var
   len, res: integer;
+  r: PTextRec;
 // read Length bytes from SockIn^ buffer + Sock if necessary
 begin
   // get data from SockIn buffer, if any (faster than ReadChar)
   result := 0;
   if Length <= 0 then
     exit;
-  if SockIn <> nil then
-    with PTextRec(SockIn)^ do
-      repeat
-        len := BufEnd - BufPos;
-        if len > 0 then
-        begin
-          if len > Length then
-            len := Length;
-          MoveFast(BufPtr[BufPos], Content^, len);
-          inc(BufPos, len);
-          inc(Content, len);
-          dec(Length, len);
-          inc(result, len);
-        end;
-        if fAborted or
-           (Length = 0) then
-          exit; // we got everything we wanted
-        if not UseOnlySockIn then
-          break;
-        res := InputSock(PTextRec(SockIn)^);
-        if res < 0 then
-          raise ENetSock.CreateLastError('%.SockInRead', [ClassNameShort(self)^]);
-        // loop until Timeout
-      until Timeout = 0;
+  r := pointer(SockIn);
+  if r <> nil then
+    repeat
+      len := r^.BufEnd - r^.BufPos;
+      if len > 0 then
+      begin
+        if len > Length then
+          len := Length;
+        MoveFast(r^.BufPtr[r^.BufPos], Content^, len);
+        inc(r^.BufPos, len);
+        inc(Content, len);
+        dec(Length, len);
+        inc(result, len);
+      end;
+      if (fAborted in fFlags) or
+         (Length = 0) then
+        exit; // we got everything we wanted
+      if not UseOnlySockIn then
+        break;
+      res := InputSock(r^);
+      if res < 0 then
+        with TextRecUserData(r^)^ do
+          raise ENetSock.Create('%.SockInRead', [ClassNameShort(self)^],
+            LastNetResult, @LastRawError);
+      // loop until Timeout
+    until Timeout = 0;
   // direct receiving of the remaining bytes from socket
   if Length > 0 then
   begin
@@ -5819,12 +6232,10 @@ end;
 
 function TCrtSocket.SockInRead(Length: integer; UseOnlySockIn: boolean): RawByteString;
 begin
-  result := '';
   if (self = nil) or
-     (Length <= 0) then
-    exit;
-  FastSetString(RawUtf8(result), Length); // assume CP_UTF8 for FPC RTL bug
-  if SockInRead(pointer(result), Length, UseOnlySockIn) <> Length then
+     (Length <= 0) or
+     (SockInRead(FastSetString(
+       RawUtf8(result), Length), Length, UseOnlySockIn) <> Length) then
     result := '';
 end;
 
@@ -6005,7 +6416,7 @@ end;
 function TCrtSocket.SockSendFlush(const aBody: RawByteString;
   aNoRaise: boolean): TNetResult;
 var
-  bodylen, buflen: integer;
+  bodylen, buflen, rawError: integer;
 begin
   buflen := fSndBufLen;
   fSndBufLen := 0; // always reset the output buffer position
@@ -6032,25 +6443,25 @@ begin
   {$endif SYNCRTDEBUGLOW}
   // actually send the internal buffer (headers + maybe body)
   if buflen > 0 then
-    if not TrySndLow(pointer(fSndBuf), buflen, @result) then
+    if not TrySndLow(pointer(fSndBuf), buflen, @result, @rawError) then
       if aNoRaise then
         exit
       else
-        raise ENetSock.CreateLastError('%s.SockSendFlush(%s) len=%d',
-          [ClassNameShort(self)^, fServer, buflen], result);
+        raise ENetSock.Create('%s.SockSendFlush(%s) len=%d',
+          [ClassNameShort(self)^, fServer, buflen], result, @rawError);
   // direct sending of the remaining bodylen bytes (if needed)
   if bodylen > 0 then
-    if not TrySndLow(pointer(aBody), bodylen, @result) then
+    if not TrySndLow(pointer(aBody), bodylen, @result, @rawError) then
       if not aNoRaise then
-        raise ENetSock.CreateLastError('%s.SockSendFlush(%s) bodylen=%',
-          [ClassNameShort(self)^, fServer, bodylen], result);
+        raise ENetSock.Create('%s.SockSendFlush(%s) bodylen=%',
+          [ClassNameShort(self)^, fServer, bodylen], result, @rawError);
 end;
 
 function TCrtSocket.SockSendStream(Stream: TStream; ChunkSize: integer;
   aNoRaise, aCheckRecv: boolean): TNetResult;
 var
   chunk: RawByteString;
-  rd: integer;
+  rd, rawError: integer;
   pos: Int64;
 begin
   result := nrOK;
@@ -6058,9 +6469,9 @@ begin
   pos := 0;
   repeat
     rd := Stream.Read(pointer(chunk)^, ChunkSize);
-    if rd = 0 then
+    if rd <= 0 then
       break; // reached the end of the stream
-    TrySndLow(pointer(chunk), rd, @result); // error if result <> nrOk
+    TrySndLow(pointer(chunk), rd, @result, @rawError); // error if result <> nrOk
     if aCheckRecv and  // always check for any response, e.g. on closed connection
        (fSecure = nil) and  // TLS fSecure.ReceivePending is not reliable
        (fSock.HasData > 0) then
@@ -6072,30 +6483,28 @@ begin
       if aNoRaise then
         break
       else
-        raise ENetSock.CreateLastError(
-          '%s.SockSendStream(%s,%d) rd=%d pos=%d to %s:%s',
-          [ClassNameShort(self)^, ClassNameShort(Stream)^,
-           ChunkSize, rd, pos, fServer, fPort], result);
+        raise ENetSock.Create('%s.SockSendStream(%s,%d) rd=%d pos=%d to %s:%s',
+          [ClassNameShort(self)^, ClassNameShort(Stream)^, ChunkSize, rd, pos,
+           fServer, fPort], result, @rawError);
     inc(pos, rd);
   until false;
 end;
 
 procedure TCrtSocket.SockRecv(Buffer: pointer; Length: integer);
 var
-  read: integer;
+  read, rawError: integer;
   res: TNetResult;
 begin
   read := Length;
-  if not TrySockRecv(Buffer, read, {StopBeforeLength=}false, @res) or
+  if not TrySockRecv(Buffer, read, {StopBeforeLength=}false, @res, @rawError) or
      (Length <> read) then
-    raise ENetSock.CreateLastError('%s.SockRecv(%d) read=%d',
-      [ClassNameShort(self)^, Length, read], res);
+    raise ENetSock.Create('%s.SockRecv(%d) read=%d at %s:%s',
+      [ClassNameShort(self)^, Length, read, fServer, fPort], res, @rawError);
 end;
 
 function TCrtSocket.SockRecv(Length: integer): RawByteString;
 begin
-  FastSetString(RawUtf8(result), Length); // assume CP_UTF8 for FPC RTL bug
-  SockRecv(pointer(result), Length);
+  SockRecv(FastSetString(RawUtf8(result), Length), Length);
 end;
 
 function TCrtSocket.SockReceivePending(TimeOutMS: integer;
@@ -6142,13 +6551,14 @@ begin
     result := 0;
 end;
 
-function TCrtSocket.SockReceiveString: RawByteString;
+function TCrtSocket.SockReceiveString(
+  NetResult: PNetResult; RawError: system.PInteger): RawByteString;
 var
   read: integer;
-  tmp: array[word] of byte; // 64KB is big enough for INetTls or the socket API
+  tmp: TBuffer64K; // big enough for INetTls or the socket API
 begin
   read := SizeOf(tmp);
-  if TrySockRecv(@tmp, read, {StopBeforeLength=}true) and
+  if TrySockRecv(@tmp, read, {StopBeforeLength=}true, NetResult, RawError) and
      (read <> 0) then
     FastSetRawByteString(result, @tmp, read)
   else
@@ -6156,28 +6566,30 @@ begin
 end;
 
 function TCrtSocket.TrySockRecv(Buffer: pointer; var Length: integer;
-  StopBeforeLength: boolean; NetResult: PNetResult): boolean;
+  StopBeforeLength: boolean; NetResult: PNetResult; RawError: system.PInteger): boolean;
 var
   expected, read, pending: integer;
   events: TNetEvents;
   res: TNetResult;
 begin
+  if RawError <> nil then
+    RawError^ := NO_ERROR;
   res := nrInvalidParameter;
   if SockIsDefined and
      (Buffer <> nil) and
      (Length > 0) and
-     not fAborted then
+     not (fAborted in fFlags) then
   begin
     expected := Length;
     Length := 0;
     repeat
       // first check for any available data
       // - some may be available at fSecure/TLS level, but not from fSock/TCP
-      read := expected - Length;
+      read := MinPtrInt(CrtSocketSendRecvMaxBytes, expected - Length);
       if fSecure <> nil then
         res := fSecure.Receive(Buffer, read)
       else
-        res := fSock.Recv(Buffer, read);
+        res := fSock.Recv(Buffer, read, RawError);
       {$ifdef SYNCRTDEBUGLOW}
       if (res <> nrOk) and
          Assigned(OnLog) then
@@ -6186,10 +6598,14 @@ begin
       {$endif SYNCRTDEBUGLOW}
       case res of
         nrOk:
-          ;
+          begin // Buffer^ was filled with read bytes
+            inc(fBytesIn, read);
+            inc(Length, read);
+            inc(PByte(Buffer), read);
+          end;
         nrRetry:
           begin
-            read := 0; // call RecvPending/WaitFor and retry Recv
+            read := 0; // caller should make RecvPending/WaitFor and retry Recv
             res := nrOk;
           end
       else
@@ -6199,18 +6615,19 @@ begin
           break;
         end;
       end;
-      inc(fBytesIn, read);
-      inc(Length, read);
-      if StopBeforeLength or
-         (Length = expected) then
+      if (fAborted in fFlags) or
+         (Length = expected) or
+         (StopBeforeLength and
+          (read <> 0) and
+          (read < CrtSocketSendRecvMaxBytes)) then
         break; // good enough for now
-      inc(PByte(Buffer), read);
-      if (fSock.RecvPending(pending) = nrOk) and
-         (pending > 0) then
+      if (res = nrOk) or
+         ((fSock.RecvPending(pending) = nrOk) and
+          (pending > 0)) then
         continue; // no need to call WaitFor()
-      if fAborted then
+      if fAborted in fFlags then
         break;
-      events := fSock.WaitFor(TimeOut, [neRead, neError]); // select() or poll()
+      events := fSock.WaitFor(TimeOut, [neRead, neError], RawError); // select/poll
       if neError in events then
       begin
         res := nrUnknownError;
@@ -6220,12 +6637,12 @@ begin
       else if neRead in events then
         continue; // retry Recv()
       if Assigned(OnLog) then
-        OnLog(sllTrace, 'TrySockRecv: timeout after %ms)', [TimeOut], self);
+        OnLog(sllTrace, 'TrySockRecv: timeout after %s', [TimeOut div 1000], self);
       res := nrTimeout;  // identify read timeout as error
       break;
-    until fAborted;
+    until fAborted in fFlags;
   end;
-  if fAborted then
+  if fAborted in fFlags then
     res := nrClosed;
   if NetResult <> nil then
     NetResult^ := res;
@@ -6270,7 +6687,7 @@ procedure TCrtSocket.SockRecvLn(out Line: RawUtf8; CROnly: boolean);
         end
         else
           inc(P);
-    until fAborted;
+    until fAborted in fFlags;
   end;
 
 var
@@ -6310,17 +6727,19 @@ begin
   else
     repeat
       SockRecv(@c, 1);
-    until fAborted or
+    until (fAborted in fFlags) or
           (c = #10);
 end;
 
 procedure TCrtSocket.SndLow(P: pointer; Len: integer);
 var
   res: TNetResult;
+  rawError: integer;
 begin
-  if not TrySndLow(P, Len, @res) then
-    raise ENetSock.CreateLastError('%s.SndLow(%s) len=%d',
-      [ClassNameShort(self)^, fServer, Len], res);
+  if (Len <> 0) and
+     not TrySndLow(P, Len, @res, @rawError) then
+    raise ENetSock.Create('%s.SndLow(%s) len=%d',
+      [ClassNameShort(self)^, fServer, Len], res, @rawError);
 end;
 
 procedure TCrtSocket.SndLow(const Data: RawByteString);
@@ -6329,53 +6748,59 @@ begin
     SndLow(pointer(Data), Length(Data));
 end;
 
-function TCrtSocket.TrySndLow(P: pointer; Len: integer; NetResult: PNetResult): boolean;
+function TCrtSocket.TrySndLow(P: pointer; Len: integer; NetResult: PNetResult;
+  RawError: system.PInteger): boolean;
 var
   sent: integer;
   events: TNetEvents;
   res: TNetResult;
 begin
-  if Len = 0 then
+  if RawError <> nil then
+    RawError^ := NO_ERROR;
+  if fAborted in fFlags then
+    res := nrClosed
+  else if Len = 0 then
     res := nrOk
-  else if SockIsDefined and
-          (Len > 0) and
-          (P <> nil) and
-          not fAborted then
+  else if not SockIsDefined then
+    res := nrNoSocket
+  else if (Len < 0) or
+          (P = nil) then
+   res := nrInvalidParameter
+  else
+  begin
     repeat
-      sent := Len;
+      sent := MinPtrInt(CrtSocketSendRecvMaxBytes, Len);
       if fSecure <> nil then
         res := fSecure.Send(P, sent)
       else
-        res := fSock.Send(P, sent);
+        res := fSock.Send(P, sent, RawError);
       if sent > 0 then
       begin
         inc(fBytesOut, sent);
         dec(Len, sent);
         if Len <= 0 then
-          break; // data successfully sent
+          break; // all data successfully sent
         inc(PByte(P), sent);
-      end
-      else if not (res in [nrOK, nrRetry]) then
-        break; // fatal socket error
-      if fAborted then
+        if res = nrOk then
+          continue;
+      end;
+      if (fAborted in fFlags) or
+         not (res in [nrOk, nrRetry]) then
         break;
       events := fSock.WaitFor(TimeOut, [neWrite, neError]); // select() or poll()
+      res := nrUnknownError;
       if neError in events then
-      begin
-        res := nrUnknownError;
-        break;
-      end
+        break
       else if neWrite in events then
         continue; // retry Send()
       if Assigned(OnLog) then
         OnLog(sllTrace, 'TrySndLow: timeout after %ms)', [TimeOut], self);
       res := nrTimeout;  // identify write timeout as error
       break;
-    until fAborted
-  else
-    res := nrInvalidParameter;
-  if fAborted then
-    res := nrClosed;
+    until fAborted in fFlags;
+    if fAborted in fFlags then
+      res := nrClosed;
+  end;
   if NetResult <> nil then
     NetResult^ := res; // always return a TNetResult
   result := (res = nrOK);
@@ -6397,22 +6822,6 @@ begin
   result := ResultClass.Create(Timeout);
   result.AcceptRequest(client, @addr);
   result.CreateSockIn; // use SockIn with 1KB input buffer: 2x faster
-end;
-
-function TCrtSocket.PeerAddress(LocalAsVoid: boolean): RawUtf8;
-begin
-  if fPeerAddr = nil then
-    result := ''
-  else
-    fPeerAddr^.IP(result, LocalAsVoid);
-end;
-
-function TCrtSocket.PeerPort: TNetPort;
-begin
-  if fPeerAddr = nil then
-    result := 0
-  else
-    result := fPeerAddr^.Port;
 end;
 
 function TCrtSocket.AsSocketStream: TSocketStream;
@@ -6443,30 +6852,37 @@ end;
 
 function TCrtSocketStream.Read(var Buffer; Count: Longint): Longint;
 begin
-  if fSocket.TrySockRecv(@Buffer, Count, {stopbeforeCount=}true, @fLastResult) then
-  begin
-    result := Count;
-    inc(fSize, Count);
-    fPosition := fSize;
-  end
-  else if fLastResult = nrRetry then
-    result := 0
+  if Count > 0 then
+    if fSocket.TrySockRecv(@Buffer, Count, {stopbeforeCount=}true,
+                 @fLastResult, @fLastRawError) then
+    begin
+      result := Count;
+      inc(fSize, Count);
+      fPosition := fSize;
+    end
+    else if fLastResult = nrRetry then
+      result := 0
+    else
+      result := -1 // fatal error
   else
-    result := -1; // fatal error
+    result := 0; // nothing to receive
 end;
 
 function TCrtSocketStream.Write(const Buffer; Count: Longint): Longint;
 begin
-  if fSocket.TrySndLow(@Buffer, Count, @fLastResult) then
-  begin
-    result := Count;
-    inc(fSize, Count);
-    fPosition := fSize;
-  end
-  else if fLastResult = nrRetry then
-    result := 0
+  if Count > 0 then
+    if fSocket.TrySndLow(@Buffer, Count, @fLastResult, @fLastRawError) then
+    begin
+      result := Count;
+      inc(fSize, Count);
+      fPosition := fSize;
+    end
+    else if fLastResult = nrRetry then
+      result := 0
+    else
+      result := -1 // fatal error, e.g. timeout
   else
-    result := -1; // fatal error, e.g. timeout
+    result := 0; // nothing to send
 end;
 
 

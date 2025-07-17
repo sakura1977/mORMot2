@@ -1433,9 +1433,6 @@ const
   SN_pbe_WithSHA1And40BitRC4 = 'PBE-SHA1-RC4-40';
   LN_pbe_WithSHA1And40BitRC4 = 'pbeWithSHA1And40BitRC4';
   NID_pbe_WithSHA1And40BitRC4 = 145;
-  SN_pbe_WithSHA1And3_Key_TripleDES_CBC = 'PBE-SHA1-3DES';
-  LN_pbe_WithSHA1And3_Key_TripleDES_CBC = 'pbeWithSHA1And3-KeyTripleDES-CBC';
-  NID_pbe_WithSHA1And3_Key_TripleDES_CBC = 146;
   SN_pbe_WithSHA1And2_Key_TripleDES_CBC = 'PBE-SHA1-2DES';
   LN_pbe_WithSHA1And2_Key_TripleDES_CBC = 'pbeWithSHA1And2-KeyTripleDES-CBC';
   NID_pbe_WithSHA1And2_Key_TripleDES_CBC = 147;
@@ -2366,9 +2363,6 @@ const
   NID_aes_256_ecb = 426;
   SN_aes_256_cbc = 'AES-256-CBC';
   LN_aes_256_cbc = 'aes-256-cbc';
-  NID_aes_256_cbc = 427;
-  SN_aes_256_ofb128 = 'AES-256-OFB';
-  LN_aes_256_ofb128 = 'aes-256-ofb';
   NID_aes_256_ofb128 = 428;
   SN_aes_256_cfb128 = 'AES-256-CFB';
   LN_aes_256_cfb128 = 'aes-256-cfb';
@@ -9266,7 +9260,7 @@ type
   PCAMELLIA_KEY = ^CAMELLIA_KEY;
 
   cast_key_st = record
-    data: array [0..31] of cardinal;
+    data: TBlock1024;
     short_key: integer;
   end;
 
@@ -10652,7 +10646,7 @@ type
   PRIPEMD160_CTX = ^RIPEMD160_CTX;
 
   seed_key_st = record
-    data: array [0..31] of cardinal;
+    data: TBlock1024;
   end;
 
   SEED_KEY_SCHEDULE = seed_key_st;
@@ -13860,9 +13854,6 @@ function EVP_DecodeFinal(ctx: PEVP_ENCODE_CTX; _out: PByte; outl: PInteger): int
 function EVP_DecodeBlock(t: PByte; f: PByte; n: integer): integer; cdecl;
   external LIB_CRYPTO name _PU + 'EVP_DecodeBlock';
 
-function EVP_CIPHER_CTX_set_key_length(x: PEVP_CIPHER_CTX; keylen: integer): integer; cdecl;
-  external LIB_CRYPTO name _PU + 'EVP_CIPHER_CTX_set_key_length';
-
 function EVP_CIPHER_CTX_rand_key(ctx: PEVP_CIPHER_CTX; key: PByte): integer; cdecl;
   external LIB_CRYPTO name _PU + 'EVP_CIPHER_CTX_rand_key';
 
@@ -14030,9 +14021,6 @@ function EVP_rc2_ofb(): PEVP_CIPHER; cdecl;
 
 function EVP_bf_ecb(): PEVP_CIPHER; cdecl;
   external LIB_CRYPTO name _PU + 'EVP_bf_ecb';
-
-function EVP_bf_cbc(): PEVP_CIPHER; cdecl;
-  external LIB_CRYPTO name _PU + 'EVP_bf_cbc';
 
 function EVP_bf_cfb64(): PEVP_CIPHER; cdecl;
   external LIB_CRYPTO name _PU + 'EVP_bf_cfb64';
@@ -22324,9 +22312,6 @@ function PKCS12_gen_mac(p12: PPKCS12; pass: PUtf8Char; passlen: integer; mac: PB
 
 function PKCS12_verify_mac(p12: PPKCS12; pass: PUtf8Char; passlen: integer): integer; cdecl;
   external LIB_CRYPTO name _PU + 'PKCS12_verify_mac';
-
-function PKCS12_set_mac(p12: PPKCS12; pass: PUtf8Char; passlen: integer; salt: PByte; saltlen: integer; iter: integer; md_type: PEVP_MD): integer; cdecl;
-  external LIB_CRYPTO name _PU + 'PKCS12_set_mac';
 
 function PKCS12_setup_mac(p12: PPKCS12; iter: integer; salt: PByte; saltlen: integer; md_type: PEVP_MD): integer; cdecl;
   external LIB_CRYPTO name _PU + 'PKCS12_setup_mac';

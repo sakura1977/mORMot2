@@ -395,13 +395,13 @@ type
   // - is dynamically loaded, so application could start e.g. on plain XP
   TGdiPlus = class(TSynLibrary)
   protected
+    fSafe: TOSLock;
     fToken: THandle;
     fStartupHook: record
       Hook: TGdiPlusHookProc;
       Unhook: TGdiPlusUnhookProc;
     end;
     fStartupHookToken: THandle;
-    fLock: TRTLCriticalSection;
   public
     // Picture related API calls of the GDI+ class hierarchy
     Startup: function(var Token: THandle; var Input, Output): TGdipStatus; stdcall;
@@ -562,11 +562,11 @@ var
 function _GdipLoad: TGdiPlus;
 
 /// raise an EGdiPlus if the GDI+ library was not successfully loaded
-procedure EnsureGdipExists(const caller: shortstring);
+procedure EnsureGdipExists(const caller: ShortString);
 
 /// raise an EGdiPlus if no GDI+ library is available, or call Gdip.Lock
 // - the GDI+ API is not thread-safe, so Gdip.Lock/UnLock is mandatory 
-procedure EnsureGdipExistsAndLock(const caller: shortstring);
+procedure EnsureGdipExistsAndLock(const caller: ShortString);
 
 /// access the GDI+ library instance
 // - will try to load it if needed
@@ -857,119 +857,119 @@ end;
 {$endif GDIPLUS_USEENCODERS}
 
 const
-  GDIP_API_NAME: array[ 0..103
+  GDIP_ENTRIES: array[0 .. 103
     {$ifdef GDIPLUS_USEDPI}      + 1 {$endif GDIPLUS_USEDPI}
     {$ifdef GDIPLUS_USEENCODERS} + 2 {$endif GDIPLUS_USEENCODERS} ] of PAnsiChar = (
-    'GdiplusStartup',
-    'GdiplusShutdown',
-    'GdipDeleteGraphics',
-    'GdipCreateFromHDC',
-    'GdipLoadImageFromStream',
-    'GdipLoadImageFromFile',
-    'GdipDrawImageRectI',
-    'GdipDrawImageRectRectI',
+    'lusStartup',
+    'lusShutdown',
+    'DeleteGraphics',
+    'CreateFromHDC',
+    'LoadImageFromStream',
+    'LoadImageFromFile',
+    'DrawImageRectI',
+    'DrawImageRectRectI',
     {$ifdef GDIPLUS_USEDPI}
-    'GdipDrawImageI',
+    'DrawImageI',
     {$endif GDIPLUS_USEDPI}
-    'GdipDisposeImage',
-    'GdipGetImageRawFormat',
-    'GdipGetImageWidth',
-    'GdipGetImageHeight',
-    'GdipSaveImageToStream',
+    'DisposeImage',
+    'GetImageRawFormat',
+    'GetImageWidth',
+    'GetImageHeight',
+    'SaveImageToStream',
     {$ifdef GDIPLUS_USEENCODERS}
-    'GdipGetImageEncodersSize',
-    'GdipGetImageEncoders',
+    'GetImageEncodersSize',
+    'GetImageEncoders',
     {$endif GDIPLUS_USEENCODERS}
-    'GdipCreateBitmapFromHBITMAP',
-    'GdipCreateBitmapFromGdiDib',
-    'GdipBitmapSetResolution',
-    'GdipImageGetFrameCount',
-    'GdipImageSelectActiveFrame',
-    'GdipCreateImageAttributes',
-    'GdipCloneImageAttributes',
-    'GdipDisposeImageAttributes',
-    'GdipSetImageAttributesToIdentity',
-    'GdipResetImageAttributes',
-    'GdipSetImageAttributesColorMatrix',
-    'GdipSetImageAttributesThreshold',
-    'GdipSetImageAttributesGamma',
-    'GdipSetImageAttributesNoOp',
-    'GdipSetImageAttributesColorKeys',
-    'GdipSetImageAttributesOutputChannel',
-    'GdipSetImageAttributesOutputChannelColorProfile',
-    'GdipSetImageAttributesRemapTable',
-    'GdipSetImageAttributesWrapMode',
-    'GdipGetImageAttributesAdjustedPalette',
-    'GdipDrawLineI',
-    'GdipCreatePen1',
-    'GdipDeletePen',
-    'GdipFlush',
-    'GdipSetSmoothingMode',
-    'GdipSetTextRenderingHint',
-    'GdipSetPenBrushFill',
-    'GdipSetPenColor',
-    'GdipSetPenWidth',
-    'GdipDeleteBrush',
-    'GdipCreateSolidFill',
-    'GdipFillRectangleI',
-    'GdipFillEllipseI',
-    'GdipDrawEllipseI',
-    'GdipDrawCurveI',
-    'GdipGraphicsClear',
-    'GdipSetPageUnit',
-    'GdipDrawRectangleI',
-    'GdipSetPenDashStyle',
-    'GdipDrawPolygonI',
-    'GdipFillPolygonI',
-    'GdipSetWorldTransform',
-    'GdipGetWorldTransform',
-    'GdipCreateMatrix',
-    'GdipCreateMatrix2',
-    'GdipDeleteMatrix',
-    'GdipSetMatrixElements',
-    'GdipMultiplyMatrix',
-    'GdipScaleMatrix',
-    'GdipTranslateMatrix',
-    'GdipDrawLinesI',
-    'GdipRecordMetafileI',
-    'GdipRecordMetafileStreamI',
-    'GdipPlayMetafileRecord',
-    'GdipEnumerateMetafileDestRectI',
-    'GdipResetWorldTransform',
-    'GdipRotateWorldTransform',
-    'GdipTranslateWorldTransform',
-    'GdipGetImageGraphicsContext',
-    'GdipCreateFontFromDC',
-    'GdipDeleteFont',
-    'GdipCreateFontFromLogfontW',
-    'GdipDrawString',
-    'GdipMeasureString',
-    'GdipDrawDriverString',
-    'GdipCreatePath',
-    'GdipDeletePath',
-    'GdipDrawPath',
-    'GdipFillPath',
-    'GdipAddPathLineI',
-    'GdipAddPathLine2I',
-    'GdipAddPathArcI',
-    'GdipAddPathCurveI',
-    'GdipAddPathClosedCurveI',
-    'GdipAddPathEllipseI',
-    'GdipAddPathPolygonI',
-    'GdipAddPathRectangleI',
-    'GdipClosePathFigure',
-    'GdipDrawArcI',
-    'GdipDrawBezierI',
-    'GdipDrawPieI',
-    'GdipCreateBitmapFromScan0',
-    'GdipBitmapLockBits',
-    'GdipBitmapUnlockBits',
-    'GdipGetClip',
-    'GdipSetClipRegion',
-    'GdipSetClipRectI',
-    'GdipResetClip',
-    'GdipCreateRegion',
-    'GdipDeleteRegion',
+    'CreateBitmapFromHBITMAP',
+    'CreateBitmapFromGdiDib',
+    'BitmapSetResolution',
+    'ImageGetFrameCount',
+    'ImageSelectActiveFrame',
+    'CreateImageAttributes',
+    'CloneImageAttributes',
+    'DisposeImageAttributes',
+    'SetImageAttributesToIdentity',
+    'ResetImageAttributes',
+    'SetImageAttributesColorMatrix',
+    'SetImageAttributesThreshold',
+    'SetImageAttributesGamma',
+    'SetImageAttributesNoOp',
+    'SetImageAttributesColorKeys',
+    'SetImageAttributesOutputChannel',
+    'SetImageAttributesOutputChannelColorProfile',
+    'SetImageAttributesRemapTable',
+    'SetImageAttributesWrapMode',
+    'GetImageAttributesAdjustedPalette',
+    'DrawLineI',
+    'CreatePen1',
+    'DeletePen',
+    'Flush',
+    'SetSmoothingMode',
+    'SetTextRenderingHint',
+    'SetPenBrushFill',
+    'SetPenColor',
+    'SetPenWidth',
+    'DeleteBrush',
+    'CreateSolidFill',
+    'FillRectangleI',
+    'FillEllipseI',
+    'DrawEllipseI',
+    'DrawCurveI',
+    'GraphicsClear',
+    'SetPageUnit',
+    'DrawRectangleI',
+    'SetPenDashStyle',
+    'DrawPolygonI',
+    'FillPolygonI',
+    'SetWorldTransform',
+    'GetWorldTransform',
+    'CreateMatrix',
+    'CreateMatrix2',
+    'DeleteMatrix',
+    'SetMatrixElements',
+    'MultiplyMatrix',
+    'ScaleMatrix',
+    'TranslateMatrix',
+    'DrawLinesI',
+    'RecordMetafileI',
+    'RecordMetafileStreamI',
+    'PlayMetafileRecord',
+    'EnumerateMetafileDestRectI',
+    'ResetWorldTransform',
+    'RotateWorldTransform',
+    'TranslateWorldTransform',
+    'GetImageGraphicsContext',
+    'CreateFontFromDC',
+    'DeleteFont',
+    'CreateFontFromLogfontW',
+    'DrawString',
+    'MeasureString',
+    'DrawDriverString',
+    'CreatePath',
+    'DeletePath',
+    'DrawPath',
+    'FillPath',
+    'AddPathLineI',
+    'AddPathLine2I',
+    'AddPathArcI',
+    'AddPathCurveI',
+    'AddPathClosedCurveI',
+    'AddPathEllipseI',
+    'AddPathPolygonI',
+    'AddPathRectangleI',
+    'ClosePathFigure',
+    'DrawArcI',
+    'DrawBezierI',
+    'DrawPieI',
+    'CreateBitmapFromScan0',
+    'BitmapLockBits',
+    'BitmapUnlockBits',
+    'GetClip',
+    'SetClipRegion',
+    'SetClipRectI',
+    'ResetClip',
+    'CreateRegion',
+    'DeleteRegion',
     nil);
 
   Office2003Version = $B0000; // Office 2003 = Office 11 ($B)
@@ -988,8 +988,9 @@ var
   {$ifdef GDIPLUS_USEENCODERS}
   fmt: TGdipPictureType;
   {$endif GDIPLUS_USEENCODERS}
+  error: string;
 begin
-  InitializeCriticalSection(fLock);
+  fSafe.Init;
   // first try and search the best library name
   if (aDllFileName = '') or
      not FileExists(aDllFileName) then
@@ -1028,11 +1029,11 @@ begin
   if aDllFileName = '' then
     aDllFileName := 'gdiplus.dll'; // load default OS version
   // resolve all API calls
-  if not TryLoadLibrary([aDllFileName], nil) or
-     not ResolveAll(@GDIP_API_NAME, @@Startup) then
+  if not TryLoadResolve([aDllFileName],
+           'Gdip', @GDIP_ENTRIES, @@Startup, nil, @error) then
     exit;
   // EMF conversion API is available only on GDI+ 1.1
-  ConvertToEmfPlus11 := GetProcAddress(fHandle, 'GdipConvertToEmfPlus');
+  ConvertToEmfPlus11 := LibraryResolve(fHandle, 'GdipConvertToEmfPlus');
   // setup the libray
   FillcharFast(Input, SizeOf(Input), 0);
   Input.Version := 1;
@@ -1062,17 +1063,17 @@ begin
     fToken := 0;
   end;
   inherited Destroy;
-  DeleteCriticalSection(fLock);
+  fSafe.Done;
 end;
 
 procedure TGdiPlus.Lock;
 begin
-  EnterCriticalSection(fLock);
+  fSafe.Lock;
 end;
 
 procedure TGdiPlus.UnLock;
 begin
-  LeaveCriticalSection(fLock);
+  fSafe.UnLock;
 end;
 
 
@@ -1095,13 +1096,13 @@ begin
   end;
 end;
 
-procedure EnsureGdipExists(const caller: shortstring);
+procedure EnsureGdipExists(const caller: ShortString);
 begin
   if not Gdip.Exists then
     raise EGdiPlus.CreateFmt('%s: GDI+ not available on this system', [caller]);
 end;
 
-procedure EnsureGdipExistsAndLock(const caller: shortstring);
+procedure EnsureGdipExistsAndLock(const caller: ShortString);
 begin
   EnsureGdipExists(caller);
   _Gdip.Lock;
@@ -2035,7 +2036,7 @@ begin
   R.Height := Height;
   FillcharFast(E, SizeOf(E), 0);
   E.gdip := _Gdip;
-  if assigned(E.gdip.ConvertToEmfPlus11) and
+  if Assigned(E.gdip.ConvertToEmfPlus11) and
      not (ecoInternalConvert in ConvertOptions) then
   begin
     // let GDI+ 1.1 make the conversion

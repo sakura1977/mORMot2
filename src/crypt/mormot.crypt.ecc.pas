@@ -8,6 +8,7 @@ unit mormot.crypt.ecc;
 
    Certificate-based Public Key Cryptography Classes
     - High-Level Certificate-based Public Key Cryptography
+    - HMAC-CRC32C and HMAC-CRC256C Message Integrity Algorithms
     - IProtocol Implemented using our Public Key Cryptography
     - Registration of our ECC Engine to the TCryptAsym/TCryptCert Factories
 
@@ -26,6 +27,7 @@ uses
   sysutils,
   mormot.core.base,
   mormot.core.os,
+  mormot.core.os.security,
   mormot.core.unicode,
   mormot.core.text,
   mormot.core.buffers,
@@ -1244,6 +1246,101 @@ function EccPrivateKeyDecrypt(const Input: RawByteString;
   const PrivatePassword: SpiUtf8): RawByteString;
 
 
+{ ***************** HMAC-CRC32C and HMAC-CRC256C Message Integrity Algorithms }
+
+// HMAC-CRC-256C and HMAC-CRC-32C non-cryptographic algorithms have been moved
+// to this unit, which is the only one making use of those
+
+
+{ ----------- HMAC over CRC-256C }
+
+/// compute the HMAC message authentication code using crc256c as hash function
+// - HMAC over a non cryptographic hash function like crc256c is known to be
+// safe as MAC, if the supplied key comes e.g. from cryptographic HmacSha256
+// - performs two crc32c hashes, so SSE 4.2 gives more than 2.2 GB/s on a Core i7
+procedure HmacCrc256c(key, msg: pointer; keylen, msglen: integer;
+  out result: THash256); overload;
+
+/// compute the HMAC message authentication code using crc256c as hash function
+// - HMAC over a non cryptographic hash function like crc256c is known to be
+// safe as MAC, if the supplied key comes e.g. from cryptographic HmacSha256
+// - performs two crc32c hashes, so SSE 4.2 gives more than 2.2 GB/s on a Core i7
+procedure HmacCrc256c(const key: THash256; const msg: RawByteString; out result: THash256); overload;
+
+/// compute the HMAC message authentication code using crc256c as hash function
+// - HMAC over a non cryptographic hash function like crc256c is known to be
+// safe as MAC, if the supplied key comes e.g. from cryptographic HmacSha256
+// - performs two crc32c hashes, so SSE 4.2 gives more than 2.2 GB/s on a Core i7
+procedure HmacCrc256c(const key, msg: RawByteString; out result: THash256); overload;
+
+
+{ ----------- HMAC over CRC-32C }
+
+type
+  {$A-}
+  /// compute the HMAC message authentication code using crc32c as hash function
+  // - HMAC over a non cryptographic hash function like crc32c is known to be a
+  // safe enough MAC, if the supplied key comes e.g. from cryptographic HmacSha256
+  // - SSE 4.2 will let MAC be computed at 13 GB/s on a Core i7 / x86_64
+  // - you may use HmacCrc32c() overloaded functions for one-step process
+  // - we defined a record instead of a class, to allow stack allocation and
+  // thread-safe reuse of one initialized instance via Compute()
+  {$ifdef USERECORDWITHMETHODS}
+  THmacCrc32c = record
+  {$else}
+  THmacCrc32c = object
+  {$endif USERECORDWITHMETHODS}
+  private
+    seed: cardinal;
+    step7data: THash512Rec;
+  public
+    /// prepare the HMAC authentication with the supplied key
+    // - consider using Compute to re-use a prepared HMAC instance
+    procedure Init(key: pointer; keylen: integer); overload;
+    /// prepare the HMAC authentication with the supplied key
+    // - consider using Compute to re-use a prepared HMAC instance
+    procedure Init(const key: RawByteString); overload;
+    /// call this method for each continuous message block
+    // - iterate over all message blocks, then call Done to retrieve the HMAC
+    procedure Update(msg: pointer; msglen: integer); overload;
+      {$ifdef HASINLINE}inline;{$endif}
+    /// call this method for each continuous message block
+    // - iterate over all message blocks, then call Done to retrieve the HMAC
+    procedure Update(const msg: RawByteString); overload;
+      {$ifdef HASINLINE}inline;{$endif}
+    /// computes the HMAC of all supplied message according to the key
+    function Done(NoInit: boolean = false): cardinal;
+      {$ifdef HASINLINE}inline;{$endif}
+    /// computes the HMAC of the supplied message according to the key
+    // - expects a previous call on Init() to setup the shared key
+    // - similar to a single Update(msg,msglen) followed by Done, but re-usable
+    // - this method is thread-safe
+    function Compute(msg: pointer; msglen: integer): cardinal;
+  end;
+  {$A+}
+
+  /// points to HMAC message authentication code using crc32c as hash function
+  PHmacCrc32c = ^THmacCrc32c;
+
+/// compute the HMAC message authentication code using crc32c as hash function
+// - HMAC over a non cryptographic hash function like crc32c is known to be a
+// safe enough MAC, if the supplied key comes e.g. from cryptographic HmacSha256
+// - SSE 4.2 will let MAC be computed at 13 GB/s on a Core i7 / x86_64
+function HmacCrc32c(key, msg: pointer; keylen, msglen: integer): cardinal; overload;
+
+/// compute the HMAC message authentication code using crc32c as hash function
+// - HMAC over a non cryptographic hash function like crc32c is known to be a
+// safe enough MAC, if the supplied key comes e.g. from cryptographic HmacSha256
+// - SSE 4.2 will let MAC be computed at 13 GB/s on a Core i7 / x86_64
+function HmacCrc32c(const key: THash256; const msg: RawByteString): cardinal; overload;
+
+/// compute the HMAC message authentication code using crc32c as hash function
+// - HMAC over a non cryptographic hash function like crc32c is known to be a
+// safe enough MAC, if the supplied key comes e.g. from cryptographic HmacSha256
+// - SSE 4.2 will let MAC be computed at 13 GB/s on a Core i7 / x86_64
+function HmacCrc32c(const key, msg: RawByteString): cardinal; overload;
+
+
 { ***************** IProtocol Implemented using our Public Key Cryptography }
 
 {
@@ -1879,7 +1976,7 @@ begin
     if size < MaxInt then // FileReadAll() is limited to 2GB
     begin
       len := size - SizeOf(head);
-      FastNewRawByteString(tmp, len);
+      pointer(tmp) := FastNewString(len);
       result := FileReadAll(F, pointer(tmp), len) and
                 FileFromString(tmp, rawencryptedfile);
     end;
@@ -1947,7 +2044,7 @@ begin
   try
     a.IV := secret.h.Lo; // use 128-bit of secret.h
     o := a.EncryptPkcs7Length(l, {withiv=}false);
-    FastNewRawByteString(result, o + SizeOf(ephpub));
+    pointer(result) := FastNewString(o + SizeOf(ephpub));
     p := pointer(result);
     p^ := ephpub;
     inc(p);
@@ -1984,7 +2081,7 @@ begin
   a := aes.Create(secret.l, aesbits);
   try
     a.IV := secret.h.Lo;
-    result := a.DecryptPkcs7Buffer(p, l - SizeOf(p^), false, false);
+    a.DecryptPkcs7Var(p, l - SizeOf(p^), false, result);
   finally
     a.Free;
     FillZero(secret.b);
@@ -2550,7 +2647,7 @@ begin
       FillcharFast(head.sign, SizeOf(head.sign), 255); // Version=255=not signed
     if not Ecc256r1MakeKey(head.rndpub, rndpriv) then
       EEccException.RaiseUtf8('%.Encrypt: MakeKey?', [self]);
-    FastNewRawByteString(secret, SizeOf(TEccSecretKey));
+    pointer(secret) := FastNewString(SizeOf(TEccSecretKey));
     if not Ecc256r1SharedSecret(
         fContent.Head.Signed.PublicKey, rndpriv, PEccSecretKey(secret)^) then
       EEccException.RaiseUtf8('%.Encrypt: SharedSecret?', [self]);
@@ -2593,7 +2690,7 @@ begin
       HmacSha256(mackey.b, enc, head.hmac);
     end;
     head.crc := crc32c(PCardinal(@head.hmac)^, @head, SizeOf(head) - SizeOf(head.crc));
-    FastNewRawByteString(result, SizeOf(head) + length(enc));
+    pointer(result) := FastNewString(SizeOf(head) + length(enc));
     PEciesHeader(result)^ := head;
     MoveFast(pointer(enc)^, PByteArray(result)[SizeOf(head)], length(enc));
   finally
@@ -2722,16 +2819,17 @@ begin
         ValidityStart := EccDate(StartDate);
       ValidityEnd := ValidityStart + ExpirationDays;
     end;
-    TAesPrng.Fill(TAesBlock(Serial));
+    TAesPrng.Main.Fill(TAesBlock(Serial));
     fContent.SetUsage(word(Usage), MaxVers);
     if IssuerText = '' then
       if Subjects <> '' then
         fContent.SetSubject(Subjects, MaxVers)
       else
-        TAesPrng.Fill(TAesBlock(Issuer))
+        TAesPrng.Main.Fill(TAesBlock(Issuer))
     else
       EccIssuer(IssuerText, Issuer);
-    if not Ecc256r1MakeKey(PublicKey, fPrivateKey) then
+    if not ecc_make_key_pas(PublicKey, fPrivateKey) then
+      // OpenSSL's Ecc256r1MakeKey is faster, but our random source seems safer
       EEccException.RaiseUtf8('%.CreateNew: MakeKey?', [self]);
     if @Ecc256r1Verify = @ecdsa_verify_pas then
     begin
@@ -2772,8 +2870,7 @@ constructor TEccCertificateSecret.CreateFromSecureFile(
   Pbkdf2Round: integer; Aes: TAesAbstractClass);
 begin
   CreateFromSecureFile(
-    IncludeTrailingPathDelimiter(FolderName) + Utf8ToString(Serial),
-    PassWord, Pbkdf2Round, Aes);
+    MakePath([FolderName, Serial]), PassWord, Pbkdf2Round, Aes);
 end;
 
 constructor TEccCertificateSecret.CreateFrom(Cert: TEccCertificate;
@@ -2851,7 +2948,7 @@ begin
     plain := SaveToBinary;
     if plain <> '' then
       try
-        salt := TAesPrng.Fill(PRIVKEY_SALTSIZE);
+        RandomByteString(PRIVKEY_SALTSIZE, salt); // public: Lecuyer is enough
         Pbkdf2HmacSha256(PassWord, salt, Pbkdf2Round, aeskey);
         a := Aes.Create(aeskey);
         try
@@ -2861,7 +2958,7 @@ begin
             head := 0
           else
             head := SizeOf(PRIVKEY_MAGIC);
-          FastNewRawByteString(result, head + PRIVKEY_SALTSIZE + length(enc));
+          pointer(result) := FastNewString(head + PRIVKEY_SALTSIZE + length(enc));
           MoveFast(PRIVKEY_MAGIC, e[0], head);
           XorBlock16(pointer(salt), @e[head], @PRIVKEY_MAGIC);
           MoveFast(pointer(enc)^, e[head + PRIVKEY_SALTSIZE], length(enc));
@@ -2904,8 +3001,7 @@ begin
     result := false
   else
     result := FileFromString(SaveToSecureBinary(PassWord, AFStripes,
-      Pbkdf2Round, Aes, NoHeader), IncludeTrailingPathDelimiter(DestFolder) +
-      SaveToSecureFileName);
+      Pbkdf2Round, Aes, NoHeader), MakePath([DestFolder, SaveToSecureFileName]));
 end;
 
 function TEccCertificateSecret.SaveToSecureFiles(const PassWord: RawUtf8;
@@ -2994,7 +3090,7 @@ begin
       Aes := TAesCfb;
     a := Aes.Create(aeskey);
     try
-      decrypted := a.DecryptPkcs7Buffer(Data, Len, true, false);
+      a.DecryptPkcs7Var(Data, Len, true, decrypted);
       if decrypted = '' then
         exit; // invalid content
     finally
@@ -3126,7 +3222,7 @@ begin
     'sign',   sign],
     JSON_FAST);
   result := FileToSign + ECCCERTIFICATESIGN_FILEEXT;
-  FileFromString(doc.ToJson('', '', jsonHumanReadable), result);
+  FileFromString(doc.ToHumanJson, result);
 end;
 
 procedure TEccCertificateSecret.SignCertificate(Dest: TEccCertificate;
@@ -3161,7 +3257,7 @@ begin
     pub := @dst.PublicKey;
   end
   else
-    raise EEccException.CreateUtf8(
+    raise EEccException.CreateUtf8( // no RaiseUtf8() for Delphi
       '%.SignCertificate: self-sign with no secret', [self]);
   // compute the digital signature of Dest.fContent
   Dest.fContent.ComputeHash(hash);
@@ -3204,7 +3300,7 @@ begin
       result := ecdInvalidSerial;
       exit;
     end;
-    FastNewRawByteString(secret, SizeOf(TEccSecretKey));
+    pointer(secret) := FastNewString(SizeOf(TEccSecretKey));
     if not Ecc256r1SharedSecret(
         head.rndpub, fPrivateKey, PEccSecretKey(secret)^) then
       exit;
@@ -4281,7 +4377,8 @@ begin
       // store first the certificates
       n := length(fItems);
       if n > 65535 then
-        raise EEccException.Create('Too many items in Chain');
+        EEccException.RaiseUtf8(
+          '%.SaveToBinary: Too many certificates (%) in Chain', [self, n]);
       st.WriteBuffer(n, 2);
       for i := 0 to n - 1 do
       begin
@@ -4293,7 +4390,8 @@ begin
       // then the revocation serials
       n := length(fCrl);
       if n > 65535 then
-        raise EEccException.Create('Too many CRLs in Chain');
+        EEccException.RaiseUtf8(
+          '%.SaveToBinary: Too many CRLs (%) in Chain', [self, n]);
       st.WriteBuffer(n, 2);
       for i := 0 to n - 1 do
         fCrl[i].SaveToStream(st);
@@ -4534,6 +4632,136 @@ begin
     result := LoadFromFileContent(json);
 end;
 
+
+{ ***************** HMAC-CRC32C and HMAC-CRC256C Message Integrity Algorithms }
+
+{ HmacCrc256c }
+
+procedure crc256cmix(h1, h2: cardinal; h: PCardinalArray);
+begin
+  // see // https://www.eecs.harvard.edu/~michaelm/postscripts/tr-02-05.pdf
+  h^[0] := h1;
+  inc(h1, h2);
+  h^[1] := h1;
+  inc(h1, h2);
+  h^[2] := h1;
+  inc(h1, h2);
+  h^[3] := h1;
+  inc(h1, h2);
+  h^[4] := h1;
+  inc(h1, h2);
+  h^[5] := h1;
+  inc(h1, h2);
+  h^[6] := h1;
+  inc(h1, h2);
+  h^[7] := h1;
+end;
+
+procedure HmacCrc256c(key, msg: pointer; keylen, msglen: integer;
+  out result: THash256);
+var
+  i: PtrInt;
+  h1, h2: cardinal;
+  k0, k0xorIpad, step7data: THash512Rec;
+begin
+  FillCharFast(k0, SizeOf(k0), 0);
+  if keylen > SizeOf(k0) then
+    crc256c(key, keylen, k0.Lo)
+  else
+    MoveFast(key^, k0, keylen);
+  for i := 0 to 15 do
+    k0xorIpad.c[i] := k0.c[i] xor $36363636;
+  for i := 0 to 15 do
+    step7data.c[i] := k0.c[i] xor $5c5c5c5c;
+  h1 := crc32c(crc32c(0, @k0xorIpad, SizeOf(k0xorIpad)), msg, msglen);
+  h2 := crc32c(crc32c(h1, @k0xorIpad, SizeOf(k0xorIpad)), msg, msglen);
+  crc256cmix(h1, h2, @result);
+  h1 := crc32c(crc32c(0, @step7data, SizeOf(step7data)), @result, SizeOf(result));
+  h2 := crc32c(crc32c(h1, @step7data, SizeOf(step7data)), @result, SizeOf(result));
+  crc256cmix(h1, h2, @result);
+  FillCharFast(k0, SizeOf(k0), 0);
+  FillCharFast(k0xorIpad, SizeOf(k0), 0);
+  FillCharFast(step7data, SizeOf(k0), 0);
+end;
+
+procedure HmacCrc256c(const key: THash256; const msg: RawByteString;
+  out result: THash256);
+begin
+  HmacCrc256c(@key, pointer(msg), SizeOf(key), length(msg), result);
+end;
+
+procedure HmacCrc256c(const key, msg: RawByteString; out result: THash256);
+begin
+  HmacCrc256c(pointer(key), pointer(msg), length(key), length(msg), result);
+end;
+
+
+{ THmacCrc32c }
+
+procedure THmacCrc32c.Init(const key: RawByteString);
+begin
+  Init(pointer(key), length(key));
+end;
+
+procedure THmacCrc32c.Init(key: pointer; keylen: integer);
+var
+  i: PtrInt;
+  k0, k0xorIpad: THash512Rec;
+begin
+  FillCharFast(k0, SizeOf(k0), 0);
+  if keylen > SizeOf(k0) then
+    crc256c(key, keylen, k0.Lo)
+  else
+    MoveFast(key^, k0, keylen);
+  for i := 0 to 15 do
+    k0xorIpad.c[i] := k0.c[i] xor $36363636;
+  for i := 0 to 15 do
+    step7data.c[i] := k0.c[i] xor $5c5c5c5c;
+  seed := crc32c(0, @k0xorIpad, SizeOf(k0xorIpad));
+  FillCharFast(k0, SizeOf(k0), 0);
+  FillCharFast(k0xorIpad, SizeOf(k0xorIpad), 0);
+end;
+
+procedure THmacCrc32c.Update(msg: pointer; msglen: integer);
+begin
+  seed := crc32c(seed, msg, msglen);
+end;
+
+procedure THmacCrc32c.Update(const msg: RawByteString);
+begin
+  seed := crc32c(seed, pointer(msg), length(msg));
+end;
+
+function THmacCrc32c.Done(NoInit: boolean): cardinal;
+begin
+  result := crc32c(seed, @step7data, SizeOf(step7data));
+  if not NoInit then
+    FillcharFast(self, SizeOf(self), 0);
+end;
+
+function THmacCrc32c.Compute(msg: pointer; msglen: integer): cardinal;
+begin
+  result := crc32c(crc32c(seed, msg, msglen), @step7data, SizeOf(step7data));
+end;
+
+function HmacCrc32c(key, msg: pointer; keylen, msglen: integer): cardinal;
+var
+  mac: THmacCrc32c;
+begin
+  mac.Init(key, keylen);
+  mac.Update(msg, msglen);
+  result := mac.Done;
+end;
+
+function HmacCrc32c(const key: THash256; const msg: RawByteString): cardinal;
+begin
+  result := HmacCrc32c(@key, pointer(msg), SizeOf(key), length(msg));
+end;
+
+function HmacCrc32c(const key, msg: RawByteString): cardinal;
+begin
+  result := HmacCrc32c(pointer(key), pointer(msg), length(key), length(msg));
+end;
 
 
 { ***************** IProtocol Implemented using Public Key Cryptography }
@@ -4847,7 +5075,7 @@ begin
   try
     SetIVAndMacNonce({encrypt=}true);
     len := fAes[true].EncryptPkcs7Length(length(aPlain), false);
-    FastNewRawByteString(aEncrypted, len + SizeOf(THash256)); // trailing MAC
+    pointer(aEncrypted) := FastNewString(len + SizeOf(THash256)); // + MAC
     // encrypt the input
     fAes[true].EncryptPkcs7Buffer(
       pointer(aPlain), pointer(aEncrypted), length(aPlain), len, false);
@@ -4874,7 +5102,7 @@ begin
   try
     SetIVAndMacNonce({encrypt=}false);
     // decrypt the input
-    aPlain := fAes[false].DecryptPkcs7Buffer(P, len, false, false);
+    fAes[false].DecryptPkcs7Var(P, len, false, aPlain);
     if aPlain = '' then
     begin
       IncKM(false); // no MAC, but increase sequence on void/invalid message
@@ -5032,7 +5260,7 @@ begin
   FillCharFast(aClient, SizeOf(aClient), 0);
   aClient.algo := fAlgo;
   // client-side randomness for ephemeral keys and signatures
-  RandomBytes(@fRndA, SizeOf(fRndA)); // Lecuyer is enough for public random
+  SharedRandom.Fill(@fRndA, SizeOf(fRndA)); // enough for public randomness
   aClient.RndA := fRndA;
   // generate the client ephemeral key
   if fAlgo.auth <> authClient then
@@ -5154,7 +5382,7 @@ begin
   FillCharFast(aServer, SizeOf(aServer), 0);
   aServer.algo := fAlgo;
   aServer.RndA := fRndA;
-  RandomBytes(@fRndB, SizeOf(fRndB)); // Lecuyer is enough for public random
+  SharedRandom.Fill(@fRndB, SizeOf(fRndB)); // enough for public randomness
   aServer.RndB := fRndB;
   if fAlgo.auth <> authServer then
     if not Ecc256r1MakeKey(aServer.QF, dF) then
@@ -5237,7 +5465,8 @@ var
 begin
   if privpwd <> '' then
     ECrypt.RaiseUtf8('%.GenerateDer: unsupported privpwd', [self]);
-  if not Ecc256r1MakeKey(rawpub, rawpriv) then
+  if not ecc_make_key_pas(rawpub, rawpriv) then
+    // OpenSSL's Ecc256r1MakeKey is faster, but our random source seems safer
     exit;
   pub := EccToDer(rawpub);
   priv := EccToDer(rawpriv);
@@ -5356,8 +5585,8 @@ begin
         // for ECC, returns the x,y uncompressed coordinates from stored ASN.1
         if Ecc256r1ExtractAsn1(fSubjectPublicKey, k) then
         begin
-          FastNewRawByteString(x, ECC_BYTES);;
-          FastNewRawByteString(y, ECC_BYTES);;
+          pointer(x) := FastNewString(ECC_BYTES);;
+          pointer(y) := FastNewString(ECC_BYTES);;
           bswap256(@PHash512Rec(@k)^.Lo, pointer(x));
           bswap256(@PHash512Rec(@k)^.Hi, pointer(y));
           result := true;
@@ -5408,7 +5637,8 @@ begin
   fKeyAlgo := CAA_CKA[Algorithm];
   if Algorithm = caaES256 then
     if IsZero(fEcc) and
-       Ecc256r1MakeKey(eccpub, fEcc) then
+       ecc_make_key_pas(eccpub, fEcc) then
+       // OpenSSL's Ecc256r1MakeKey is faster, but our random source seems safer
       result := Ecc256r1UncompressAsn1(eccpub);
 end;
 

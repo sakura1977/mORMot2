@@ -56,6 +56,7 @@ uses
 
 type
   /// all commands which may be executed by TRestServer.Uri() method
+  // - execNone is just used as default to identify unexpected execution logic
   // - execSoaByMethod for method-based services
   // - execSoaByInterface for interface-based services
   // - execOrmGet for ORM reads i.e. Retrieve*() methods
@@ -90,11 +91,11 @@ type
     /// finalize the memory structure, and the associated background thread
     destructor Destroy; override;
   end;
-  PRestAcquireExecution = ^TRestAcquireExecution;
 
   /// define how a TRest class may execute its ORM and SOA operations
-  TRestAcquireExecutions =
-    array[TRestServerUriContextCommand] of TRestAcquireExecution;
+  // - by definition, [execNone] if no valid index
+  TRestAcquireExecutions = array[succ(low(TRestServerUriContextCommand)) ..
+    high(TRestServerUriContextCommand)] of TRestAcquireExecution;
 
   /// a genuine identifier for a given client connection on server side
   // - see also THttpServerConnectionID as defined in mormot.net.http: may map
@@ -103,9 +104,6 @@ type
 
 
 const
-  /// size in bytes, to log up to 2 KB of JSON response, to save space
-  MAX_SIZE_RESPONSE_LOG = 2 shl 10;
-
   CONTENT_TYPE_WEBFORM: PAnsiChar = 'APPLICATION/X-WWW-FORM-URLENCODED';
   CONTENT_TYPE_MULTIPARTFORM: PAnsiChar = 'MULTIPART/FORM-DATA';
 
@@ -443,13 +441,16 @@ type
     fLogFamily: TSynLogFamily;
     fLogLevel: TSynLogLevels;
     fServerTimestampCacheTix: cardinal;
+    fLogResponseMaxBytes: integer;
     fAcquireExecution: TRestAcquireExecutions;
-    fPrivateGarbageCollector: TSynObjectList;
+    fPrivateGarbageCollector: TSynObjectListLocked;
     fServerTimestampOffset: TDateTime;
     fServerTimestampCacheValue: TTimeLogBits;
     function TryResolve(aInterface: PRttiInfo; out Obj): boolean; override;
     procedure SetLogClass(aClass: TSynLogClass); virtual;
     /// wrapper methods to access fAcquireExecution[]
+    procedure CheckAcquireExecutionCommand(Cmd: TRestServerUriContextCommand;
+      Context: PUtf8Char);
     function GetAcquireExecutionMode(
       Cmd: TRestServerUriContextCommand): TRestServerAcquireMode;
     procedure SetAcquireExecutionMode(
@@ -533,10 +534,17 @@ type
     procedure InternalLog(const Text: RawUtf8; Level: TSynLogLevel); overload;
       {$ifdef HASINLINE} inline; {$endif}
     /// ease logging of some text in the context of the current TRest
-    procedure InternalLog(const Format: RawUtf8; const Args: array of const;
+    procedure InternalLog(Format: PUtf8Char; const Args: array of const;
       Level: TSynLogLevel = sllTrace); overload;
+    /// ease logging of some response in the context of the current TRest
+    procedure InternalLogResponse(const aContent: RawByteString;
+      const aContext: shortstring; Level: TSynLogLevel = sllServiceReturn); overload;
+      {$ifdef HASINLINE} inline; {$endif}
+    /// ease logging of some response in the context of the current TRest
+    procedure InternalLogResponse(aContent: PUtf8Char; aContentLen: PtrInt;
+      const aContext: shortstring; Level: TSynLogLevel = sllServiceReturn); overload;
     /// ease logging of method enter/leave in the context of the current TRest
-    function Enter(const TextFmt: RawUtf8; const TextArgs: array of const;
+    function Enter(TextFmt: PUtf8Char; const TextArgs: array of const;
       aInstance: TObject = nil): ISynLog;
     /// internal method to retrieve the current Session TAuthUser.ID
     function GetCurrentSessionUserID: TID; virtual; abstract;
@@ -641,7 +649,7 @@ type
     /// a local "Garbage collector" list, for some classes instances which must
     // live during the whole TRestServer process
     // - is used internally by the class, but can be used for business code
-    property PrivateGarbageCollector: TSynObjectList
+    property PrivateGarbageCollector: TSynObjectListLocked
       read fPrivateGarbageCollector;
     /// access to the TSynLog class used for logging
     // - equals TSynLog by default - but you could change it to a custom class
@@ -653,6 +661,11 @@ type
     /// access to the associate TSynLog class events
     property LogLevel: TSynLogLevels
       read fLogLevel;
+    /// tune the InternalLogResponse() output maximum size
+    // - equals 2048 by default - you could use e.g. MaxInt for no size limit
+    // of valid UTF-8 response content
+    property LogResponseMaxBytes: integer
+      read fLogResponseMaxBytes write fLogResponseMaxBytes;
 
   {$ifndef PUREMORMOT2}
     // backward compatibility redirections to the homonymous IRestOrm methods
@@ -1024,34 +1037,37 @@ type
     /// static function allowing to compute a hashed password
     // - as expected by this class
     // - defined as virtual so that you may use your own hashing class
-    // - you may specify your own values in aHashSalt/aHashRound, to enable
-    // Pbkdf2HmacSha256() use instead of plain Sha256(): it will increase
-    // security on storage side (reducing brute force attack via rainbow tables)
-    class function ComputeHashedPassword(const aPasswordPlain: RawUtf8;
+    // - aHashRound = 0 uses plain Sha256(), as early mORMot 1 encoding
+    // - aHashRound > 0 triggers Pbkdf2HmacSha256() via aHashSalt, and enable
+    // Pbkdf2HmacSha256() to increase security on storage side (reducing brute
+    // force attack via rainbow tables)
+    // - aHashRound < 0 will use standard DIGEST-HA0 hashing, compatible with
+    // TDigestAuthServer, expecting aHashRound as -ord(TDigestAlgo)
+    class function ComputeHashedPassword(const aLogonName, aPasswordPlain: RawUtf8;
       const aHashSalt: RawUtf8 = ''; aHashRound: integer = 20000): RawUtf8; virtual;
     /// able to set the PasswordHashHexa field from a plain password content
     // - in fact, PasswordHashHexa := Sha256('salt'+PasswordPlain) in UTF-8
     // - use SetPassword() method if you want to customize the hash salt value
-    // and use the much safer Pbkdf2HmacSha256 algorithm
-    property PasswordPlain: RawUtf8 write SetPasswordPlain;
-    /// set the PasswordHashHexa field from a plain password content and salt
-    // - use this method to specify aHashSalt/aHashRound values, enabling
-    // Pbkdf2HmacSha256() use instead of plain Sha256(): it will increase
-    // security on storage side (reducing brute force attack via rainbow tables)
-    // - you may use an application specific fixed salt, and/or append the
-    // user LogonName to make the challenge unique for each TAuthUser
-    // - the default aHashRound=20000 is slow but secure - since the hashing
-    // process is expected to be done on client side, you may specify your
-    // own higher/slower value, depending on the security level you expect
+    // and use the much safer Pbkdf2HmacSha256 or DIGEST-HA0 algorithms
+    property PasswordPlain: RawUtf8
+      write SetPasswordPlain;
+    /// set the PasswordHashHexa field using Pbkdf2HmacSha256
+    // - use this method to specify aHashSalt/aHashRound values (see
+    // ComputeHashedPassword method) and increase security on storage side
+    // (reducing brute force attack via rainbow tables)
     procedure SetPassword(const aPasswordPlain, aHashSalt: RawUtf8;
-      aHashRound: integer = 20000);
+      aHashRound: integer = 20000); overload;
+    /// set the PasswordHashHexa field as DIGEST-HA0 from plain password content
+    // - will use the current LogonName as part of the digest
+    procedure SetPasswordDigest(const aPasswordPlain, aRealm: RawUtf8;
+      aAlgo: TDigestAlgo = daSHA256);
     /// check if the user can authenticate in its current state
     // - Ctxt is a TRestServerUriContext instance
     // - called by TRestServerAuthentication.GetUser() method
     // - this default implementation will return TRUE, i.e. allow the user
     // to log on
-    // - override this method to disable user authentication, e.g. if the
-    // user is disabled via a custom ORM boolean and date/time field
+    // - override this method to disable user authentication, e.g. if the user
+    // is disabled via a custom ORM boolean or date/time expiration field
     function CanUserLog(Ctxt: TObject): boolean; virtual;
   published
     /// the User identification Name, as entered at log-in
@@ -1182,8 +1198,8 @@ type
     LowLevelConnectionID: TRestConnectionID;
     /// low-level properties of the current connection
     LowLevelConnectionFlags: TRestUriParamsLowLevelFlags;
-    /// most HTTP servers support a per-connection pointer storage
-    // - may be nil if unsupported, e.g. by the http.sys servers
+    /// efficient per-connection pointer storage at HTTP server level
+    // - nil if unsupported, e.g. by the http.sys servers
     // - map to THttpAsyncServerConnection or THttpServerSocket fConnectionOpaque
     // of type THttpServerConnectionOpaque as defined in mormot.net.http
     // - could be used to avoid a lookup to a ConnectionID-indexed dictionary
@@ -1219,7 +1235,21 @@ type
     function Header(UpperName: PAnsiChar): RawUtf8;
       {$ifdef HASINLINE}inline;{$endif}
     /// wrap FindNameValue(InHead,UpperName) with a cache store
-    function HeaderOnce(var Store: RawUtf8; UpperName: PAnsiChar): RawUtf8;
+    procedure HeaderOnce(var Store, Dest: RawUtf8; UpperName: PAnsiChar);
+    /// retrieve the "RemoteIP" value from the incoming HTTP header
+    procedure GetRemoteIP(var Dest: RawUtf8);
+      {$ifdef HASINLINE}inline;{$endif}
+    /// "RemoteIP" value from existing LowLevelRemoteIP but nil for '127.0.0.1'
+    // - won't scan InHead content, just check current LowLevelRemoteIP value
+    // - returns PUtf8Char and not RawUtf8 to avoid a try..finally e.g. on logging
+    function RemoteIPNotLocal: PUtf8Char;
+      {$ifdef HASINLINE}inline;{$endif}
+    /// retrieve the "User-Agent" Dest from the incoming HTTP headers
+    procedure GetUserAgent(var Dest: RawUtf8);
+      {$ifdef HASINLINE}inline;{$endif}
+    /// retrieve the "Authorization: Bearer <token>" Dest from incoming HTTP headers
+    procedure GetAuthenticationBearerToken(var Dest: RawUtf8);
+      {$ifdef HASINLINE}inline;{$endif}
   end;
 
   /// used to map set of parameters for a Client or Server method call
@@ -1269,6 +1299,8 @@ type
     fCall: PRestUriParams;
     fMethod: TUriMethod;
     fClientKind: TRestClientKind;
+    fCommand: TRestServerUriContextCommand;
+    fInputCookiesParsed: boolean;
     fInputContentType: RawUtf8;
     fInHeaderLastName: RawUtf8;
     fInHeaderLastValue: RawUtf8;
@@ -1277,6 +1309,7 @@ type
     fInputCookies: THttpCookies;
     fOutSetCookie: RawUtf8;
     function GetUserAgent: RawUtf8;
+      {$ifdef HASINLINE} inline; {$endif}
     function GetInHeader(const HeaderName: RawUtf8): RawUtf8;
     function InputCookies: PHttpCookies;
       {$ifdef HASINLINE} inline; {$endif}
@@ -1285,6 +1318,8 @@ type
     procedure SetInCookie(const CookieName, CookieValue: RawUtf8);
       {$ifdef HASINLINE} inline; {$endif}
     procedure SetOutSetCookie(const aOutSetCookie: RawUtf8); virtual;
+    procedure SetOutCookie(const aName, aValue: RawUtf8);
+    function StatusCodeToText(Code: cardinal): PRawUtf8; virtual;
   public
     /// access to all input/output parameters at TRestServer.Uri() level
     // - process should better call Results() or Success() methods to set the
@@ -1299,12 +1334,14 @@ type
       read fMethod;
     /// retrieve the "RemoteIP" value from Call^.LowLevelRemoteIP or from
     // the incoming HTTP headers
-    // - may return '127.0.0.1'
+    // - may return '' or '127.0.0.1'
     procedure SetRemoteIP(var IP: RawUtf8);
       {$ifdef HASINLINE} inline; {$endif}
     /// "RemoteIP" value from Call^.LowLevelRemoteIP but nil for '127.0.0.1'
     // - won't scan the incoming HTTP headers, but it is usually not needed
+    // - returns a PUtf8Char and not a RawUtf8 to avoid a try..finally on logging
     function RemoteIPNotLocal: PUtf8Char;
+      {$ifdef HASINLINE} inline; {$endif}
     /// retrieve the "User-Agent" value from the incoming HTTP headers
     property UserAgent: RawUtf8
       read GetUserAgent;
@@ -1325,13 +1362,17 @@ type
     /// retrieve an incoming HTTP header
     // - the supplied header name is case-insensitive
     // - but rather call RemoteIP or UserAgent properties instead of
-    // InHeader['remoteip'] or InHeader['User-Agent']
+    // InHeader['RemoteIP'] or InHeader['User-Agent'] since those values may
+    // have been set directly from the socket layer and not within headers
     property InHeader[const HeaderName: RawUtf8]: RawUtf8
       read GetInHeader;
     /// retrieve an incoming HTTP cookie value
     // - cookie name are case-sensitive
     property InCookie[const CookieName: RawUtf8]: RawUtf8
       read GetInCookie write SetInCookie;
+    /// quickly check if an incoming HTTP cookie value has been transmitted
+    function InCookieExists(const CookieName: RawUtf8): boolean;
+      {$ifdef HASINLINE} inline; {$endif}
     /// define a new 'name=value' cookie to be returned to the client
     // - if not void, TRestServer.Uri() will define a new 'set-cookie: ...'
     // header in Call^.OutHead
@@ -1340,6 +1381,10 @@ type
     // $ '; Path=/'+Server.Model.Root+'; HttpOnly'
     property OutSetCookie: RawUtf8
       read fOutSetCookie write SetOutSetCookie;
+    /// define a new 'name=value' cookie to be returned to the client
+    // - you can use COOKIE_EXPIRED as value to delete a cookie in the browser
+    property OutCookie[const CookieName: RawUtf8]: RawUtf8
+      write SetOutCookie;
     /// low-level HTTP header merge of the OutSetCookie value
     procedure OutHeadFromCookie; virtual;
     /// low-level wrapper method around GetTickCount64 to cache the value
@@ -1865,7 +1910,7 @@ begin
     exit;
   if aCallback = nil then
     EServiceException.RaiseUtf8('%.Redirect(nil)', [self]);
-  if not aCallback.GetInterface(fFakeCallback.Factory.InterfaceIID, dest) then
+  if not aCallback.GetInterface(fFakeCallback.Factory.InterfaceGuid^, dest) then
     EServiceException.RaiseUtf8('%.Redirect [%]: % is not a %',
       [self, fFakeCallback.fName, aCallback, fFakeCallback.Factory.InterfaceName]);
   Redirect(dest, aMethodsNames, aSubscribe);
@@ -1973,7 +2018,8 @@ begin
     exec := TInterfaceMethodExecute.Create(fFactory, @aMethod,
       [optIgnoreException]); // to use exec.ExecutedInstancesFailed
     try
-      result := exec.ExecuteJson(instances, pointer('[' + aParams + ']'), nil);
+      result := exec.ExecuteJson(instances,
+        pointer(Join(['[', aParams, ']'])), nil);
       if exec.ExecutedInstancesFailed <> nil then
         for i := length(exec.ExecutedInstancesFailed) - 1 downto 0 do
           if exec.ExecutedInstancesFailed[i] <> '' then
@@ -2032,10 +2078,10 @@ procedure TRest.InternalLog(const Text: RawUtf8; Level: TSynLogLevel);
 begin
   if (self <> nil) and
      (Level in fLogLevel) then
-    fLogFamily.Add.Log(Level, Text, self);
+    fLogFamily.Add.LogText(Level, pointer(Text), self);
 end;
 
-procedure TRest.InternalLog(const Format: RawUtf8; const Args: array of const;
+procedure TRest.InternalLog(Format: PUtf8Char; const Args: array of const;
   Level: TSynLogLevel);
 begin
   if (self <> nil) and
@@ -2043,18 +2089,40 @@ begin
     fLogFamily.Add.Log(Level, Format, Args, self);
 end;
 
-function TRest.Enter(const TextFmt: RawUtf8; const TextArgs: array of const;
+procedure TRest.InternalLogResponse(const aContent: RawByteString;
+  const aContext: shortstring; Level: TSynLogLevel);
+begin // caller checked that (self <> nil) and (Level in fLogLevel)
+  InternalLogResponse(pointer(aContent), length(aContent), aContext, Level);
+end;
+
+procedure TRest.InternalLogResponse(aContent: PUtf8Char; aContentLen: PtrInt;
+  const aContext: shortstring; Level: TSynLogLevel);
+var
+  max: PtrInt;
+begin // caller checked that (self <> nil) and (Level in fLogLevel)
+  if (aContent = nil) or
+     (aContentLen <= 0) then
+    exit;
+  max := fLogResponseMaxBytes;
+  if max < MAX_LOGESCAPE then
+    // safe ouput of the content, with proper escape if needed (e.g. binary)
+    fLogFamily.Add.LogEscape(
+      Level, '%', [aContext], aContent, aContentLen, self, max)
+  else
+    // direct huge UTF-8 or escaped content output - without aContext
+    fLogFamily.Add.LogText(Level, aContent, aContentLen, self, max);
+end;
+
+function TRest.Enter(TextFmt: PUtf8Char; const TextArgs: array of const;
   aInstance: TObject): ISynLog;
 begin
-  if (self <> nil) and
-     (sllEnter in fLogLevel) then
-  begin
-    if aInstance = nil then
-      aInstance := self;
-    result := fLogClass.Enter(TextFmt, TextArgs, aInstance);
-  end
-  else
-    result := nil;
+  result := nil;
+  if (self = nil) or
+     not (sllEnter in fLogLevel) then
+    exit;
+  if aInstance = nil then
+    aInstance := self;
+  fLogClass.EnterLocal(result, TextFmt, TextArgs, aInstance);
 end;
 
 function TRest.GetServerTimestamp(tix64: Int64): TTimeLog;
@@ -2084,15 +2152,24 @@ begin
     fServerTimestampOffset := 0.000001; // retrieve server date/time only once
 end;
 
+procedure TRest.CheckAcquireExecutionCommand(Cmd: TRestServerUriContextCommand;
+  Context: PUtf8Char);
+begin
+  if not (Cmd in [low(fAcquireExecution) .. high(fAcquireExecution)]) then
+    ERestException.RaiseUtf8('Unexpected %.%(%)', [self, Context, ToText(Cmd)^]);
+end;
+
 function TRest.GetAcquireExecutionMode(
   Cmd: TRestServerUriContextCommand): TRestServerAcquireMode;
 begin
+  CheckAcquireExecutionCommand(Cmd, 'GetAcquireExecutionMode');
   result := fAcquireExecution[Cmd].Mode;
 end;
 
 procedure TRest.SetAcquireExecutionMode(
   Cmd: TRestServerUriContextCommand; Value: TRestServerAcquireMode);
 begin
+  CheckAcquireExecutionCommand(Cmd, 'SetAcquireExecutionMode');
   {$ifdef OSWINDOWS}
   if Assigned(ServiceSingle) and
      (Value = amMainThread) then
@@ -2106,12 +2183,14 @@ end;
 function TRest.GetAcquireExecutionLockedTimeOut(
   Cmd: TRestServerUriContextCommand): cardinal;
 begin
+  CheckAcquireExecutionCommand(Cmd, 'GetAcquireExecutionLockedTimeOut');
   result := fAcquireExecution[Cmd].LockedTimeOut;
 end;
 
 procedure TRest.SetAcquireExecutionLockedTimeOut(
   Cmd: TRestServerUriContextCommand; Value: cardinal);
 begin
+  CheckAcquireExecutionCommand(Cmd, 'SetAcquireExecutionLockedTimeOut');
   fAcquireExecution[Cmd].LockedTimeOut := Value;
 end;
 
@@ -2121,12 +2200,13 @@ var
 begin
   if PClass(self)^ = TRest then
     ERestException.RaiseUtf8('Abstract %.Create', [self]);
-  fPrivateGarbageCollector := TSynObjectList.Create;
+  fPrivateGarbageCollector := TSynObjectListLocked.Create;
   fModel := aModel;
-  for cmd := Low(cmd) to high(cmd) do
+  for cmd := low(fAcquireExecution) to high(fAcquireExecution) do
     fAcquireExecution[cmd] := TRestAcquireExecution.Create;
   AcquireWriteMode := amLocked;
-  AcquireWriteTimeOut := 5000; // default 5 seconds
+  AcquireWriteTimeOut := 5000;  // default 5 seconds
+  fLogResponseMaxBytes := 2048; // for InternalLogResponse()
   SetLogClass(TSynLog);
   fRun := TRestRunThreads.Create(self);
 end;
@@ -2150,14 +2230,14 @@ begin
     // abort any (unlikely) pending TRestBatch
     fOrm.AsyncBatchStop(nil);
   fRun.Shutdown; // notify ASAP
-  for cmd := Low(cmd) to high(cmd) do
+  for cmd := low(fAcquireExecution) to high(fAcquireExecution) do
     FreeAndNilSafe(fAcquireExecution[cmd]); // calls fOrmInstance.OnEndThread
   FreeAndNilSafe(fServices);
   FreeAndNilSafe(fRun); // after fAcquireExecution+fServices
   if fOrmInstance <> nil then
     if (fOrm = nil) or
        (fOrmInstance.RefCount <> 1) then
-      ERestException.RaiseUtf8('%.Destroy: %.RefCount=%',
+      ERestException.RaiseUtf8('%.Destroy: %.RefCount=%: try to fix IRestOrm',
         [self, fOrmInstance, fOrmInstance.RefCount])
     else
       // avoid dubious GPF
@@ -3066,7 +3146,7 @@ begin
   if aThreadName <> '' then
     aName := aThreadName
   else
-    FormatUtf8('% %', [fRest.Model.Root, ClassType], aName);
+    Make([fRest.Model.Root, ' ', ClassType], aName);
   inherited Create(aName,
     fRest.fRun.BeginCurrentThread, fRest.fRun.EndCurrentThread, aStats);
 end;
@@ -3151,7 +3231,7 @@ begin
         try
           if ({%H-}log = nil) and
              (fRest.fLogClass <> nil) then
-            log := fRest.fLogClass.Enter('AsyncBatchExecute % count=%',
+            fRest.fLogClass.EnterLocal(log, 'AsyncBatchExecute % count=%',
               [table, count], self);
           batch.PrepareForSending(json);
         finally
@@ -3230,8 +3310,8 @@ begin
   if (self = nil) or
      (fBackgroundBatch = nil) then
     exit;
-  log := fRest.fLogClass.Enter('AsyncBatchStop(%)', [Table], self);
-  start := GetTickCount64;
+  fRest.fLogClass.EnterLocal(log, 'AsyncBatchStop(%)', [Table], self);
+  start := mormot.core.os.GetTickCount64;
   timeout := start + 5000;
   if Table = nil then
   begin
@@ -3241,7 +3321,7 @@ begin
     repeat
       SleepHiRes(1); // wait for all batchs to be released
     until (fBackgroundBatch = nil) or
-          (GetTickCount64 > timeout);
+          (mormot.core.os.GetTickCount64 > timeout);
     result := Disable(AsyncBatchExecute);
   end
   else
@@ -3371,7 +3451,7 @@ var
 begin
   if not RecordLoad(call, Msg, TypeInfo(TInterfacedObjectAsyncCall)) then
     exit; // invalid message (e.g. periodic execution)
-  log := fRest.fLogClass.Enter('AsyncBackgroundExecute I% %',
+  fRest.fLogClass.EnterLocal(log, 'AsyncBackgroundExecute I% %',
     [call.Method^.InterfaceDotMethodName, call.Params], self);
   exec := TInterfaceMethodExecute.Create(call.Factory, call.Method, []);
   try
@@ -3585,32 +3665,51 @@ end;
 
 { TAuthUser }
 
-class function TAuthUser.ComputeHashedPassword(const aPasswordPlain,
+class function TAuthUser.ComputeHashedPassword(const aLogonName, aPasswordPlain,
   aHashSalt: RawUtf8; aHashRound: integer): RawUtf8;
 var
-  dig: TSha256Digest;
+  dig: THash512Rec;
+  algo: TDigestAlgo absolute aHashRound;
 begin
-  if aHashSalt = '' then // use FormatUtf8() to circumvent FPC string issue
-    result := Sha256(FormatUtf8('salt%', [aPasswordPlain]))
+  if (aHashSalt = '') or
+     (aHashRound = 0) then
+    result := Sha256U(['salt', aPasswordPlain])
+  else if aHashRound > 0 then
+  begin
+    Pbkdf2HmacSha256(aPasswordPlain, aHashSalt, aHashRound, dig.Lo);
+    result := Sha256DigestToString(dig.Lo);
+  end
   else
   begin
-    Pbkdf2HmacSha256(aPasswordPlain, aHashSalt, aHashRound, dig);
-    result := Sha256DigestToString(dig);
-    FillCharFast(dig, SizeOf(dig), 0);
+    aHashRound := -aHashRound; // aHashRound < 0 = - ord(TDigestAlgo)
+    if aHashRound > ord(high(TDigestAlgo)) then
+      algo := daSHA256;
+    BinToHexLower(@dig, // aHashSalt = DIGEST-HA0 realm
+      DigestHA0(algo, aLogonName, aHashSalt, aPasswordPlain, dig), result);
   end;
+  FillCharFast(dig, SizeOf(dig), 0);
 end;
 
 procedure TAuthUser.SetPasswordPlain(const Value: RawUtf8);
 begin
   if self <> nil then
-    PasswordHashHexa := ComputeHashedPassword(Value);
+    fPasswordHashHexa := ComputeHashedPassword(fLogonName, Value);
 end;
 
 procedure TAuthUser.SetPassword(const aPasswordPlain, aHashSalt: RawUtf8;
   aHashRound: integer);
 begin
   if self <> nil then
-    PasswordHashHexa := ComputeHashedPassword(aPasswordPlain, aHashSalt, aHashRound);
+    fPasswordHashHexa := ComputeHashedPassword(
+      fLogonName, aPasswordPlain, aHashSalt, aHashRound);
+end;
+
+procedure TAuthUser.SetPasswordDigest(const aPasswordPlain, aRealm: RawUtf8;
+  aAlgo: TDigestAlgo);
+begin
+  if self <> nil then
+    fPasswordHashHexa := ComputeHashedPassword(
+      fLogonName, aPasswordPlain, aRealm, -ord(aAlgo));
 end;
 
 function TAuthUser.CanUserLog(Ctxt: TObject): boolean;
@@ -3660,8 +3759,15 @@ begin
 end;
 
 function TRestUriParams.OutBodyTypeIsJson(GuessJsonIfNoneSet: boolean): boolean;
+var
+  ct: PUtf8Char;
+  len: PtrInt;
 begin
-  result := IdemPChar(pointer(OutBodyType(GuessJsonIfNoneSet)), JSON_CONTENT_TYPE_UPPER);
+  ct := FindNameValuePointer(pointer(OutHead), HEADER_CONTENT_TYPE_UPPER, len);
+  if ct = nil then
+    result := GuessJsonIfNoneSet
+  else
+    result := IsContentTypeJson(ct, len);
 end;
 
 function TRestUriParams.Header(UpperName: PAnsiChar): RawUtf8;
@@ -3669,21 +3775,44 @@ begin
   FindNameValue(InHead, UpperName, result);
 end;
 
-function TRestUriParams.HeaderOnce(var Store: RawUtf8; UpperName: PAnsiChar): RawUtf8;
+procedure TRestUriParams.HeaderOnce(var Store, Dest: RawUtf8; UpperName: PAnsiChar);
 begin
   if (Store = '') and
      (@self <> nil) then
   begin
-    FindNameValue(InHead, UpperName, result);
-    if result = '' then
+    FindNameValue(InHead, UpperName, Dest);
+    if Dest = '' then
       Store := NULL_STR_VAR // flag to ensure header is parsed only once
     else
-      Store := result;
+      Store := Dest;
   end
   else if pointer(Store) = pointer(NULL_STR_VAR) then
-    result := ''
+    Dest := ''
   else
-    result := Store;
+    Dest := Store;
+end;
+
+procedure TRestUriParams.GetRemoteIP(var Dest: RawUtf8);
+begin
+  HeaderOnce(LowLevelRemoteIP, Dest, HEADER_REMOTEIP_UPPER);
+end;
+
+function TRestUriParams.RemoteIPNotLocal: PUtf8Char;
+begin
+  result := pointer(LowLevelRemoteIP); // usually already set
+  if (result <> nil) and
+     IsLocalHost(result) then // '127.x.x.x' or '::1'
+    result := nil;
+end;
+
+procedure TRestUriParams.GetUserAgent(var Dest: RawUtf8);
+begin
+  HeaderOnce(LowLevelUserAgent, Dest, 'USER-AGENT: ');
+end;
+
+procedure TRestUriParams.GetAuthenticationBearerToken(var Dest: RawUtf8);
+begin
+  HeaderOnce(LowLevelBearerToken, Dest, HEADER_BEARER_UPPER);
 end;
 
 
@@ -3693,7 +3822,7 @@ end;
 
 function TRestUriContext.GetUserAgent: RawUtf8;
 begin
-  result := fCall^.HeaderOnce(fCall^.LowLevelUserAgent, 'USER-AGENT: ');
+  fCall^.GetUserAgent(result);
 end;
 
 function TRestUriContext.ClientKind: TRestClientKind;
@@ -3723,22 +3852,20 @@ end;
 
 procedure TRestUriContext.SetRemoteIP(var IP: RawUtf8);
 begin
-  IP := fCall^.HeaderOnce(fCall^.LowLevelRemoteIP, HEADER_REMOTEIP_UPPER);
+  fCall^.GetRemoteIP(IP);
 end;
 
 function TRestUriContext.RemoteIPNotLocal: PUtf8Char;
 begin
-  if (self <> nil) and
-     (fCall^.LowLevelRemoteIP <> '') and
-     (fCall^.LowLevelRemoteIP <> '127.0.0.1') then
-    result := pointer(fCall^.LowLevelRemoteIP)
+  if self <> nil then
+    result := fCall^.RemoteIPNotLocal
   else
     result := nil;
 end;
 
 function TRestUriContext.AuthenticationBearerToken: RawUtf8;
 begin
-  result := fCall^.HeaderOnce(fCall^.LowLevelBearerToken, HEADER_BEARER_UPPER);
+  fCall^.GetAuthenticationBearerToken(result);
 end;
 
 function TRestUriContext.AuthenticationCheck(jwt: TJwtAbstract): boolean;
@@ -3756,7 +3883,7 @@ end;
 
 function TRestUriContext.GetInHeader(const HeaderName: RawUtf8): RawUtf8;
 var
-  up: array[byte] of AnsiChar;
+  up: TByteToAnsiChar;
 begin
   if self = nil then
     result := ''
@@ -3765,7 +3892,7 @@ begin
   else
   begin
     PWord(UpperCopy255(up{%H-}, HeaderName))^ := ord(':');
-    FindNameValue(fCall.InHead, up, result); // = fCall^.Header(up)
+    FindNameValue(fCall^.InHead, up, result); // = fCall^.Header(up)
     if result <> '' then
     begin
       fInHeaderLastName := HeaderName;
@@ -3775,10 +3902,16 @@ begin
 end;
 
 function TRestUriContext.InputCookies: PHttpCookies;
+var
+  p: PUtf8Char;
 begin
   result := @fInputCookies;
-  if not result^.Parsed then
-    result^.ParseServer(fCall.InHead);
+  if fInputCookiesParsed then
+    exit;
+  fInputCookiesParsed := true;
+  p := FindNameValue(pointer(fCall^.InHead), 'COOKIE: ');
+  if p <> nil then
+    result^.ParseServer(p - 8);
 end;
 
 function TRestUriContext.GetInCookie(const CookieName: RawUtf8): RawUtf8;
@@ -3786,7 +3919,13 @@ begin
   if self = nil then
     result := ''
   else
-    result := InputCookies^.GetCookie(CookieName);
+    InputCookies^.RetrieveCookie(CookieName, result);
+end;
+
+function TRestUriContext.InCookieExists(const CookieName: RawUtf8): boolean;
+begin
+  result := (self <> nil) and
+            (InputCookies^.FindCookie(CookieName) <> nil);
 end;
 
 procedure TRestUriContext.SetInCookie(const CookieName, CookieValue: RawUtf8);
@@ -3810,15 +3949,30 @@ begin
   fOutSetCookie := c;
 end;
 
+procedure TRestUriContext.SetOutCookie(const aName, aValue: RawUtf8);
+var
+  n: RawUtf8;
+begin
+  n := StringReplaceChars(aName, '/', '_'); // TOrmModel.Root did allow '/'
+  if not PropNameValid(pointer(n)) then
+     ERestException.RaiseUtf8('%.SetOutCookie(%): invalid name', [self, aName]);
+  SetOutSetCookie(Join([n, '=', aValue]));
+end;
+
 procedure TRestUriContext.OutHeadFromCookie;
 begin
   AppendLine(fCall.OutHead, ['Set-Cookie: ', fOutSetCookie]);
 end;
 
 function TRestUriContext.ContentTypeIsJson: boolean;
+var
+  p: PUtf8Char;
 begin
-  result := (fInputContentType = '') or
-            IdemPChar(pointer(fInputContentType), JSON_CONTENT_TYPE_UPPER);
+  p := pointer(fInputContentType);
+  if p = nil then
+    result := true
+  else
+    result := IsContentTypeJson(p, PStrLen(p - _STRLEN)^);
 end;
 
 function TRestUriContext.InputAsMultiPart(
@@ -3855,7 +4009,7 @@ begin
   server := ServerHash;
   if server = '' then
     server := crc32cUtf8ToHex(Call^.OutBody);
-  server := '"' + server + '"';
+  server := Join(['"', server, '"']);
   if client <> server then
     AppendLine(Call^.OutHead, ['ETag: ', server])
   else
@@ -3949,19 +4103,17 @@ begin
       AppendLine(fCall^.OutHead, ['Cache-Control: max-age=', CacheControlMaxAgeSec]);
     fCall^.OutStatus := HTTP_SUCCESS;
     if Handle304NotModified and
-       FileHttp304NotModified(size, time, fCall^.InHead, fCall^.OutHead) then
+       FileHttp304NotModified(size, time, pointer(fCall^.InHead), fCall^.OutHead) then
     begin
       fCall^.OutStatus := HTTP_NOTMODIFIED;
       exit;
     end;
     // Content-Type: appears twice: 1st to notify static file, 2nd for mime type
     if not ExistsIniName(pointer(fCall^.OutHead), HEADER_CONTENT_TYPE_UPPER) then
-    begin
       if ContentType <> '' then
-        AppendLine(fCall^.OutHead, [HEADER_CONTENT_TYPE + ContentType])
+        AppendLine(fCall^.OutHead, [HEADER_CONTENT_TYPE, ContentType])
       else
-        AppendLine(fCall^.OutHead, [GetMimeContentTypeHeader('', FileName)]);
-    end;
+        AppendLine(fCall^.OutHead, [HEADER_CONTENT_TYPE, GetMimeContentType('', FileName)]);
     Prepend(fCall^.OutHead, [STATICFILE_CONTENT_TYPE_HEADER + #13#10]);
     StringToUtf8(FileName, fCall^.OutBody); // body=filename for STATICFILE_CONTENT
     if AttachmentFileName <> '' then
@@ -3978,7 +4130,7 @@ var
   fileName: TFileName;
 begin
   if DefaultFileName <> '' then
-    fileName := IncludeTrailingPathDelimiter(FolderName) + DefaultFileName;
+    fileName := MakePath([FolderName, DefaultFileName]);
   ReturnFile(fileName,
     Handle304NotModified, '', '', Error404Redirect, CacheControlMaxAgeSec);
 end;
@@ -3990,7 +4142,7 @@ begin
     fCall^.OutStatus := HTTP_MOVEDPERMANENTLY
   else
     fCall^.OutStatus := HTTP_TEMPORARYREDIRECT;
-  fCall^.OutHead := 'Location: ' + NewLocation;
+  Join(['Location: ', NewLocation], fCall^.OutHead);
 end;
 
 procedure TRestUriContext.Returns(const NameValuePairs: array of const;
@@ -4017,14 +4169,14 @@ begin
       AddShort('{"result":');
       if h = 0 then
         // result is one value
-        AddJsonEscape(Values[0])
+        AddJsonEscapeVarRec(@Values[0])
       else
       begin
         // result is one array of values
         AddDirect('[');
         i := 0;
         repeat
-          AddJsonEscape(Values[i]);
+          AddJsonEscapeVarRec(@Values[i]);
           if i = h then
             break;
           AddComma;
@@ -4075,10 +4227,15 @@ begin
   end;
 end;
 
+function TRestUriContext.StatusCodeToText(Code: cardinal): PRawUtf8;
+begin
+  result := mormot.core.text.StatusCodeToText(Code); // standard English
+end;
+
 procedure TRestUriContext.Error(const ErrorMessage: RawUtf8;
   Status, CacheControlMaxAgeSec: integer);
 var
-  msg: RawUtf8;
+  msg: PRawUtf8;
   temp: TTextWriterStackBuffer;
 begin
   fCall^.OutStatus := Status;
@@ -4088,33 +4245,32 @@ begin
     fCall^.OutBody := ErrorMessage;
     if CacheControlMaxAgeSec <> 0 then
       // Cache-Control is ignored for errors
-      fCall^.OutHead := 'Cache-Control: max-age=' +
-        UInt32ToUtf8(CacheControlMaxAgeSec);
+      FormatUtf8('Cache-Control: max-age=%', [CacheControlMaxAgeSec], fCall^.OutHead);
     exit;
   end;
   if ErrorMessage = '' then
-    StatusCodeToReason(Status, msg)
+    msg := StatusCodeToText(Status) // customizable method (also in fServer)
   else
-    msg := ErrorMessage;
+    msg := @ErrorMessage;
   with TJsonWriter.CreateOwnedStream(temp) do
   try
     AddShort('{'#13#10'"errorCode":');
-    Add(fCall^.OutStatus);
-    if (msg <> '') and
-       (msg[1] = '{') and
-       (msg[length(msg)] = '}') then
+    Add(Status);
+    if (msg^ <> '') and
+       (msg^[1] = '{') and
+       (msg^[length(msg^)] = '}') then
     begin
       // detect and append the error message as JSON object
       AddShort(','#13#10'"error":'#13#10);
-      AddNoJsonEscape(pointer(msg), length(msg));
-      AddShorter(#13#10'}');
+      AddString(msg^);
+      AddDirect(#13, #10, '}');
     end
     else
     begin
       // regular error message as JSON text
       AddShort(','#13#10'"errorText":"');
-      AddJsonEscape(pointer(msg));
-      AddShorter('"'#13#10'}');
+      AddJsonEscape(pointer(msg^));
+      AddDirect('"', #13, #10, '}');
     end;
     SetText(fCall^.OutBody);
   finally
@@ -4132,12 +4288,12 @@ constructor TRestThread.Create(aRest: TRest; aOwnRest, aCreateSuspended: boolean
 begin
   if aRest = nil then
     EOrmException.RaiseUtf8('%.Create(aRest=nil)', [self]);
-  fSafe.Init;
+  fSafe.InitFromClass;
   fRest := aRest;
   fOwnRest := aOwnRest;
   if fThreadName = '' then
     // if thread name has not been set by the overriden constructor
-    FormatUtf8('% %', [self, fRest.Model.Root], fThreadName);
+    Make([self, ' ', fRest.Model.Root], fThreadName);
   fEvent := TSynEvent.Create;
   inherited Create(aCreateSuspended);
 end;
@@ -4177,13 +4333,13 @@ begin
   if (self = nil) or
      Terminated then
     exit;
-  endtix := GetTickCount64 + MS;
+  endtix := mormot.core.os.GetTickCount64 + MS;
   repeat
     fEvent.WaitFor(MS); // warning: can wait up to 15 ms more on Windows
     if Terminated then
       exit;
   until (MS < 32) or
-        (GetTickCount64 >= endtix);
+        (mormot.core.os.GetTickCount64 >= endtix);
   result := false; // normal delay expiration
 end;
 
@@ -4716,8 +4872,7 @@ begin
       firstNewIndex := fHistoryUncompressedCount - firstOldIndex;
       firstNewOffset := Length(fHistoryUncompressed) - firstOldOffset;
       for i := 0 to fHistoryAddCount - 1 do
-        newOffset[firstNewIndex + i] :=
-          fHistoryAddOffset[i] + firstNewOffset;
+        newOffset[firstNewIndex + i] := fHistoryAddOffset[i] + firstNewOffset;
       // write header
       fHistoryTable.OrmProps.SaveBinaryHeader(W);
       W.WriteVarUInt32Array(newOffset, length(newOffset), wkOffsetU);

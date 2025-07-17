@@ -142,10 +142,10 @@ type
     procedure DoDisconnect(Context: TWebSocketAsyncConnection); virtual;
   public
     /// create an event-driven HTTP/WebSockets Server
-    constructor Create(const aPort: RawUtf8;
-      const OnStart, OnStop: TOnNotifyThread; const ProcessName: RawUtf8;
-      ServerThreadPoolCount: integer = 32; KeepAliveTimeOut: integer = 30000;
-      ProcessOptions: THttpServerOptions = []); override;
+    constructor Create(const aPort: RawUtf8; const OnStart, OnStop: TOnNotifyThread;
+      const ProcessName: RawUtf8; ServerThreadPoolCount: integer = 32;
+      KeepAliveTimeOut: integer = 30000; ProcessOptions: THttpServerOptions = [];
+      aLog: TSynLogClass = nil); override;
     /// finalize the HTTP/WebSockets Server
     destructor Destroy; override;
     /// allow to customize the WebSockets processing
@@ -211,7 +211,8 @@ type
     constructor Create(const aPort: RawUtf8; const OnStart, OnStop: TOnNotifyThread;
       const aProcessName: RawUtf8; ServerThreadPoolCount: integer;
       const aWebSocketsURI, aWebSocketsEncryptionKey: RawUtf8;
-      aWebSocketsAjax: boolean; ProcessOptions: THttpServerOptions); reintroduce;
+      aWebSocketsAjax: boolean; ProcessOptions: THttpServerOptions;
+      aLog: TSynLogClass); reintroduce;
     /// defines the WebSockets protocols to be used for this Server
     // - i.e. 'synopsebin' and optionally 'synopsejson' modes
     // - if aWebSocketsURI is '', any URI would potentially upgrade; you can
@@ -347,7 +348,7 @@ end;
 
 procedure TWebSocketAsyncConnection.OnClose;
 begin
-  inherited OnClose; // set fClosed flag
+  inherited OnClose; // set fClosed flag and check ifProcessing
   if fProcess = nil then
     exit;
   fProcess.Shutdown({waitforpong=}true); // send focConnectionClose
@@ -411,8 +412,7 @@ var
 begin
   start := 0;
   elapsed := 0;
-  if Assigned(fLog) and
-     (sllTrace in fLog.Family.Level) then
+  if fLogClass.HasLevel([sllTrace]) then
     QueryPerformanceMicroSeconds(start); // we monitor frame sending timing
   fOutgoingSafe.Lock;
   try
@@ -599,7 +599,7 @@ end;
 constructor TWebSocketAsyncServer.Create(const aPort: RawUtf8;
   const OnStart, OnStop: TOnNotifyThread; const ProcessName: RawUtf8;
   ServerThreadPoolCount: integer; KeepAliveTimeOut: integer;
-  ProcessOptions: THttpServerOptions);
+  ProcessOptions: THttpServerOptions; aLog: TSynLogClass);
 begin
   // initialize protocols and connections
   if fConnectionClass = nil then
@@ -616,8 +616,8 @@ begin
   if hsoLogVerbose in ProcessOptions then
     fSettings.SetFullLog;
   // start the HTTP/WebSockets server threads
-  inherited Create(aPort, OnStart, OnStop, ProcessName, ServerThreadPoolCount,
-    KeepAliveTimeOut, ProcessOptions);
+  inherited Create(aPort, OnStart, OnStop, ProcessName,
+    ServerThreadPoolCount, KeepAliveTimeOut, ProcessOptions, aLog);
 end;
 
 destructor TWebSocketAsyncServer.Destroy;
@@ -626,7 +626,7 @@ var
   n: integer;
   log: ISynLog;
 begin
-  log := TSynLog.Enter(self, 'Destroy');
+  TSynLog.EnterLocal(log, self, 'Destroy');
   // notify at once all client connections - don't wait for answer
   closing.opcode := focConnectionClose;
   closing.content := [];
@@ -717,11 +717,12 @@ end;
 
 constructor TWebSocketAsyncServerRest.Create(const aPort: RawUtf8;
   const OnStart, OnStop: TOnNotifyThread; const aProcessName: RawUtf8;
-  ServerThreadPoolCount: integer; const aWebSocketsURI, aWebSocketsEncryptionKey: RawUtf8;
-  aWebSocketsAjax: boolean; ProcessOptions: THttpServerOptions);
+  ServerThreadPoolCount: integer; const aWebSocketsURI,
+  aWebSocketsEncryptionKey: RawUtf8; aWebSocketsAjax: boolean;
+  ProcessOptions: THttpServerOptions; aLog: TSynLogClass);
 begin
-  inherited Create(aPort, OnStart, OnStop, aProcessName, ServerThreadPoolCount,
-    {alive=}30000, ProcessOptions);
+  inherited Create(aPort, OnStart, OnStop, aProcessName,
+    ServerThreadPoolCount, {alive=}30000, ProcessOptions, aLog);
   WebSocketsEnable(aWebSocketsURI, aWebSocketsEncryptionKey, aWebSocketsAjax);
 end;
 

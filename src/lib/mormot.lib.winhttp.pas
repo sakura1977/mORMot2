@@ -143,7 +143,7 @@ type
   end;
 
   // the req* values identify Request Headers, and resp* Response Headers
-  THttpHeader = (
+  THttpApiHeader = (
     reqCacheControl,
     reqConnection,
     reqDate,
@@ -287,7 +287,7 @@ type
     // Reserved, must be nil
     pTrailers: pointer;
     // Known headers
-    KnownHeaders: array[low(THttpHeader)..respWwwAuthenticate] of HTTP_KNOWN_HEADER;
+    KnownHeaders: array[low(THttpApiHeader)..respWwwAuthenticate] of HTTP_KNOWN_HEADER;
   end;
 
   HTTP_REQUEST_HEADERS = record
@@ -301,7 +301,7 @@ type
     pTrailers: pointer;
     // Known headers
     // - warning: don't assume pRawValue is #0 terminated - use RawValueLength
-    KnownHeaders: array[low(THttpHeader)..reqUserAgent] of HTTP_KNOWN_HEADER;
+    KnownHeaders: array[low(THttpApiHeader)..reqUserAgent] of HTTP_KNOWN_HEADER;
   end;
 
   HTTP_BYTE_RANGE = record
@@ -950,7 +950,7 @@ const
   // flag which can be used by HttpRemoveUrlFromUrlGroup()
   HTTP_URL_FLAG_REMOVE_ALL = 1;
 
-  HTTP_KNOWNHEADERS: array[low(THttpHeader)..reqUserAgent] of string[19] = (
+  HTTP_KNOWNHEADERS: array[low(THttpApiHeader)..reqUserAgent] of string[19] = (
     'Cache-Control',
     'Connection',
     'Date',
@@ -1186,7 +1186,7 @@ type
 
 const
   hHttpApi2First = hCancelHttpRequest;
-  HttpNames: array[THttpApis] of PChar = (
+  HttpNames: array[THttpApis] of PAnsiChar = (
     'HttpInitialize',
     'HttpTerminate',
     'HttpCreateHttpHandle',
@@ -1592,7 +1592,7 @@ const
   hWebSocketApiFirst = hWebSocketCompleteUpgrade;
 
 const
-  WinHttpNames: array[TWinHttpApis] of PChar = (
+  WinHttpNames: array[TWinHttpApis] of PAnsiChar = (
     'WinHttpOpen',
     'WinHttpSetStatusCallback',
     'WinHttpConnect',
@@ -1804,7 +1804,7 @@ type
 
 const
   WEBSOCKET_DLL = 'websocket.dll';
-  WebSocketNames: array[TWebSocketApis] of PChar = (
+  WebSocketNames: array[TWebSocketApis] of PAnsiChar = (
     'WebSocketAbortHandle',
     'WebSocketBeginClientHandshake',
     'WebSocketBeginServerHandshake',
@@ -1926,7 +1926,7 @@ begin
   end
   else
     aRoot := '/'; // allow for instance 'http://*:2869/'
-  aRoot := NetConcat([HTTPS_TEXT[Https], aDomainName, ':', aPort, aRoot]);
+  aRoot := Join([HTTPS_TEXT[Https], aDomainName, ':', aPort, aRoot]);
   Utf8ToSynUnicode(aRoot, result);
 end;
 
@@ -1939,14 +1939,14 @@ function RetrieveHeadersAndGetRemoteIPConnectionID(const Request: HTTP_REQUEST;
   var ConnectionID: QWord): RawUtf8;
 var
   i, L, Lip: integer;
-  H: THttpHeader;
+  H: THttpApiHeader;
   P: PHTTP_UNKNOWN_HEADER;
   D: PAnsiChar;
   V: PUtf8Char;
 begin
   assert(low(HTTP_KNOWNHEADERS) = low(Request.Headers.KnownHeaders));
   assert(high(HTTP_KNOWNHEADERS) = high(Request.Headers.KnownHeaders));
-  // compute remote IP
+  // compute remote IP from 'X-Real-IP' or 'X-Forwarded-For'
   L := length(RemoteIPHeadUp);
   if L <> 0 then
   begin
@@ -2000,8 +2000,7 @@ begin
       inc(P);
     end;
   // set headers content
-  FastSetString(result{%H-}, L);
-  D := pointer(result);
+  D := FastSetString(result{%H-}, L);
   for H := low(HTTP_KNOWNHEADERS) to high(HTTP_KNOWNHEADERS) do
     if Request.Headers.KnownHeaders[H].RawValueLength <> 0 then
     begin
@@ -2018,17 +2017,22 @@ begin
   P := Request.Headers.pUnknownHeaders;
   if P <> nil then
     for i := 1 to Request.Headers.UnknownHeaderCount do
-    begin
-      MoveFast(P^.pName^, D^, P^.NameLength);
-      inc(D, P^.NameLength);
-      PWord(D)^ := ord(':') + ord(' ') shl 8;
-      inc(D, 2);
-      MoveFast(P^.pRawValue^, D^, P^.RawValueLength);
-      inc(D, P^.RawValueLength);
-      inc(P);
-      PWord(D)^ := 13 + 10 shl 8;
-      inc(D, 2);
-    end;
+      if (P^.NameLength <> 8) or // filter unexpected 'RemoteIP:' from client
+         ((PCardinalArray(P^.pName)[0] or $20202020) <>
+           ord('r') + ord('e') shl 8 + ord('m') shl 16 + ord('o') shl 24) or
+         ((PCardinalArray(P^.pName)[1] or $20202020) <>
+           ord('t') + ord('e') shl 8 + ord('i') shl 16 + ord('p') shl 24) then
+      begin
+        MoveFast(P^.pName^, D^, P^.NameLength);
+        inc(D, P^.NameLength);
+        PWord(D)^ := ord(':') + ord(' ') shl 8;
+        inc(D, 2);
+        MoveFast(P^.pRawValue^, D^, P^.RawValueLength);
+        inc(D, P^.RawValueLength);
+        inc(P);
+        PWord(D)^ := 13 + 10 shl 8;
+        inc(D, 2);
+      end;
   if Lip <> 0 then
   begin
     MoveFast(REMOTEIP_HEADER[1], D^, REMOTEIP_HEADERLEN);
@@ -2036,7 +2040,11 @@ begin
     MoveFast(pointer(RemoteIP)^, D^, Lip);
     inc(D, Lip);
     PWord(D)^ := 13 + 10 shl 8;
+    inc(D, 2);
   end;
+  Lip := D - pointer(result);
+  if Lip <> L then // e.g. if external 'RemoteIP:' was filtered
+    FakeLength(result, Lip);
 end;
 
 procedure HttpApiInitialize;
@@ -2057,7 +2065,7 @@ begin
       P := @@Http.Initialize;
       for api := low(api) to high(api) do
       begin
-        P^ := GetProcAddress(Http.Module, HttpNames[api]);
+        P^ := LibraryResolve(Http.Module, HttpNames[api]);
         if P^ = nil then
           if api < hHttpApi2First then
             raise EHttpApiServer.CreateFmt('Unable to find %s() in %s',
@@ -2205,8 +2213,8 @@ begin
     i := IdemPPChar(P, @KNOWNHEADERS);
   // WebSockets need CONNECTION as unknown header
   if (i >= 0) and
-     (THttpHeader(i) <> reqConnection) then
-    with Headers.KnownHeaders[THttpHeader(i)] do
+     (THttpApiHeader(i) <> reqConnection) then
+    with Headers.KnownHeaders[THttpApiHeader(i)] do
     begin
       while P^ <> ':' do
         inc(P);
@@ -2422,7 +2430,7 @@ begin
     P := @@WinHttpApi.Open;
     for api := low(api) to high(api) do
     begin
-      P^ := GetProcAddress(WinHttpApi.LibraryHandle, WinHttpNames[api]);
+      P^ := LibraryResolve(WinHttpApi.LibraryHandle, WinHttpNames[api]);
       if P^ = nil then
         if api < hWebSocketApiFirst then
         begin
@@ -2464,7 +2472,7 @@ begin
   P := @@WebSocketApi.AbortHandle;
   for api := low(api) to high(api) do
   begin
-    P^ := GetProcAddress(WebSocketApi.LibraryHandle, WebSocketNames[api]);
+    P^ := LibraryResolve(WebSocketApi.LibraryHandle, WebSocketNames[api]);
     if P^ = nil then
     begin
       FreeLibrary(WebSocketApi.LibraryHandle);
@@ -2486,7 +2494,7 @@ function HttpSys2ToWebSocketHeaders(
 var
   headerCnt: integer;
   i: PtrInt;
-  h: THttpHeader;
+  h: THttpApiHeader;
   p: PHTTP_UNKNOWN_HEADER;
   r: PWEB_SOCKET_HTTP_HEADER;
 begin
@@ -2538,8 +2546,7 @@ begin
       inc(len, h^.ulNameLength + h^.ulValueLength + 4);
     inc(h);
   end;
-  FastSetString(result{%H-}, len);
-  d := pointer(result);
+  d := FastSetString(result{%H-}, len);
   h := aHeaders;
   for i := 1 to aHeadersCount do
   begin
@@ -2603,7 +2610,7 @@ initialization
     {$endif CPU64}
     (ord(reqUserAgent) = 40) and
     (ord(respLocation) = 23) and
-    (SizeOf(THttpHeader) = 4) and
+    (SizeOf(THttpApiHeader) = 4) and
     (integer(HTTP_LOG_FIELD_TEST_SUB_STATUS) = HTTP_LOG_FIELD_SUB_STATUS)
   );
 

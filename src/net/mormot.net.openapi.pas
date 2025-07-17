@@ -576,7 +576,8 @@ type
     procedure Description(W: TTextWriter; const Described: RawUtf8);
     procedure Comment(W: TTextWriter; const Args: array of const;
       const Desc: RawUtf8 = '');
-    procedure Code(W: TTextWriter; var Line: RawUtf8; const Args: array of const);
+    procedure Code(W: TTextWriter; var Line: RawUtf8; Separator: AnsiChar;
+      const Args: array of const);
     // main internal parsing function
     procedure ParseSpecs;
     // main internal code generation methods
@@ -829,7 +830,7 @@ begin
             Append(t, r.PascalName, ' ');
         end;
         if t <> '' then
-          Data.U['description'] := Make(['From the JSON of ', t]);
+          Data.U['description'] := Join(['From the JSON of ', t]);
       end
       else
         for i := 1 to oo^.Count - 1 do
@@ -1374,7 +1375,7 @@ begin
         Append(err, ['    ', code, ':', fParser.LineEnd,
                      '      e := ',e.PascalName, ';', fParser.LineEnd])
       else if status = 'default' then
-        Make(['  else', fParser.LineEnd,
+        Join(['  else', fParser.LineEnd,
               '    e := ', e.PascalName, ';', fParser.LineEnd], deferr);
     end;
   end;
@@ -1433,7 +1434,7 @@ begin
       p := fParameters[i];
       if p.Location = oplBody then
         continue; // fRequestBodySchema is handled below
-      Make(['- [', p.fParameter^._In, '] ', p.PascalName], line);
+      Join(['- [', p.fParameter^._In, '] ', p.PascalName], line);
       if p.Location in [oplUnsupported, oplFormData] then
         Append(line, ' (unsupported)')
       else
@@ -1464,7 +1465,7 @@ begin
       code := Utf8ToInteger(status, 0);
       r := @v^.Values[i];
       rs := r^.Schema(fParser);
-      Make(['- ', status], line);
+      Join(['- ', status], line);
       if code = fSuccessResponseCode then
         Append(line, ' (main)')
       else if Assigned(rs) and
@@ -1497,7 +1498,7 @@ var
       Append(line, '; ')
     else
       prev := true;
-    fParser.Code(W, line, Args);
+    fParser.Code(W, line, ';', Args);
   end;
 
 begin
@@ -1526,7 +1527,7 @@ begin
         if InImplementation then // same order, but no "= default" statement
           AddRawUtf8(def, decl)
         else
-          AddRawUtf8(def, Make([decl, ' = ', p.fType.ToDefaultParameterValue(p)]))
+          AddRawUtf8(def, Join([decl, ' = ', p.fType.ToDefaultParameterValue(p)]))
       else
         AddParam([decl]);
     end;
@@ -1539,7 +1540,7 @@ begin
     AddParam([def[i]]);
   // function result
   if Assigned(fSuccessResponseType) then
-    Append(line, ['): ', fSuccessResponseType.ToPascalName, ';'])
+    fParser.Code(w, Line, ';', ['): ', fSuccessResponseType.ToPascalName, ';'])
   else
     Append(line, ');');
   w.AddString(Line);
@@ -1635,7 +1636,7 @@ begin
   w.AddStrings([fParser.LineEnd, 'begin', fParser.LineEnd,
          '  fClient.Request(''', UpperCase(fMethod), ''', ''', url, '''']);
   // Path parameters
-  w.AddShorter(', [');
+  w.AddDirect(',', ' ', '[');
   for i := 0 to Length(urlName) - 1 do
   begin
     j := urlParam[i];
@@ -1643,7 +1644,7 @@ begin
       EOpenApi.RaiseUtf8('%.Body: unknown {%} in [%]', [self, urlName[i], fPath]);
     p := fParameters[j];
     if i > 0 then
-      w.AddShorter(', ');
+      w.AddDirect(',', ' ');
     w.AddString(p.ParamType.ToFormatUtf8Arg(p.PascalName));
   end;
   w.AddDirect(']');
@@ -1663,7 +1664,7 @@ begin
     if Assigned(fSuccessResponseType) then
       w.AddStrings(['TypeInfo(', fSuccessResponseType.ToPascalName, ')'])
     else
-      w.AddShorter('nil');
+      w.AddDirect('n', 'i', 'l');
   end
   // result with no Payload
   else if Assigned(fSuccessResponseType) then
@@ -1756,20 +1757,21 @@ begin
     end;
   LowerCaseSelf(fPrefix); // TUserRole -> 'ur'
   AddRawUtf8(fParser.fEnumPrefix, fPrefix);
-  FormatUtf8('%_TXT', [UpperCase(copy(fPascalName, 2, 100))], fConstTextArrayName);
+  Join(['_', fPascalName], fConstTextArrayName);
 end;
 
 procedure TPascalEnum.ToTypeDefinition(W: TTextWriter);
 var
   line, item: RawUtf8;
   items: TRawUtf8DynArray;
-  i: PtrInt;
+  itemscount, i: integer;
 begin
   if fSchema^.HasDescription and
      not (opoDtoNoDescription in fParser.Options) then
     fParser.Comment(W, [fSchema^.Description]);
   w.AddStrings([fParser.fLineIndent, PascalName, ' = (', fParser.LineEnd,
     fParser.fLineIndent, '  ']);
+  itemscount := 0;
   for i := 0 to fChoices.Count - 1 do
   begin
     if i = 0 then
@@ -1781,11 +1783,11 @@ begin
       if item <> '' then
         item[1] := UpCase(item[1]);
       if (item = '') or
-         (FindPropName(items, item) >= 0) then
+         (FindPropName(pointer(items), item, itemscount) >= 0) then
         Append(item, [i]); // duplicated, or no ascii within -> make unique
     end;
-    AddRawUtf8(items, item);
-    fParser.Code(w, line, [fPrefix, item]);
+    AddRawUtf8(items, itemscount, item);
+    fParser.Code(w, line, ',', [fPrefix, item]);
   end;
   w.AddStrings([line, ');', fParser.LineEnd,
     ToArrayTypeDefinition]);
@@ -1826,7 +1828,7 @@ begin
     item := mormot.core.unicode.QuotedStr(VariantToUtf8(fChoices.Values[i]));
     if i < fChoices.Count - 1 then
       Append(item, ', ');
-    fParser.Code(w, line, [item]);
+    fParser.Code(w, line, ',', [item]);
   end;
   w.AddStrings([line, ');', fParser.LineEnd]);
 end;
@@ -1957,7 +1959,7 @@ begin
       Append(result, 'DynArray'); // use mormot.core.base arrays
     end
     else
-      result := Make(['array of ', result]);
+      result := Join(['array of ', result]);
   end;
 end;
 
@@ -2000,7 +2002,7 @@ begin
   else if IsEnum then
   begin
     e := fCustomType as TPascalEnum;
-    func := e.fConstTextArrayName; // ###_TXT[]
+    func := e.fConstTextArrayName; // _TSomeEnum[]
     if IsArray then
       if e.fDynArrayEnum then
         FormatUtf8('GetEnumArrayNameCustom(%, %, @%)',
@@ -2530,7 +2532,7 @@ begin
       if i = 0 then
         break;
       if feed = '' then
-        Make([LineEnd, fLineIndent, '//'], feed);
+        Join([LineEnd, fLineIndent, '//'], feed);
       insert(feed, line, i);
       o := i + length(feed);
     end;
@@ -2539,14 +2541,29 @@ begin
 end;
 
 procedure TOpenApiParser.Code(W: TTextWriter; var Line: RawUtf8;
-  const Args: array of const);
+  Separator: AnsiChar; const Args: array of const);
+var
+  i, l: PtrInt;
 begin
-  if length(Line) > 70 then
-  begin
-    W.AddStrings([TrimRight(Line), LineEnd]);
-    Line := fLineIndent + '  ';
-  end;
   Append(Line, Args);
+  while length(Line) > 85 do
+  begin
+    l := 0;
+    for i := 85 downto 1 do
+      if Line[i] in [Separator, '('] then
+      begin
+        W.AddNoJsonEscape(pointer(Line), i);
+        W.AddString(LineEnd);
+        l := i;
+        while Line[l + 1] = ' ' do
+          inc(l);
+        delete(Line, 1, l);
+        Prepend(Line, [fLineIndent, '  ']);
+        break;
+      end;
+    if l = 0 then
+      break;
+  end;
 end;
 
 procedure TOpenApiParser.Description(W: TTextWriter; const Described: RawUtf8);
@@ -2740,6 +2757,11 @@ var
   rec: TPascalRecordDynArray;
   i: PtrInt;
 begin
+  // retrieve all DTO context
+  rec := GetOrderedRecords;
+  if (rec = nil) and
+     (fEnums.Count = 0) then
+    exit;
   // append all enumeration types
   fLineIndent := '  ';
   w.AddStrings(['type', LineEnd, LineEnd]);
@@ -2751,10 +2773,12 @@ begin
     w.AddStrings([LineEnd, LineEnd]);
   end;
   // append all records
-  w.AddStrings(['{ ************ Data Transfert Objects }', LineEnd, LineEnd]);
-  rec := GetOrderedRecords;
-  for i := 0 to high(rec) do
-    rec[i].ToTypeDefinition(w);
+  if rec <> nil then
+  begin
+    w.AddStrings(['{ ************ Data Transfert Objects }', LineEnd, LineEnd]);
+    for i := 0 to high(rec) do
+      rec[i].ToTypeDefinition(w);
+  end;
   // enumeration-to-text constants
   if fEnums.Count > 0 then
   begin
@@ -2770,12 +2794,16 @@ var
   rec: TPascalRecordDynArray;
   i: PtrInt;
 begin
+  // retrieve all DTO context
+  rec := GetOrderedRecords;
+  if (rec = nil) and
+     (fEnums.Count = 0) then
+    exit;
   w.AddStrings([LineEnd,
     '{ ************ Custom RTTI/JSON initialization }', LineEnd, LineEnd]);
   fLineIndent := '  ';
   // output the text representation of all records
   // with proper json names (overriding the RTTI definitions)
-  rec := GetOrderedRecords;
   if rec <> nil then
   begin
     w.AddStrings(['const', LineEnd,
@@ -2811,14 +2839,13 @@ begin
           w.AddStrings([',', LineEnd]);
         w.AddStrings(['    ', rec[i].ToRttiRegisterDefinitions]);
       end;
-    w.AddStrings([']);', LineEnd,
-      'end;', LineEnd, LineEnd]);
+    w.AddStrings([']);', LineEnd]);
   end;
-  // initialization
+  w.AddStrings(['end;', LineEnd, LineEnd]);
+  // eventual initialization section
   w.AddStrings([
     'initialization', LineEnd,
-    '  RegisterRtti;', LineEnd, LineEnd,
-    'end.', LineEnd]);
+    '  RegisterRtti;', LineEnd]);
 end;
 
 function TOpenApiParser.GenerateDtoUnit: RawUtf8;
@@ -2827,7 +2854,7 @@ var
   w: TTextWriter;
 begin
   if fDtoUnitName = '' then
-    Make([LowerCaseU(fName), '.dto'], fDtoUnitName);
+    Join([LowerCaseU(fName), '.dto'], fDtoUnitName);
   w := TTextWriter.CreateOwnedStream(temp);
   try
     // header section
@@ -2859,6 +2886,8 @@ begin
     w.AddStrings([LineEnd, LineEnd,
       'implementation', LineEnd]);
     GenerateDtoImplementation(w);
+    w.AddStrings([LineEnd,
+      'end.', LineEnd]);
     w.SetText(result);
   finally
     w.Free;
@@ -2882,9 +2911,9 @@ begin
   else
     desc := '.client';
   if fClientUnitName = '' then
-    Make([LowerCase(fName), desc], fClientUnitName);
+    Join([LowerCase(fName), desc], fClientUnitName);
   if fClientClassName = '' then
-    Make(['T', fName, 'Client'], fClientClassName);
+    Join(['T', fName, 'Client'], fClientClassName);
   w := TTextWriter.CreateOwnedStream(temp);
   try
     // unit common definitions
@@ -2950,7 +2979,7 @@ begin
         w.AddStrings([
           '    procedure OnError', SmallUInt32Utf8[i + 1],
           '(const Sender: IJsonClient;', LineEnd,
-          '      const Response: TJsonResponse; const ErrorMsg: shortstring);', LineEnd]);
+          '      const Response: TJsonResponse; const ErrorMsg: ShortString);', LineEnd]);
     end;
     w.AddStrings([
       '  public', LineEnd, LineEnd,
@@ -3042,7 +3071,7 @@ begin
       w.AddStrings([
         'procedure ', fClientClassName, '.OnError', SmallUInt32Utf8[i + 1],
             '(const Sender: IJsonClient;', LineEnd,
-        '  const Response: TJsonResponse; const ErrorMsg: shortstring);', LineEnd]);
+        '  const Response: TJsonResponse; const ErrorMsg: ShortString);', LineEnd]);
       err := fErrorHandler[i];
       j := PosEx('  else', err);
       if j = 1 then
@@ -3074,9 +3103,9 @@ begin
       Operations[i].Body(w, fClientClassName, fSpecs.BasePath);
     // include DTOs registration for single API unit
     if opoGenerateSingleApiUnit in fOptions then
-      GenerateDtoImplementation(w)
-    else
-      w.AddStrings([LineEnd, 'end.']);
+      GenerateDtoImplementation(w);
+    w.AddStrings([LineEnd,
+      'end.', LineEnd]);
     w.SetText(result);
   finally
     w.Free;

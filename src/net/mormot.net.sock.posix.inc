@@ -108,7 +108,7 @@ const
 
 type
   /// a socket is always cint = 32-bit integer sized on POSIX
-  // - we extend it to PtrInt for our TNetSocketWrap cast
+  // - but we use PtrInt on POSIX to cast it as TNetSocket = ^PNetSocketWrap
   TSocket = PtrInt;
 
   PSockAddrIn6 = ^sockaddr_in6;
@@ -119,12 +119,9 @@ type
     h_addrtype: integer;
     h_length: socklen_t;
     case integer of
-       0: (
-          h_addr_list: PPAnsiChar);
-       1: (
-          h_addr: ^pin_addr);
-       2: (
-          h_addr6: ^pin6_addr);
+       0: (h_addr_list: PPAnsiChar);
+       1: (h_addr:      ^pin_addr);
+       2: (h_addr6:     ^pin6_addr);
   end;
   PHostEnt = ^THostEnt;
 
@@ -213,7 +210,7 @@ end;
 
 function closesocket(s: integer): integer; inline;
 begin
-  result := fpclose(s);
+  result := FileClose(s);
 end;
 
 function getnameinfo(addr: PSockAddr; namelen: TSockLen; host: PAnsiChar;
@@ -424,35 +421,42 @@ var
   // gethostbyname() result is NOT thread-safe: we need to protect its calls;
   // since this may take some time, we use a pthread mutex, not a TLightLock
 
+procedure TNetAddr.Clear;
+var
+  ad4: sockaddr absolute Addr;
+begin
+  PInteger(@ad4.sin_family)^ := 0; // sin_family and sin_port = 0
+end; // other fields are not supposed/required to be initialized on POSIX
+
 function TNetAddr.SetFrom(const address, addrport: RawUtf8;
   layer: TNetLayer): TNetResult;
 var
   h: PHostEnt;
-  addr4: sockaddr absolute Addr;
+  ad4: sockaddr absolute Addr;
 begin
-  FillCharFast(Addr, SizeOf(Addr), 0);
+  PInteger(@ad4.sin_family)^ := 0; // sin_family and sin_port = 0 are enough
   result := nrNotFound;
   if address = '' then
     exit;
   // handle domain socket name
   if layer = nlUnix then
   begin
-    if length(address) >= SizeOf(psockaddr_un(@Addr)^.sun_path) then
-      // avoid buffer overflow or truncated socket name
-      result := nrFatalError
-    else
-      // socket file name is just copied to the address struct
-      with psockaddr_un(@Addr)^ do
+    // socket file name is just copied to the address struct
+    with psockaddr_un(@Addr)^ do
+      if length(address) >= SizeOf(sun_path) then
+        // avoid buffer overflow or truncated socket name
+        result := nrFatalError
+      else
       begin
         sun_family := AF_UNIX;
-        MoveFast(pointer(address)^, sun_path, length(address));
+        MoveFast(pointer(address)^, sun_path, length(address) + 1); // +1 for #0
         result := nrOK;
       end;
     exit;
   end;
   // check supplied IP port
-  addr4.sin_port := bswap16(GetCardinal(pointer(addrport)));
-  if (addr4.sin_port = 0) and
+  ad4.sin_port := bswap16(GetCardinal(pointer(addrport)));
+  if (ad4.sin_port = 0) and
      (addrport <> '0') then // explicit '0' to get ephemeral port
     exit;
   // check most simple IPv4 resolution (maybe using mormot.net.dns)
@@ -467,10 +471,10 @@ begin
       result := nrNotFound
     else
     begin
-      addr4.sin_family := h^.h_addrtype;
+      ad4.sin_family := h^.h_addrtype;
       case h^.h_addrtype of
         AF_INET:
-           addr4.sin_addr := h^.h_addr^^;
+           ad4.sin_addr.s_addr := h^.h_addr^^.s_addr;
         AF_INET6:
            psockaddr6(@Addr)^.sin6_addr := h^.h_addr6^^;
       else
@@ -668,21 +672,34 @@ const
 {$endif OSANDROID}
 
 {$ifdef OSLINUX}
-procedure RetrieveEnhancedInfo(var a: TMacAddress);
+procedure RetrieveEnhancedInfo(var a: TMacAddress; var procnetroute: RawUtf8);
 var
-  sysfs: RawUtf8;
+  fn: ShortString;
+  fnlen: AnsiChar;
+  s: RawUtf8;
   p: PUtf8Char;
   l: PtrInt;
   ip: cardinal;
 begin
-  // see https://www.kernel.org/doc/Documentation/ABI/testing/sysfs-class-net
-  sysfs := NetConcat(['/sys/class/net/', a.Name, '/']);
-  a.FriendlyName := TrimU(StringFromFile(sysfs + 'ifalias', {nosize=}true));
-  a.Speed := GetCardinal(pointer(StringFromFile(sysfs + 'speed', true)));
-  a.Mtu := GetCardinal(pointer(StringFromFile(sysfs + 'mtu', true)));
+  // see https://www.kernel.org/doc/Documentation/ABI/testing/fn-class-net
+  fn := '/sys/class/net/';
+  AppendShortAnsi7String(a.Name, fn);
+  fnlen := fn[0];
+  AppendShort('/ifalias'#0, fn);
+  LoadProcFileTrimed(@fn[1], a.FriendlyName);
+  fn[0] := fnlen;
+  AppendShort('/speed'#0, fn);
+  LoadProcFileTrimed(@fn[1], s);
+  a.Speed := GetCardinal(pointer(s));
+  fn[0] := fnlen;
+  AppendShort('/mtu'#0, fn);
+  LoadProcFileTrimed(@fn[1], s);
+  a.Mtu := GetCardinal(pointer(s));
   // we retrieve the gateway from /proc/net/route
   l := length(a.Name);
-  p := pointer(StringFromFile('/proc/net/route', true));
+  if procnetroute = '' then // get routes list once
+    procnetroute := StringFromFileNoSize('/proc/net/route');
+  p := pointer(procnetroute);
   while p <> nil do
   begin
     if (MemCmp(pointer(p), pointer(a.Name), l) = 0) and
@@ -734,7 +751,7 @@ type
     sdl_nlen: byte;      // interface name length, no trailing 0 required
     sdl_alen: byte;      // link level address length
     sdl_slen: byte;      // link layer selector length
-    sdl_data: array[byte] of byte; // interface name + link level address
+    sdl_data: TByteToByte; // interface name + link level address
   end;
   {$else}
   psockaddr_ll = ^sockaddr_ll;
@@ -745,7 +762,7 @@ type
     sll_hatype: word;
     sll_pkttype: byte;
     sll_halen: byte;
-    sll_addr: array[byte] of byte;
+    sll_addr: TByteToByte;
   end;
   {$endif OSBSDDARWIN}
 
@@ -804,11 +821,16 @@ var
   list, info: pifaddrs;
   i, n: PtrInt;
   mac: RawUtf8;
+  m: PMacAddress;
+  {$ifdef OSLINUX}
+  procnetroute: RawUtf8; // retrieve routes once for all MAC addresses
+  {$endif OSLINUX}
 begin
   // https://github.com/zeromq/czmq/blob/899f81985961513c7f4e/src/ziflist.c#L210
   result := nil;
   if getifaddrs(list) = NO_ERROR then
   try
+    // first loop to identify the main interfaces (AF_LINK/AF_PACKET)
     n := 0;
     info := list;
     repeat
@@ -850,74 +872,73 @@ begin
         begin
           if n = length(result) then
             SetLength(result, NextGrow(n));
-          with result[n] do
+          m := @result[n];
+          m^.Name := info^.ifa_name; // e.g. 'eth0' on Linux
+          m^.AdapterName := m^.Name;
+          m^.Address := mac;
+          if info^.ifa_addr <> nil then
           begin
-            Name := info^.ifa_name; // e.g. 'eth0' on Linux
-            AdapterName := Name;
-            Address := mac;
-            if info^.ifa_addr <> nil then
-            begin
-              {$ifdef OSBSDDARWIN}
-              // BSD/DARWIN do name the networks from their manufacturer
-              // -> parse net.wlan.devices ?
-              IfIndex := psockaddr_dl(info^.ifa_addr)^.sdl_index;
-              case psockaddr_dl(info^.ifa_addr)^.sdl_type of
-                IFT_ETHER:
-                  Kind := makEthernet;
-                IFT_PPP:
-                  Kind := makPpp;
-                IFT_CELLULAR:
-                  Kind := makCellular;
-              {$else}
-              IfIndex := psockaddr_ll(info^.ifa_addr)^.sll_ifindex;
-              case psockaddr_ll(info^.ifa_addr)^.sll_hatype of
-                ARPHRD_ETHER:
-                  begin
-                    Kind := makEthernet;
-                    if Name <> '' then
-                      // set also for some wifi adapters
-                      if PWord(Name)^ = ord('w') + ord('l') shl 8 then
-                        Kind := makWifi; // detect by convention
-                  end;
-                ARPHRD_IEEE80211:
-                  Kind := makWifi;
-                ARPHRD_TUNNEL,
-                ARPHRD_TUNNEL6:
-                  Kind := makTunnel;
-                ARPHRD_PPP:
-                  Kind := makPpp;
-            {$endif OSBSDDARWIN}
-              else
-                // https://systemd.io/PREDICTABLE_INTERFACE_NAMES
-                if Name <> '' then
-                  case PWord(Name)^ of
-                    ord('e') + ord('t') shl 8,  // 'ethX'
-                    ord('e') + ord('n') shl 8:  // systemd v197 'enpXsX'
-                      Kind := makEthernet;
-                    ord('w') + ord('l') shl 8:  // 'wlanX' and systemd v197 'wlX'
-                      Kind := makWifi;
-                  end;
-              end;
-            end
+            {$ifdef OSBSDDARWIN}
+            // BSD/DARWIN do name the networks from their manufacturer
+            // -> parse net.wlan.devices ?
+            m^.IfIndex := psockaddr_dl(info^.ifa_addr)^.sdl_index;
+            case psockaddr_dl(info^.ifa_addr)^.sdl_type of
+              IFT_ETHER:
+                m^.Kind := makEthernet;
+              IFT_PPP:
+                m^.Kind := makPpp;
+              IFT_CELLULAR:
+                m^.Kind := makCellular;
+            {$else}
+            m^.IfIndex := psockaddr_ll(info^.ifa_addr)^.sll_ifindex;
+            case psockaddr_ll(info^.ifa_addr)^.sll_hatype of
+              ARPHRD_ETHER:
+                begin
+                  m^.Kind := makEthernet;
+                  if m^.Name <> '' then
+                    // set also for some wifi adapters
+                    if PWord(m^.Name)^ = ord('w') + ord('l') shl 8 then
+                      m^.Kind := makWifi; // detect by convention
+                end;
+              ARPHRD_IEEE80211:
+                m^.Kind := makWifi;
+              ARPHRD_TUNNEL,
+              ARPHRD_TUNNEL6:
+                m^.Kind := makTunnel;
+              ARPHRD_PPP:
+                m^.Kind := makPpp;
+          {$endif OSBSDDARWIN}
             else
-            begin
-              IfIndex := -1; // non physical interface
-              Kind := makSoftware;
-            end
+              // https://systemd.io/PREDICTABLE_INTERFACE_NAMES
+              if m^.Name <> '' then
+                case PWord(m^.Name)^ of
+                  ord('e') + ord('t') shl 8,  // 'ethX'
+                  ord('e') + ord('n') shl 8:  // systemd v197 'enpXsX'
+                    m^.Kind := makEthernet;
+                  ord('w') + ord('l') shl 8:  // 'wlanX' and systemd v197 'wlX'
+                    m^.Kind := makWifi;
+                end;
+            end;
+          end
+          else
+          begin
+            m^.IfIndex := -1; // non physical interface
+            m^.Kind := makSoftware;
           end;
-          {$ifdef OSLINUX}
+          {$ifdef OSLINUX} // retrieve e.g. m^.Gateway from /proc/net/route
           if info^.ifa_flags and IFF_UP <> 0 then
-            RetrieveEnhancedInfo(result[n]);
+            RetrieveEnhancedInfo(m^, procnetroute);
           {$endif OSLINUX}
-          // on POSIX, there is no such things as per-interface DNS, and
-          // no standard way of knowing the Gateway
+          // on POSIX, there is no such things as per-interface DNS
+          // on BSD, there is no standard way of knowing the Gateway
           inc(n);
         end;
       end;
       info := info^.ifa_next;
     until info = nil;
-    SetLength(result, n);
-    // retrieve the IP configuration from a second loop
+    if n <> 0 then
+      DynArrayFakeLength(result, n);
+    // retrieve the IP configuration (AF_INET) from a second loop
     info := list;
     repeat
       if (info^.ifa_addr <> nil) and
@@ -964,8 +985,9 @@ function RetrieveMacAddresses(UpAndDown: boolean): TMacAddressDynArray;
 var
   n: integer;
   SR: TSearchRec;
-  fn: TFileName;
-  f: RawUtf8;
+  fn: ShortString;
+  fnlen: AnsiChar;
+  f, procnetroute: RawUtf8;
 begin
   result := nil;
   if FindFirst('/sys/class/net/*', faDirectory, SR) = 0 then
@@ -975,18 +997,23 @@ begin
       if (SR.Name <> 'lo') and
          SearchRecValidFolder(SR) then
       begin
-        fn := '/sys/class/net/' + SR.Name;
-        f := StringFromFile(fn + '/flags', {nosize=}true);
+        fn := '/sys/class/net/';
+        AppendShortAnsi7String(SR.Name, fn);
+        fnlen := fn[0];
+        AppendShort('/flags'#0, fn);
+        LoadProcFileTrimed(@fn[1], f);
         if (length(f) > 2) and // e.g. '0x40' or '0x1043'
            (ParseHex0x(pointer(f)) and (IFF_UP or IFF_LOOPBACK) = IFF_UP) then
         begin
-          f := TrimU(StringFromFile(fn + '/address', {nosize=}true));
+          fn[0] := fnlen;
+          AppendShort('/address'#0, fn);
+          LoadProcFileTrimed(@fn[1], f);
           if f <> '' then
           begin
             SetLength(result, n + 1);
             result[n].Name := SR.Name;
             result[n].Address := f;
-            RetrieveEnhancedInfo(result[n]);
+            RetrieveEnhancedInfo(result[n], procnetroute);
             // sadly, retrieving IP and mask from /proc is very complex
             // https://stackoverflow.com/a/14725655/458259
             // a solution may be to use ioctl()
@@ -1041,7 +1068,7 @@ var
 begin
   result := nil;
   if usePosixEnv then
-    resolv := StringFromFile(GetEnvironmentVariable('ETC'), true);
+    resolv := StringFromFile(GetEnvironmentVariable('ETC'));
   if resolv = '' then
     // all systems are likely to have or generate this file
     // - even the libc seems to read it when implementing gethostname()
@@ -1396,7 +1423,7 @@ procedure TPollSocketEpoll.Terminate;
 begin
   if fEPFD <= 0 then
     exit;
-  fpClose(fEPFD);
+  FileClose(fEPFD);
   fEPFD := -1;
 end;
 
