@@ -3100,7 +3100,7 @@ begin
     {$ifdef CPUX64}
     if MemCmp(pointer(OldSid[i]), @Sid, SidLen) = 0 then // use SSE2 asm
     {$else}
-    if CompareMem(pointer(OldSid[i]), @Sid, SidLen) then
+    if mormot.core.base.CompareMem(pointer(OldSid[i]), @Sid, SidLen) then
     {$endif CPUX64}
     begin
       MoveFast(pointer(NewSid[i])^, Sid, SidLen); // in-place overwrite
@@ -6662,7 +6662,7 @@ function AsnNext(var Pos: integer; const Buffer: TAsnObject;
   Value: PRawByteString; CtrEndPos: PInteger): integer;
 var
   asnsize: integer;
-  tmp: array[0..23] of AnsiChar;
+  tmp: TTemp24;
   p: PAnsiChar;
 begin
   if Value <> nil then

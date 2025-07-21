@@ -4617,12 +4617,7 @@ end;
 procedure TBufferWriter.WriteVar(var Item: TTempUtf8);
 begin
   WriteVar(Item.Text, Item.Len);
-  if Item.TempRawUtf8 <> nil then
-    {$ifdef FPC}
-    FastAssignNew(Item.TempRawUtf8);
-    {$else}
-    RawUtf8(Item.TempRawUtf8) := '';
-    {$endif FPC}
+  TempUtf8Done(Item);
 end;
 
 procedure TBufferWriter.Write(const Text: RawByteString);
@@ -9389,7 +9384,7 @@ function AppendUInt32ToBuffer(Buffer: PUtf8Char; Value: PtrUInt): PUtf8Char;
 var
   L: PtrInt;
   P: PAnsiChar;
-  tmp: array[0..23] of AnsiChar;
+  tmp: TTemp24;
 begin
   {$ifndef ASMINTEL} // our StrUInt32 asm has less CPU cache pollution
   if Value <= high(SmallUInt32Utf8) then
@@ -10401,7 +10396,7 @@ begin
         break;
       end;
     until (r1 <> r2) or
-          not CompareMem(@b1, @b2, r1);
+          not mormot.core.base.CompareMem(@b1, @b2, r1);
   if ValidHandle(f2) then
     FileClose(f2);
   if ValidHandle(f1) then
@@ -11494,7 +11489,7 @@ end;
 
 procedure TRawByteStringBuffer.Append(Value: QWord);
 var
-  tmp: array[0..23] of AnsiChar;
+  tmp: TTemp24;
   P: PAnsiChar;
 begin
   {$ifndef ASMINTEL} // our StrUInt64 asm has less CPU cache pollution

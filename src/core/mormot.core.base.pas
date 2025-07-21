@@ -593,6 +593,9 @@ type
   // - when used as an array value type, will generate efficient 32-bit lookup
   TShort3 = string[3];
 
+  /// could be used e.g. by StrInt32() or StrInt64()
+  TTemp24 = array[0..23] of AnsiChar;
+
   /// stack-allocated ASCII string, for mormot.core.text GuidToShort() function
   TShortGuid = string[38];
   PShortGuid = ^TShortGuid;
@@ -859,7 +862,7 @@ procedure FastAssignNew(var d; s: pointer = nil);
 
 /// internal function to assign any constant or ref-counted AnsiString/RawUtf8
 // - caller should have tested that pointer(d) <> nil
-procedure FastAssignNewNotVoid(var d; s: pointer); overload;
+procedure FastAssignNewNotVoid(var d; s: pointer = nil); overload;
   {$ifndef FPC_CPUX64} {$ifdef HASINLINE}inline;{$endif} {$endif}
 
 /// internal function used by FastSetString/FastSetStringCP
@@ -1497,7 +1500,7 @@ function ToDouble(const text: RawUtf8; out value: double): boolean;
 // - typical use:
 //  !function Int32ToUtf8(Value: PtrInt): RawUtf8;
 //  !var
-//  !  tmp: array[0..23] of AnsiChar;
+//  !  tmp: TTemp24;
 //  !  P: PAnsiChar;
 //  !begin
 //  !  P := StrInt32(@tmp[23],Value);
@@ -3842,24 +3845,24 @@ var
 
 /// compute a 32-bit hash of any string using DefaultHasher()
 // - so the hash value may change on another computer or after program restart
-function DefaultHash(const s: RawByteString): cardinal; overload;
+function DefaultHash(const s: RawByteString; crc: cardinal = 0): cardinal; overload;
   {$ifdef HASINLINE}inline;{$endif}
 
 /// compute a 32-bit hash of any array of bytes using DefaultHasher()
 // - so the hash value may change on another computer or after program restart
-function DefaultHash(const b: TBytes): cardinal; overload;
+function DefaultHash(const b: TBytes; crc: cardinal = 0): cardinal; overload;
   {$ifdef HASINLINE}inline;{$endif}
 
 /// compute a 32-bit hash of any string using the CRC32C checksum
 // - the returned hash value will be stable on all platforms, and use HW opcodes
 // if available on the current CPU
-function crc32cHash(const s: RawByteString): cardinal; overload;
+function crc32cHash(const s: RawByteString; crc: cardinal = 0): cardinal; overload;
   {$ifdef HASINLINE}inline;{$endif}
 
 /// compute a 32-bit hash of any array of bytes using the CRC32C checksum
 // - the returned hash value will be stable on all platforms, and use HW opcodes
 // if available on the current CPU
-function crc32cHash(const b: TBytes): cardinal; overload;
+function crc32cHash(const b: TBytes; crc: cardinal = 0): cardinal; overload;
   {$ifdef HASINLINE}inline;{$endif}
 
 /// combine/reduce a 128-bit hash into a 64-bit hash
@@ -5330,7 +5333,7 @@ end;
 
 procedure AppendShortIntHex(value: Int64; var dest: ShortString);
 var
-  tmp: array[0..23] of AnsiChar; // output in display/reversed order
+  tmp: TTemp24; // output in display/reversed order
   i: PtrInt;
   tab: PAnsiChar;
 begin
@@ -5350,21 +5353,21 @@ end;
 
 procedure AppendShortCardinal(value: cardinal; var dest: ShortString);
 var
-  tmp: array[0..23] of AnsiChar;
+  tmp: TTemp24;
 begin
   AppendShortTemp(StrUInt32(@tmp[23], value), @tmp[23], @dest);
 end;
 
 procedure AppendShortInt64(const value: Int64; var dest: ShortString);
 var
-  tmp: array[0..23] of AnsiChar;
+  tmp: TTemp24;
 begin
   AppendShortTemp(StrInt64(@tmp[23], value), @tmp[23], @dest);
 end;
 
 procedure AppendShortQWord(const value: QWord; var dest: ShortString);
 var
-  tmp: array[0..23] of AnsiChar;
+  tmp: TTemp24;
 begin
   AppendShortTemp(StrUInt64(@tmp[23], value), @tmp[23], @dest);
 end;
@@ -6535,7 +6538,7 @@ end;
 
 function ToShort(const val: Int64): TShort23;
 var
-  tmp: array[0..23] of AnsiChar;
+  tmp: TTemp24;
   p: PAnsiChar;
 begin
   p := {%H-}StrInt64(@tmp[23], val);
@@ -11890,7 +11893,7 @@ end;
 
 procedure TSynTempAdder.AddU(v: PtrUint);
 var
-  t: array[0..23] of AnsiChar;
+  t: TTemp24;
   P: PAnsiChar;
 begin
   P := StrUInt32(@t[23], v);
@@ -12193,24 +12196,24 @@ begin
   result := Hash32(pointer(Text), Length(Text));
 end;
 
-function DefaultHash(const s: RawByteString): cardinal;
+function DefaultHash(const s: RawByteString; crc: cardinal): cardinal;
 begin
-  result := DefaultHasher(0, pointer(s), length(s));
+  result := DefaultHasher(crc, pointer(s), length(s));
 end;
 
-function DefaultHash(const b: TBytes): cardinal;
+function DefaultHash(const b: TBytes; crc: cardinal): cardinal;
 begin
-  result := DefaultHasher(0, pointer(b), length(b));
+  result := DefaultHasher(crc, pointer(b), length(b));
 end;
 
-function crc32cHash(const s: RawByteString): cardinal;
+function crc32cHash(const s: RawByteString; crc: cardinal): cardinal;
 begin
-  result := crc32c(0, pointer(s), length(s));
+  result := crc32c(crc, pointer(s), length(s));
 end;
 
-function crc32cHash(const b: TBytes): cardinal;
+function crc32cHash(const b: TBytes; crc: cardinal): cardinal;
 begin
-  result := crc32c(0, pointer(b), length(b));
+  result := crc32c(crc, pointer(b), length(b));
 end;
 
 function Hash128To64({$ifdef FPC}constref{$else}const{$endif} b: THash128): QWord;

@@ -2258,8 +2258,8 @@ begin
     {$ifdef OSWINDOWS}
     WSAETIMEDOUT,
     WSAEWOULDBLOCK,
-    WSAIOPENDING,
     {$endif OSWINDOWS}
+    WSAIOPENDING,
     WSAEINPROGRESS,
     WSATRY_AGAIN:
       result := nrRetry;
@@ -2299,8 +2299,9 @@ var
   err: integer;
 begin
   nr := NetLastError(AnotherNonFatal, @err);
-  str(err, result);
-  result := _NR[nr] + ' ' + result;
+  result := _NR[nr];
+  if err <> 0 then
+    OsErrorAppend(err, result, ' ');
 end;
 
 function NetCheck(res: integer): TNetResult;
@@ -2342,7 +2343,7 @@ begin
     if (errnumber <> nil) and
        (error <> nrTimeout) and
        (errnumber^ <> NO_ERROR) then
-      msg := format('%s sys=%d (%s)', [msg, errnumber^, GetErrorText(errnumber^)]);
+      msg := format('%s sys=%d (%s)', [msg, errnumber^, GetErrorShort(errnumber^)]);
   end
   else
     fLastError := nrUnknownError;
@@ -2774,12 +2775,16 @@ begin
   result := socket.MakeAsync;
   if result <> nrOK then
     exit;
-  connect(socket.Socket, @Addr, Size); // non-blocking connect() once
+  if connect(socket.Socket, @Addr, Size) = 0 then // non-blocking connect() once
+    exit; // immediate success (unlikely)
   if ms < 0 then
     exit; // don't wait now
+  result := NetLastError;
+  if result <> nrRetry then
+    exit; // abort on fatal error (e.g. invalid address)
   socket.MakeBlocking;
   repeat
-    result := NetEventsToNetResult(socket.WaitFor(20, [neWrite, neError]));
+    result := NetEventsToNetResult(socket.WaitFor(100, [neWrite, neError]));
     if result <> nrRetry then
       exit;
     // typically, status = [] for TRY_AGAIN result
@@ -6309,50 +6314,55 @@ end;
 
 procedure TCrtSocket.SockSend(const Values: array of const);
 var
+  v: PVarRec;
   i: PtrInt;
   {$ifdef HASVARUSTRING}
   j, l: PtrInt;
   p: PByteArray;
   {$endif HASVARUSTRING}
-  tmp: ShortString;
+  t: PAnsiChar;
+  tmp: TTemp24;
 begin
+  v := @Values[0];
   for i := 0 to high(Values) do
-    with Values[i] do // only most common arguments are supported
-      case VType of
-        vtString:
-          SockSend(@VString^[1], PByte(VString)^);
-        vtAnsiString:
-          SockSend(VAnsiString, Length(RawByteString(VAnsiString)));
-        {$ifdef HASVARUSTRING}
-        vtUnicodeString:
-          begin // constant text is expected to be pure ASCII-7
-            l := length(UnicodeString(VUnicodeString));
-            p := EnsureSockSend(l);
-            for j := 0 to l - 1 do
-              p[j] := PWordArray(VUnicodeString)[j];
-          end;
-        {$endif HASVARUSTRING}
-        vtPChar:
-          SockSend(VPChar, StrLen(VPChar));
-        vtChar:
-          SockSend(@VChar, 1);
-        vtWideChar:
-          SockSend(@VWideChar, 1); // only ansi part of the character
-        vtInteger:
-          begin
-            Str(VInteger, tmp);
-            SockSend(@tmp[1], ord(tmp[0]));
-          end;
-        {$ifdef FPC} vtQWord, {$endif}
-        vtInt64: // e.g. for "Content-Length:" or  "Range:" sizes
-          begin
-            Str(VInt64^, tmp);
-            SockSend(@tmp[1], ord(tmp[0]));
-          end;
-      else
-        raise ENetSock.CreateFmt('%s.SockSend: unsupported VType=%d',
-          [ClassNameShort(self)^, VType]); // paranoid
-      end;
+  begin
+    case v^.VType of // only most common arguments are supported
+      vtString:
+        SockSend(@v^.VString^[1], PByte(v^.VString)^);
+      vtAnsiString:
+        SockSend(v^.VAnsiString, Length(RawByteString(v^.VAnsiString)));
+      {$ifdef HASVARUSTRING}
+      vtUnicodeString:
+        begin // constant text is expected to be pure ASCII-7
+          l := length(UnicodeString(v^.VUnicodeString));
+          p := EnsureSockSend(l);
+          for j := 0 to l - 1 do
+            p[j] := PWordArray(v^.VUnicodeString)[j];
+        end;
+      {$endif HASVARUSTRING}
+      vtPChar:
+        SockSend(v^.VPChar, StrLen(v^.VPChar));
+      vtChar:
+        SockSend(@v^.VChar, 1);
+      vtWideChar:
+        SockSend(@v^.VWideChar, 1); // only ansi part of the character
+      vtInteger:
+        begin
+          t := StrInt32(@tmp[23], v^.VInteger);
+          SockSend(t, @tmp[23] - t);
+        end;
+      {$ifdef FPC} vtQWord, {$endif}
+      vtInt64: // e.g. for "Content-Length:" or  "Range:" sizes
+        begin
+          t := StrInt64(@tmp[23], v^.VInt64^);
+          SockSend(t, @tmp[23] - t);
+        end;
+    else
+      raise ENetSock.CreateFmt('%s.SockSend: unsupported VType=%d',
+        [ClassNameShort(self)^, v^.VType]); // paranoid
+    end;
+    inc(v);
+  end;
   SockSendCRLF;
 end;
 

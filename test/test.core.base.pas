@@ -5723,14 +5723,14 @@ begin
   CsvToRawUtf8DynArray('item1   item2    item3', arr, {sep=}' ',
     {TrimItems=}true , {AddVoidItems=}false);
   CheckEqual(length(arr), 3);
-  Check(arr[0] = 'item1');
-  Check(arr[1] = 'item2');
-  Check(arr[2] = 'item3');
-  Check(AddPrefixToCsv('One,Two,Three', 'Pre') = 'PreOne,PreTwo,PreThree');
-  Check(CsvOfValue('?', 3) = '?,?,?');
-  Check(GetUnQuoteCsvItem('"""one,""","two "', 1, ',', '"') = 'two ');
-  Check(GetUnQuoteCsvItem('''''''one,''''''', 0) = '''one,''');
-  Check(GetUnQuoteCsvItem('"""one,', 0, ',', '"') = '');
+  CheckEqual(arr[0], 'item1');
+  CheckEqual(arr[1], 'item2');
+  CheckEqual(arr[2], 'item3');
+  CheckEqual(AddPrefixToCsv('One,Two,Three', 'Pre'), 'PreOne,PreTwo,PreThree');
+  CheckEqual(CsvOfValue('?', 3), '?,?,?');
+  CheckEqual(GetUnQuoteCsvItem('"""one,""","two "', 1, ',', '"'), 'two ');
+  CheckEqual(GetUnQuoteCsvItem('''''''one,''''''', 0), '''one,''');
+  CheckEqual(GetUnQuoteCsvItem('"""one,', 0, ',', '"'), '');
   Check(not CsvContains('', 'b'));
   Check(not CsvContains('a', ''));
   Check(CsvContains('a', 'a'));
@@ -5861,6 +5861,7 @@ begin
   AppendLine(U, ['bcdef']);
   CheckEqual(U, 'a1'#13#10'2345'#13#10'bcdef');
   Append(U, #13#10);
+  CheckEqual(U, 'a1'#13#10'2345'#13#10'bcdef'#13#10);
   AppendLine(U, ['ghij']);
   CheckEqual(U, 'a1'#13#10'2345'#13#10'bcdef'#13#10'ghij');
   U := QuotedStr('', '"');
@@ -7632,6 +7633,8 @@ begin
   Check(WinErrorShort(1722) = '1722 RPC_S_SERVER_UNAVAILABLE', 'w4');
   Check(WinErrorShort(12152) = '12152 ERROR_WINHTTP_INVALID_SERVER_RESPONSE', 'w5');
   Check(WinErrorShort($c00000fd) = 'c00000fd EXCEPTION_STACK_OVERFLOW', 'w6');
+  Check(WinErrorShort($80090330) = '80090330 SEC_E_DECRYPT_FAILURE', 'w7');
+  Check(WinErrorShort($00090321) = '590625 SEC_I_RENEGOTIATE', 'w8');
   Check(WinErrorShort(244, {noint=}false) = '244', '244w');
   Check(WinErrorShort(245, {noint=}true) = '', '245w');
   BsdErrorShort(1, @ss);
@@ -7678,12 +7681,12 @@ begin
     else
       CheckUtf8(not CurrentUserHasGroup(s), s);
   end;
-  Check(OSErrorShort(5) = '5 ERROR_ACCESS_DENIED', '5ead');
-  Check(OSErrorShort(5, true) = 'ERROR_ACCESS_DENIED', '5ead2');
+  CheckEqualShort(OSErrorShort(5), '5 ERROR_ACCESS_DENIED', '5ead');
+  CheckEqualShort(OSErrorShort(5, true), 'ERROR_ACCESS_DENIED', '5ead2');
   {$else}
-  Check(OSErrorShort(1) = '1 EPERM', '1eperm');
-  Check(OSErrorShort(5) = '5 EIO', '5eio');
-  Check(OSErrorShort(5, true) = 'EIO', '5eio2');
+  CheckEqualShort(OSErrorShort(1), '1 EPERM', '1eperm');
+  CheckEqualShort(OSErrorShort(5), '5 EIO', '5eio');
+  CheckEqualShort(OSErrorShort(5, true), 'EIO', '5eio2');
   {$endif OSWINDOWS}
 end;
 
@@ -10265,8 +10268,10 @@ var
   nfo: TWinProcessInfo;
 begin
   // validate Windows API error code recognition
-  CheckEqual(WinErrorText(1246), 'ERROR__CONTINUE');
-  CheckEqual(WinErrorText(ERROR_INSUFFICIENT_BUFFER), 'ERROR_INSUFFICIENT_BUFFER');
+  CheckEqualShort(WinApiErrorShort(122), 'ERROR_INSUFFICIENT_BUFFER');
+  CheckEqualShort(WinApiErrorShort(1246), 'ERROR__CONTINUE');
+  Check(WinApiErrorString(122) = 'ERROR_INSUFFICIENT_BUFFER');
+  Check(WinApiErrorString(1246) = 'ERROR__CONTINUE');
   // validate DotNet exceptions error code recognition
   Win32DotNetException(0, '');
   Win32DotNetException(9234, '');

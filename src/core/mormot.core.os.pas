@@ -808,7 +808,7 @@ function LinuxDistribution(os: TOperatingSystem): TLinuxDistribution;
 
 /// return the best known ERROR_* system error message constant texts
 // - without the 'ERROR_' prefix, but in a cross-platform way
-// - as used by WinErrorText() and some low-level Windows API wrappers
+// - as used by WinApiErrorString() and some low-level Windows API wrappers
 function WinErrorConstant(Code: cardinal): PShortString;
 
 /// return the error code number, and its regular constant on Windows (if known)
@@ -837,6 +837,10 @@ procedure OsErrorShort(Code: cardinal; Dest: PShortString; NoInt: boolean = fals
 // - e.g. OsErrorShort(5) = '5 ERROR_ACCESS_DENIED' on Windows or '5 EIO' on POSIX
 function OsErrorShort(Code: cardinal; NoInt: boolean = false): TShort47; overload;
   {$ifdef HASINLINE} inline; {$endif}
+
+/// append the error code number, and its regular constant on the current OS
+procedure OsErrorAppend(Code: cardinal; var Dest: ShortString;
+  Sep: AnsiChar = #0; NoInt: boolean = false);
 
 /// append the error as ' ERROR_*' constant and return TRUE if known
 // - append nothing and return FALSE if Code is not known
@@ -2517,26 +2521,36 @@ procedure SetLastError(error: integer);
   {$ifdef OSWINDOWS} stdcall; {$else} inline; {$endif}
 
 /// returns a given error code as plain text
-// - redirects to WinErrorText(error, nil) on Windows, or StrError() on POSIX
+// - redirects to WinApiErrorShort(error, nil) on Windows, or StrError() on POSIX
 // - e.g. GetErrorText(10) = 'ECHILD (No child processes)' on Linux
-function GetErrorText(error: integer): RawUtf8;
+function GetErrorText(error: integer = 0): RawUtf8;
+
+/// returns a given error code as plain text ShortString
+function GetErrorShort(error: integer = 0): ShortString;
+
+/// returns a given error code as plain text ShortString
+procedure GetErrorShortVar(error: integer; var dest: ShortString);
 
 {$ifdef OSWINDOWS}
 
-/// return the error message of a given Module
-// - first try WinErrorConstant() for system error constants (if ModuleName=nil),
-// then call FormatMessage() and override the RTL function to force the
-// ENGLISH_LANGID flag first
-// - if ModuleName does support this Code, will try it as system error
+/// return the error message - maybe of a given Module - as generic string
+// - may be used e.g. in conjunction with Exception.CreateFmt()
+// - if ModuleName does not support this Code, will also try it as system error
+// - first try WinErrorConstant() for system error constants, then call
+// FormatMessage() ensuring the ENGLISH_LANGID flag is used first
 // - replace SysErrorMessagePerModule() and SysErrorMessage() from mORMot 1
-function WinErrorText(Code: cardinal; ModuleName: PChar = nil): RawUtf8;
+function WinApiErrorString(Code: cardinal; ModuleName: PChar = nil): string;
 
-/// raise an EOSException from the last system error using WinErrorText()
+/// return the error message of a given Module as UTF-8 ShortString
+// - may be used e.g. in conjunction with Exception.CreateUtf8()
+function WinApiErrorShort(Code: cardinal; ModuleName: PChar = nil): shortstring;
+
+/// raise an EOSException from the last system error using WinApiErrorString()
 // - if Code is kept to its default 0, GetLastError is called
 procedure RaiseLastError(const Context: ShortString;
   RaisedException: ExceptClass = nil; Code: integer = 0);
 
-/// return a RaiseLastError-like error message using WinErrorText()
+/// return a RaiseLastError-like error message using WinApiErrorString()
 // - if Code is kept to its default 0, GetLastError is called
 function WinLastError(const Context: ShortString; Code: integer = 0): string;
 
@@ -2545,7 +2559,7 @@ procedure WinCheck(const Context: ShortString; Code: integer;
   RaisedException: ExceptClass = nil);
   {$ifdef HASINLINE} inline; {$endif}
 
-/// raise an Exception from the last module error using WinErrorText()
+/// raise an Exception from the last module error using WinApiErrorString()
 procedure RaiseLastModuleError(ModuleName: PChar; ModuleException: ExceptClass);
 
 {$else}
@@ -2651,6 +2665,11 @@ var
 {$else}
 function GetTickCount64: Int64;
 {$endif OSWINDOWS}
+
+/// returns a system-wide current monotonic timestamp as seconds
+// - returns GetTickCount64 div 1000 as a 32-bit unsigned integer value
+function GetTickSec: cardinal;
+  {$ifdef OSWINDOWS} {$ifdef HASINLINE} inline; {$endif} {$endif}
 
 /// returns how many seconds the system was up, accouting for time when
 // the computer is asleep
@@ -3095,7 +3114,7 @@ function StreamReadAll(S: TStream; Buffer: pointer; Size: PtrInt): boolean;
 /// read a File content into a string, using FileSize() to guess its length
 // - content can be binary or text
 // - returns '' if file was not found or any read error occurred
-// - uses RawByteString for byte storage, whatever the codepage is
+// - uses RawByteString for byte storage, forcing CP_UTF8 for FPC consistency
 function StringFromFile(const FileName: TFileName): RawByteString;
 
 /// read a File content from a list of potential files
@@ -3200,6 +3219,10 @@ function AnsiCompareFileName(const S1, S2 : TFileName): integer;
 function EnsureDirectoryExists(const Directory: TFileName;
   RaiseExceptionOnCreationFailure: ExceptionClass = nil;
   NoExpand: boolean = false): TFileName; overload;
+
+/// just a wrapper around EnsureDirectoryExists({noexpand=}true) for Delphi 7
+function EnsureDirectoryExistsNoExpand(const Directory: TFileName): TFileName;
+  {$ifdef HASINLINE} inline; {$endif}
 
 /// just a wrapper around EnsureDirectoryExists(NormalizeFileName(Directory))
 function NormalizeDirectoryExists(const Directory: TFileName;
@@ -3810,6 +3833,7 @@ type
     property LibraryPath: TFileName
       read fLibraryPath;
     /// if set, and no path is specified, will try from Executable.ProgramFilePath
+    // - see also the even more unsafe LibraryGlobalPath variable
     property TryFromExecutableFolder: boolean
       read fTryFromExecutableFolder write fTryFromExecutableFolder;
   end;
@@ -3819,6 +3843,17 @@ type
     lsUnTested,
     lsAvailable,
     lsNotAvailable);
+
+var
+  /// TSynLibrary.TryLoadLibrary() check for an existing library in this folder
+  // - similar to LD_LIBRARY_PATH environment on POSIX, but for this process
+  // - ensure any value defined here ends with the proper \ or / delimiter
+  // - some (set of) applications tend to supply their preferred libraries in
+  // their own shared folder, which could be specified here at startup
+  // - warning: use with caution, because this could lead to unexpected behavior
+  // or - even worse - some unattended exploits: the safest is to always
+  // specify the expected full path of a library, if possible
+  LibraryGlobalPath: TFileName;
 
 /// call once Init if State is in its default lsUntested (0) value
 function LibraryAvailable(var State: TLibraryState; Init: TProcedure): boolean;
@@ -5992,16 +6027,17 @@ end;
 
 // PUtf8Char for system error text reduces the executable size vs RawUtf8
 // on Delphi (aligned to 4 bytes), but not on FPC (aligned to 16 bytes), and
-// enumerates allow cross-platform error support (e.g. in centralized servers)
+// enumerates let compiler generate the smallest code
+// - all errors are cross-platform, e.g. when used in centralized servers
 
 const
   NULL_STR: string[1] = '';
 
 function _GetEnumNameRtti(Info: pointer; Value: integer): PShortString;
 begin
-  // will properly be implemented in mormot.core.rtti.pas
+  // naive version - will properly be implemented in mormot.core.rtti.pas anyway
   result := @NULL_STR;
-  // no arm32 support yet - see fpc_shortstr_enum_intern() in sstrings.inc
+  // arm32 is overcomplex and would rather use typinfo and mormot.core.rtti
   {$ifndef FPC_REQUIRES_PROPER_ALIGNMENT}
   if Value < 0 then
     exit;
@@ -6089,6 +6125,11 @@ type
   TWinErrorSorted = (
     // some EXCEPTION_* in range $80000000 .. $800000ff
     DATATYPE_MISALIGNMENT, BREAKPOINT, SINGLE_STEP,
+    // some SEC_E_* errors as returned by SSPI
+    E_UNSUPPORTED_FUNCTION, E_INVALID_TOKEN, E_MESSAGE_ALTERED,
+    E_CONTEXT_EXPIRED, E_INCOMPLETE_MESSAGE, E_BUFFER_TOO_SMALL,
+    E_ILLEGAL_MESSAGE, E_CERT_UNKNOWN, E_CERT_EXPIRED, E_ENCRYPT_FAILURE,
+    E_DECRYPT_FAILURE, E_ALGORITHM_MISMATCH,
     // some security-related HRESULT errors (negative 32-bit values first)
     CRYPT_E_BAD_ENCODE, CRYPT_E_SELF_SIGNED, CRYPT_E_BAD_MSG, CRYPT_E_REVOKED,
     CRYPT_E_NO_REVOCATION_CHECK, CRYPT_E_REVOCATION_OFFLINE, TRUST_E_BAD_DIGEST,
@@ -6109,11 +6150,18 @@ type
     ETIMEDOUT, ECONNREFUSED, TRY_AGAIN,
     // most common WinHttp API errors (in range 12000...12152)
     TIMEOUT, OPERATION_CANCELLED, CANNOT_CONNECT,
-    CLIENT_AUTH_CERT_NEEDED, INVALID_SERVER_RESPONSE);
+    CLIENT_AUTH_CERT_NEEDED, INVALID_SERVER_RESPONSE,
+    // some SEC_I_* status as returned by SSPI
+    I_CONTINUE_NEEDED, I_COMPLETE_NEEDED, I_COMPLETE_AND_CONTINUE,
+    I_CONTEXT_EXPIRED, I_INCOMPLETE_CREDENTIALS, I_RENEGOTIATE);
+
 const
   WINERR_SORTED: array[TWinErrorSorted] of cardinal = (
     // some EXCEPTION_* in range $80000000 .. $800000ff
     $80000002, $80000003, $80000004,
+    // some SEC_E_* errors as returned by SSPI
+    $80090302, $80090308, $8009030F, $80090317, $80090318, $80090321,
+    $80090326, $80090327, $80090328, $80090329, $80090330, $80090331,
     // some security-related HRESULT errors (negative 32-bit values first)
     $80092002, $80092007, $8009200d, $80092010, $80092012, $80092013, $80096010,
     $800b0100, $800b0101, $800b010a, $800b010c,
@@ -6127,7 +6175,9 @@ const
     10014, 10022, 10024, 10035, 10038, 10050, 10051, 10052, 10053, 10054, 10055,
     10060, 10061, 11002,
     // most common WinHttp API errors (in range 12000...12152)
-    12002, 12017, 12029, 12044, 12152);
+    12002, 12017, 12029, 12044, 12152,
+    // some SEC_I_* status as returned by SSPI
+    $00090312, $00090313, $00090314, $00090317, $00090320, $00090321);
 
 function WinErrorConstant(Code: cardinal): PShortString;
 begin
@@ -6175,8 +6225,8 @@ begin
 end;
 
 const
-  _PREFIX: array[0..4] of string[15] = (
-    'WSA', 'ERROR_WINHTTP_', '', 'EXCEPTION_', 'ERROR_');
+  _PREFIX: array[0..5] of string[15] = (
+    'WSA', 'ERROR_WINHTTP_', '', 'EXCEPTION_', 'SEC_', 'ERROR_');
 
 function AppendWinErrorText(Code: cardinal; var Dest: ShortString;
   Sep: AnsiChar): boolean;
@@ -6198,8 +6248,11 @@ begin
       Code := 2;  // no prefix for security-related HRESULT errors
     $80000000 .. $800000ff, $c0000000 .. $c00000ff:
       Code := 3;  // EXCEPTION_* constants
+    $00090312 .. $00090321,
+    $80090302 .. $80090331:
+      Code := 4; // SEC_* SSPI constants
   else
-    Code := 4;    // regular Windows ERROR_* constant
+    Code := 5;   // regular Windows ERROR_* constant
   end;
   AppendShort(_PREFIX[Code], Dest);
   AppendShort(txt^, Dest);
@@ -6237,7 +6290,7 @@ type
     bSTALE, bREMOTE, bBADRPC, bRPCMISMATCH, bPROGUNAVAIL, bPROGMISMATCH, bPROCUNAVAIL, bNOLCK, bNOSYS,
     bFTYPE, bAUTH, bNEEDAUTH);
 
-procedure PosixErrorShort(Code, Max: cardinal; Dest: PShortString;
+procedure _PosixError(Code, Max: cardinal; Dest: PShortString;
   Info: pointer; NoInt: boolean);
 var
   ps: PShortString;
@@ -6259,17 +6312,45 @@ end;
 
 procedure LinuxErrorShort(Code: cardinal; Dest: PShortString; NoInt: boolean);
 begin
-  PosixErrorShort(Code, ord(high(TLinuxError)), Dest, TypeInfo(TLinuxError), NoInt);
+  _PosixError(Code, ord(high(TLinuxError)), Dest, TypeInfo(TLinuxError), NoInt);
 end;
 
 procedure BsdErrorShort(Code: cardinal; Dest: PShortString; NoInt: boolean);
 begin
-  PosixErrorShort(Code, ord(high(TBsdError)), Dest, TypeInfo(TBsdError), NoInt);
+  _PosixError(Code, ord(high(TBsdError)), Dest, TypeInfo(TBsdError), NoInt);
 end;
 
 function OsErrorShort(Code: cardinal; NoInt: boolean): TShort47;
 begin
   OsErrorShort(Code, @result, NoInt); // redirect to Win/Linux/BsdErrorShort()
+end;
+
+procedure OsErrorAppend(Code: cardinal; var Dest: ShortString;
+  Sep: AnsiChar; NoInt: boolean);
+var
+  os: TShort47;
+begin
+  OsErrorShort(Code, @os, NoInt); // redirect to Win/Linux/BsdErrorShort()
+  if Sep <> #0 then
+    AppendShortChar(Sep, @Dest);
+  AppendShort(os, Dest);
+end;
+
+function GetErrorShort(error: integer): ShortString;
+begin
+  if error = 0 then
+    error := GetLastError;
+  GetErrorShortVar(error, result);
+end;
+
+function GetErrorText(error: integer): RawUtf8;
+var
+  txt: shortstring;
+begin
+  if error = 0 then
+    error := GetLastError;
+  GetErrorShortVar(error, txt);
+  FastSetString(result, @txt[1], ord(txt[0]));
 end;
 
 const
@@ -6884,7 +6965,7 @@ constructor TFileStreamEx.CreateFromHandle(aHandle: THandle;
 begin
   if not ValidHandle(aHandle) then
     raise EOSException.CreateFmt('%s.Create(%s) failed as %s',
-      [ClassNameShort(self)^, aFileName, GetErrorText(GetLastError)]);
+      [ClassNameShort(self)^, aFileName, GetErrorShort]);
   inherited Create(aHandle); // TFileStreamFromHandle constructor which own it 
   fFileName := aFileName;
   fDontReleaseHandle := aDontReleaseHandle;
@@ -7406,11 +7487,15 @@ begin
       if not ForceDirectories(result) then
         if RaiseExceptionOnCreationFailure <> nil then
           raise RaiseExceptionOnCreationFailure.CreateFmt(
-            'EnsureDirectoryExists(%s) failed as %s',
-            [result, GetErrorText(GetLastError)])
+            'EnsureDirectoryExists(%s) failed as %s', [result, GetErrorShort])
         else
           result := '';
   end;
+end;
+
+function EnsureDirectoryExistsNoExpand(const Directory: TFileName): TFileName;
+begin // circumvent a weird Delphi 7 compiler issue
+  result := EnsureDirectoryExists(Directory, ExceptionClass(nil), {noexpand=}true);
 end;
 
 function NormalizeDirectoryExists(const Directory: TFileName;
@@ -8146,49 +8231,52 @@ end;
 function TSynLibrary.TryLoadLibrary(const aLibrary: array of TFileName;
   aRaiseExceptionOnFailure: ExceptionClass; aSilentError: PString): boolean;
 var
-  i, j: PtrInt;
-  {$ifdef OSWINDOWS}
-  cwd: TFileName;
-  {$endif OSWINDOWS}
-  lib, libs, nwd: TFileName;
+  i: PtrInt;
+  libs, nwd: TFileName;
   err: string;
-begin
-  for i := 0 to high(aLibrary) do
+
+  function LoadOne(lib: TFileName; current: PtrInt): boolean;
+  var
+    j: PtrInt;
+    {$ifdef OSWINDOWS}
+    cwd: TFileName;
+    {$endif OSWINDOWS}
   begin
     // check library name
-    lib := aLibrary[i];
+    result := false;
     if lib = '' then
-      continue;
-    result := true;
-    for j := 0 to i - 1 do
+      exit;
+    for j := 0 to current - 1 do
       if aLibrary[j] = lib then
-      begin
-        result := false;
-        break;
-      end;
-    if not result then
-      continue; // don't try twice the same library name
-    // open the library
+        exit; // don't try twice the same library name
+    // try to open this library
     nwd := ExtractFilePath(lib);
-    if fTryFromExecutableFolder  and
-       (nwd = '') and
-       FileExists(Executable.ProgramFilePath + lib) then
-    begin
-      lib := Executable.ProgramFilePath + lib;
-      nwd := Executable.ProgramFilePath;
-    end;
+    if nwd = '' then // has no specific path -> try exe folder or global path
+      if fTryFromExecutableFolder and
+         FileExists(Executable.ProgramFilePath + lib) then
+      begin
+        nwd := Executable.ProgramFilePath;
+        lib := nwd + lib;
+      end
+      else if (LibraryGlobalPath <> '') and
+              FileExists(LibraryGlobalPath + lib) then
+      begin
+        nwd := LibraryGlobalPath;
+        lib := nwd + lib;
+      end;
     if {%H-}libs = '' then
       libs := lib
     else
       libs := libs + ', ' + lib; // include path
+    // change the current folder at loading on Windows
     {$ifdef OSWINDOWS}
     if nwd <> '' then
     begin
       cwd := GetCurrentDir;
-      SetCurrentDir(nwd); // change the current folder at loading on Windows
+      SetCurrentDir(nwd);
       lib := ExtractFileName(lib); // seems more stable that way
     end;
-    fHandle := LibraryOpen(lib); // preserve x87 flags and prevent msg box 
+    fHandle := LibraryOpen(lib); // preserve x87 flags and prevent msg box
     if nwd <> '' then
       SetCurrentDir(cwd{%H-});
     {$else}
@@ -8201,6 +8289,7 @@ begin
       if length(fLibraryPath) < length(lib) then
       {$endif OSWINDOWS}
         fLibraryPath := lib;
+      result := true;
       exit;
     end;
     // handle any error
@@ -8208,6 +8297,12 @@ begin
     if err <> '' then
       libs := libs + ' [' + err + ']';
   end;
+
+begin
+  result := true;
+  for i := 0 to high(aLibrary) do
+    if LoadOne(aLibrary[i], i) then
+      exit;
   libs := Format('%s.TryLoadLibray failed - searched in %s',
     [ClassNameShort(self)^, libs]);
   if aRaiseExceptionOnFailure <> nil then

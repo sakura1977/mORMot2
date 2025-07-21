@@ -8895,7 +8895,7 @@ begin
   n1 := Len;
   n2 := PASN1_STRING(another).Len;
   result := (n1 = n2) and
-            CompareMem(Data, PASN1_STRING(another).Data, n1);
+    mormot.core.base.CompareMem(Data, PASN1_STRING(another).Data, n1);
 end;
 
 
@@ -10137,7 +10137,7 @@ begin
           get_error := RawSocketErrNo; // try to get additional info from OS
           if get_error <> NO_ERROR then
             result := RawUtf8(format('%s (%d %s)',
-                        [result, get_error, GetErrorText(get_error)]));
+                        [result, get_error, GetErrorShort(get_error)]));
         end;
     end; // non-fatal SSL_ERROR_WANT_* codes are unexpected here
   end

@@ -1270,8 +1270,8 @@ type
     // - consider the faster InitArrayFromResults() from ORM/SQL JSON results
     // - if you call Init*() methods in a row, ensure you call Clear in-between,
     // e.g. never call _Safe(...)^.InitJsonInPlace() because it could leak memory
-    function InitJsonInPlace(Json: PUtf8Char;
-      aOptions: TDocVariantOptions = []; aEndOfObject: PUtf8Char = nil): PUtf8Char;
+    function InitJsonInPlace(Json: PUtf8Char; aOptions: TDocVariantOptions = [];
+      aEndOfObject: PUtf8Char = nil; aCapacity: PtrInt = 0): PUtf8Char;
     /// initialize a variant instance to store some document-based object content
     // from a supplied JSON array or JSON object content
     // - a private copy of the incoming JSON buffer will be used, then
@@ -2162,7 +2162,10 @@ type
     // - return FALSE if the TDocVariant did not change
     // - return TRUE if the TDocVariant has been flattened
     function FlattenAsNestedObject(const aObjectPropName: RawUtf8;
-      aSepChar: AnsiChar = '.'): boolean;
+      aSepChar: AnsiChar = '.'): boolean; overload;
+    /// map in-place {"obj.prop1"..,"obj.prop2":..} into {"obj":{"prop1":..,"prop2":...}}
+    function FlattenAsNestedObject(aName: PUtf8Char; aNameLen: PtrInt;
+      aSepChar: AnsiChar = '.'): boolean; overload;
     /// map in-place {"a":{"b":1,"c":1},...} into {"a.b":1,"a.c":1,...}
     // - any name collision will append a counter to make it unique
     // - if aSepChar is #0, no separation dot/character will be appended
@@ -4284,7 +4287,7 @@ const
     'Decimal', '15', 'ShortInt', 'Byte', 'Word', 'LongWord', 'Int64', 'QWord',
     'String', 'UString', 'Any', 'Array', 'DocVariant');
 var
-  _VariantTypeNameAsInt: ShortString; // not thread-safe, but hardly called
+  _VariantTypeNameHex: TShort7 = '#0000'; // not thread-safe, but hardly called
 
 function VariantTypeName(V: PVarData): PShortString;
 var
@@ -4332,8 +4335,9 @@ begin
         ct := FindSynVariantType(vt);
         if ct = nil then
         begin
-          str(vt, _VariantTypeNameAsInt);
-          result := @_VariantTypeNameAsInt; // return VType as number
+          PCardinal(@tmp)^ := vt;
+          BinToHexDisplayLower(@tmp, @_VariantTypeNameHex[2], 2);
+          result := @_VariantTypeNameHex; // return VType as #hexa number
         end
         else
           result := PPointer(PPtrInt(ct)^ + vmtClassName)^;
@@ -5710,9 +5714,11 @@ var
   json: RawUtf8;
 begin
   VarClear(result{%H-});
-  json := ObjectToJson(Value, Options);
-  if PDocVariantData(@result)^.InitJsonInPlace(
-      pointer(json), JSON_FAST) = nil then
+  if Value = nil then
+    exit;
+  ObjectToJson(Value, json, Options);
+  if PDocVariantData(@result)^.InitJsonInPlace(pointer(json), JSON_FAST, nil,
+       {capacity=}Rtti.FindClass(PClass(Value)^).PropsCount) = nil then
     VarClear(result);
 end;
 
@@ -5818,7 +5824,7 @@ begin
   VarClear(result);
   tempvoid := Rtti.RegisterClass(aClass).ClassNewInstance;
   try
-    json := ObjectToJson(tempvoid, [woDontStoreDefault]);
+    ObjectToJson(tempvoid, json, [woDontStoreDefault]);
     PDocVariantData(@result)^.InitJsonInPlace(pointer(json), aOptions);
   finally
     tempvoid.Free;
@@ -6642,13 +6648,13 @@ begin
   TSynVarData(self).VType := varNull;
 end;
 
-function TDocVariantData.InitJsonInPlace(Json: PUtf8Char;
-  aOptions: TDocVariantOptions; aEndOfObject: PUtf8Char): PUtf8Char;
+function TDocVariantData.InitJsonInPlace(Json: PUtf8Char; aOptions: TDocVariantOptions;
+  aEndOfObject: PUtf8Char; aCapacity: PtrInt): PUtf8Char;
 var
   info: TGetJsonField;
   Name: PUtf8Char;
   NameLen: integer; // not PtrInt
-  n, cap: PtrInt;
+  n: PtrInt;
   Val: PVariant;
   intnames, intvalues: TRawUtf8Interning;
 begin
@@ -6677,25 +6683,26 @@ begin
           Json := GotoNextNotSpace(Json + 1)
         else
         begin
-          if Has(dvoJsonParseDoNotGuessCount) then
-            cap := 8 // with a lot of nested objects -> best to ignore
-          else
-          begin
-            // guess of the Json array items count - prefetch up to 64KB of input
-            cap := abs(JsonArrayCount(Json, Json + JSON_PREFETCH));
-            if cap = 0 then
-              exit; // invalid content
-          end;
-          SetLength(VValue, cap);
+          if aCapacity <= 0 then // guess capacity if not supplied by caller
+            if Has(dvoJsonParseDoNotGuessCount) then
+              aCapacity := 8 // with a lot of nested objects -> best to ignore
+            else
+            begin
+              // guess of the Json array items count - prefetch up to 64KB of input
+              aCapacity := abs(JsonArrayCount(Json, Json + JSON_PREFETCH));
+              if aCapacity = 0 then
+                exit; // invalid content
+            end;
+          SetLength(VValue, aCapacity);
           Val := pointer(VValue);
           n := 0;
           info.Json := Json;
           repeat
-            if n = cap then
+            if n = aCapacity then
             begin
               // grow if our initial guess was aborted due to huge input
-              cap := NextGrow(cap);
-              SetLength(VValue, cap);
+              aCapacity := NextGrow(aCapacity);
+              SetLength(VValue, aCapacity);
               Val := @VValue[n];
             end;
             // unserialize the next item
@@ -6731,27 +6738,28 @@ begin
           Json := GotoNextNotSpace(Json + 1)
         else
         begin
-          if Has(dvoJsonParseDoNotGuessCount) then
-            cap := 4 // with a lot of nested documents -> best to ignore
-          else
-          begin
-            // guess of the Json object properties count - prefetch up to 64KB
-            cap := JsonObjectPropCount(Json, Json + JSON_PREFETCH);
-            if cap = 0 then
-              exit // invalid content (was <0 if early abort)
-            else if cap < 0 then
-            begin // nested or huge objects are evil -> no more guess
-              cap := -cap;
-              Include(dvoJsonParseDoNotGuessCount);
+          if aCapacity <= 0 then // guess capacity if not supplied by caller
+            if Has(dvoJsonParseDoNotGuessCount) then
+              aCapacity := 4 // with a lot of nested documents -> best to ignore
+            else
+            begin
+              // guess of the Json object properties count - prefetch up to 64KB
+              aCapacity := JsonObjectPropCount(Json, Json + JSON_PREFETCH);
+              if aCapacity = 0 then
+                exit // invalid content (was <0 if early abort)
+              else if aCapacity < 0 then
+              begin // nested or huge objects are evil -> no more guess
+                aCapacity := -aCapacity;
+                Include(dvoJsonParseDoNotGuessCount);
+              end;
             end;
-          end;
           if Has(dvoInternNames) then
             intnames := DocVariantType.InternNames
           else
             intnames := nil;
-          SetLength(VValue, cap);
+          SetLength(VValue, aCapacity);
           Val := pointer(VValue);
-          SetLength(VName, cap);
+          SetLength(VName, aCapacity);
           n := 0;
           info.Json := Json;
           repeat
@@ -6759,12 +6767,12 @@ begin
             Name := GetJsonPropName(info.Json, @NameLen);
             if Name = nil then
               break; // invalid input
-            if n = cap then
+            if n = aCapacity then
             begin
               // grow if our initial guess was aborted due to huge input
-              cap := NextGrow(cap);
-              SetLength(VName, cap);
-              SetLength(VValue, cap);
+              aCapacity := NextGrow(aCapacity);
+              SetLength(VName, aCapacity);
+              SetLength(VValue, aCapacity);
               Val := @VValue[n];
             end;
             JsonToAnyVariant(Val^, info, @VOptions);
@@ -8388,29 +8396,35 @@ end;
 
 function TDocVariantData.FlattenAsNestedObject(
   const aObjectPropName: RawUtf8; aSepChar: AnsiChar): boolean;
+begin
+  result := FlattenAsNestedObject(
+    pointer(aObjectPropName), length(aObjectPropName), aSepChar);
+end;
+
+function TDocVariantData.FlattenAsNestedObject(aName: PUtf8Char;
+  aNameLen: PtrInt; aSepChar: AnsiChar): boolean;
 var
-  ndx, len: PtrInt;
+  ndx: PtrInt;
   Up: TByteToAnsiChar;
   nested: TDocVariantData;
 begin
   // {"p.a1":5,"p.a2":"dfasdfa"} into {"p":{"a1":5,"a2":"dfasdfa"}}
   result := false;
   if (VCount = 0) or
-     (aObjectPropName = '') or
+     (aName = nil) or
      (not IsObject) then
     exit;
-  PWord(UpperCopy255(Up{%H-}, aObjectPropName))^ := ord(aSepChar); // e.g. 'P.'
-  for ndx := 0 to Count - 1 do
+  PWord(UpperCopy255Buf(Up{%H-}, aName, aNameLen))^ := ord(aSepChar); // e.g. 'P.'
+  for ndx := 0 to VCount - 1 do
     if not IdemPChar(pointer(VName[ndx]), Up) then
       exit; // all fields should match "p.####"
-  len := length(aObjectPropName);
   if aSepChar <> #0 then
-    inc(len); // #0 would match {"pa1":5,"pa2":"dfasdfa"}
-  for ndx := 0 to Count - 1 do
-    system.delete(VName[ndx], 1, len);
+    inc(aNameLen); // #0 would match {"pa1":5,"pa2":"dfasdfa"}
+  for ndx := 0 to VCount - 1 do
+    system.delete(VName[ndx], 1, aNameLen);
   nested := self;
-  ClearFast;
-  InitObject([aObjectPropName, variant(nested)], nested.Options);
+  Void; // same options (and dvObject)
+  AddValue(aName, aNameLen, variant(nested));
   result := true;
 end;
 

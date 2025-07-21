@@ -806,8 +806,9 @@ type
     // - handle rkClass as WriteObject, rkEnumeration/rkSet with proper options,
     // rkRecord, rkDynArray or rkVariant using proper JSON serialization
     // - other types will append 'null'
-    procedure AddTypedJson(Value, TypeInfo: pointer;
-      WriteOptions: TTextWriterWriteObjectOptions = []); override;
+    // - returns the TRttiCustom corresponding to TypeInfo
+    function AddTypedJson(Value, TypeInfo: pointer;
+      WriteOptions: TTextWriterWriteObjectOptions = []): pointer; override;
     /// serialize as JSON the given object
     procedure WriteObject(Value: TObject;
       WriteOptions: TTextWriterWriteObjectOptions = [woDontStoreDefault]); override;
@@ -978,6 +979,7 @@ type
     /// any associated pointer or numerical value
     Tag: PtrInt;
   end;
+  PSynNameValueItem = ^TSynNameValueItem;
 
   /// Name/Value pairs storage, as used by TSynNameValue class
   TSynNameValueItemDynArray = array of TSynNameValueItem;
@@ -1048,9 +1050,11 @@ type
     /// reset content, then add all name, value pairs
     // - will first call Init(false) to initialize the internal array
     procedure InitFromNamesValues(const Names, Values: array of RawUtf8);
-    /// search for a Name, return the index in List
+    /// search for a Name, return the index in List[]
     // - using fast O(1) hash algoritm
     function Find(const aName: RawUtf8): PtrInt;
+    /// search for a Name, return the raw PSynNameValueItem in List[]
+    function FindItem(const aName: RawUtf8): PSynNameValueItem;
     /// search for the first chars of a Name, return the index in List
     // - using O(n) calls of IdemPChar() function
     // - here aUpperName should be already uppercase, as expected by IdemPChar()
@@ -1274,7 +1278,7 @@ type
     fKeys: TDynArrayHashed;
     fValues: TDynArray;
     fTimeOut: TCardinalDynArray;
-    fSafe: TSynLocker;
+    fSafe: TSynLocker; // Padding[] are used to store counts and tix
     fOnCanDelete: TOnSynDictionaryCanDelete;
     function InternalAddUpdate(aKey, aValue: pointer; aUpdate: boolean): PtrInt;
     function InArray(const aKey, aArrayValue; aAction: TSynDictionaryInArray;
@@ -2130,9 +2134,9 @@ var
 // - so would handle tkClass, tkEnumeration, tkSet, tkRecord, tkDynArray,
 // tkVariant kind of content - other kinds would return 'null'
 // - you can override serialization options if needed
-procedure SaveJson(const Value; TypeInfo: PRttiInfo;
-  Options: TTextWriterOptions; var result: RawUtf8;
-  ObjectOptions: TTextWriterWriteObjectOptions = []); overload;
+function SaveJson(const Value; TypeInfo: PRttiInfo;
+  Options: TTextWriterOptions; var Json: RawUtf8;
+  ObjectOptions: TTextWriterWriteObjectOptions = []): TRttiCustom; overload;
 
 /// serialize most kind of content as JSON, using its RTTI
 // - is just a wrapper around TJsonWriter.AddTypedJson()
@@ -5082,8 +5086,7 @@ begin
               AddQuotedStr(tmp.Text, tmp.Len, '''') // SQL quote
             else
               AddShort(tmp.Text, tmp.Len); // numbers
-            if tmp.TempRawUtf8 <> nil then
-              RawUtf8(tmp.TempRawUtf8) := '';  // release temp memory
+            TempUtf8Done(tmp);
             AddDirect(')', ':');
           end;
           inc(P);
@@ -6686,29 +6689,27 @@ begin
   end;
 end;
 
-procedure TJsonWriter.AddTypedJson(Value, TypeInfo: pointer;
-  WriteOptions: TTextWriterWriteObjectOptions);
+function TJsonWriter.AddTypedJson(Value, TypeInfo: pointer;
+  WriteOptions: TTextWriterWriteObjectOptions): pointer;
 var
   ctxt: TJsonSaveContext;
-  rc: TRttiCustom;
 begin
   ctxt.W := self; // inlined ctxt.Init()
-  rc := fLastRttiType;
+  result := fLastRttiType;
   repeat
-    if (rc = nil) or
-       (rc.Info <> TypeInfo) then
+    if (result = nil) or
+       (TRttiCustom(result).Info <> TypeInfo) then
     begin
-      rc := Rtti.RegisterType(TypeInfo);
-      if rc = nil then
+      result := Rtti.RegisterType(TypeInfo);
+      if result = nil then
         break;
-      fLastRttiType := rc; // naive but efficient cache
+      fLastRttiType := result; // naive but efficient cache
     end;
-    ctxt.Options := WriteOptions + TRttiJson(rc).fIncludeWriteOptions;
-    ctxt.Info := rc;
+    ctxt.Options := WriteOptions + TRttiJson(result).fIncludeWriteOptions;
+    ctxt.Info := result;
     ctxt.Prop := nil;
-    rc := rc.JsonSave;
-    if Assigned(rc) then
-      TRttiJsonSave(rc)(Value, ctxt)
+    if Assigned(TRttiCustom(result).JsonSave) then
+      TRttiJsonSave(TRttiCustom(result).JsonSave)(Value, ctxt)
     else
       BinarySaveBase64(Value, TypeInfo, rkRecordTypes, {withMagic=}true);
     exit;
@@ -9254,9 +9255,9 @@ end;
 
 procedure TSynNameValue.Init(aCaseSensitive: boolean);
 begin
-  // release dynamic arrays memory before FillcharFast()
+  // release dynamic arrays memory before FillCharFast()
   List := nil;
-  Finalize(PDynArrayHasher(@DynArray.Hasher)^);
+  Finalize(PDynArrayHasher(@DynArray.Hasher)^); // fHashTableStore := nil
   // initialize hashed storage
   FillCharFast(self, SizeOf(self), 0);
   DynArray.InitSpecific(TypeInfo(TSynNameValueItemDynArray), List,
@@ -9266,6 +9267,17 @@ end;
 function TSynNameValue.Find(const aName: RawUtf8): PtrInt;
 begin
   result := DynArray.FindHashed(aName);
+end;
+
+function TSynNameValue.FindItem(const aName: RawUtf8): PSynNameValueItem;
+var
+  ndx: PtrInt;
+begin
+  ndx := DynArray.FindHashed(aName);
+  if ndx >= 0 then
+    result := @List[ndx]
+  else
+    result := nil;
 end;
 
 function TSynNameValue.FindStart(const aUpperName: RawUtf8): PtrInt;
@@ -11516,16 +11528,16 @@ begin
     Join(['{"', Name, '":', SQLValue, '}'], result);
 end;
 
-procedure SaveJson(const Value; TypeInfo: PRttiInfo; Options: TTextWriterOptions;
-  var result: RawUtf8; ObjectOptions: TTextWriterWriteObjectOptions);
+function SaveJson(const Value; TypeInfo: PRttiInfo; Options: TTextWriterOptions;
+  var Json: RawUtf8; ObjectOptions: TTextWriterWriteObjectOptions): TRttiCustom;
 var
   temp: TTextWriterStackBuffer;
 begin
   with TJsonWriter.CreateOwnedStream(temp, twoNoSharedStream in Options) do
   try
     CustomOptions := CustomOptions + Options;
-    AddTypedJson(@Value, TypeInfo, ObjectOptions);
-    SetText(result);
+    result := AddTypedJson(@Value, TypeInfo, ObjectOptions);
+    SetText(Json);
   finally
     Free;
   end;

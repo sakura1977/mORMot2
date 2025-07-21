@@ -191,11 +191,11 @@ type
   // - do not use this class, but plain TSynAuthentication
   TSynAuthenticationAbstract = class
   protected
+    fSafe: TOSLock;
     fSessions: TIntegerDynArray;
     fSessionsCount: integer;
     fSessionGenerator: integer;
     fTokenSeed: Int64;
-    fSafe: TSynLocker;
     function ComputeCredential(previous: boolean;
       const UserName, PassWord: RawUtf8): cardinal; virtual;
     function GetPassword(const UserName: RawUtf8;
@@ -1604,14 +1604,21 @@ type
     function Generate(out Cookie: RawUtf8; TimeOutMinutes: cardinal = 0;
       PRecordData: pointer = nil;
       PRecordTypeInfo: PRttiInfo = nil): TBinaryCookieGeneratorSessionID;
-    ///  decode a base64uri cookie and optionally fill an associated record
+    /// decode a base64uri cookie and optionally fill an associated record
     // - return the associated session/sequence number, 0 on error
     // - Invalidate=true would force this cookie to be rejected in the future,
     // adding it into an internal in-memory list, and avoid cookie replay attacks
     function Validate(const Cookie: RawUtf8; PRecordData: pointer = nil;
       PRecordTypeInfo: PRttiInfo = nil; PExpires: PUnixTime = nil;
       PIssued: PUnixTime = nil; Invalidate: boolean = false;
-      Now32: TUnixTimeMinimal = 0): TBinaryCookieGeneratorSessionID;
+      Now32: TUnixTimeMinimal = 0): TBinaryCookieGeneratorSessionID; overload;
+    /// decode a base64uri cookie buffer and optionally fill an associated record
+    // - input Cookie/CookieLen could be obtained via CookieFromHeaders() or
+    // via THttpCookies from mormot.core.text
+    function Validate(Cookie: PUtf8Char; CookieLen: PtrInt; PRecordData: pointer;
+      PRecordTypeInfo: PRttiInfo; PExpires: PUnixTime = nil;
+      PIssued: PUnixTime = nil; Invalidate: boolean = false;
+      Now32: TUnixTimeMinimal = 0): TBinaryCookieGeneratorSessionID; overload;
     /// allow currently available cookies to be recognized after server restart
     function Save: RawUtf8;
     /// unserialize the cookie generation context as serialized by Save
@@ -4700,7 +4707,7 @@ end;
 function HashDigestEqual(const a, b: THashDigest): boolean;
 begin
   result := (a.Algo <= high(THashAlgo)) and
-            CompareMem(@a, @b, HASH_SIZE[a.Algo] + 1);
+            mormot.core.base.CompareMem(@a, @b, HASH_SIZE[a.Algo] + 1);
 end;
 
 procedure Hmac(algo: TSignAlgo; key, msg: pointer; keylen, msglen: integer;
@@ -5269,7 +5276,7 @@ begin
   if result <> asrMatch then
     exit;
   if (DigestHA0(fAlgo, aUser, fRealm, aPassword, dig) = fAlgoSize) and
-     CompareMem(@dig, @stored, fAlgoSize) then
+     mormot.core.base.CompareMem(@dig, @stored, fAlgoSize) then
     if AfterAuth(self, aUser) then
       result := asrMatch
     else
@@ -5722,7 +5729,7 @@ end;
 
 constructor TSynAuthenticationAbstract.Create;
 begin
-  fSafe.InitFromClass;
+  fSafe.Init;
   fTokenSeed := Random32Not0;
   fSessionGenerator := abs(fTokenSeed * PPtrInt(self)^);
   fTokenSeed := fTokenSeed * Random31Not0;
@@ -5730,8 +5737,8 @@ end;
 
 destructor TSynAuthenticationAbstract.Destroy;
 begin
-  fSafe.Done;
   inherited;
+  fSafe.Done;
 end;
 
 class function TSynAuthenticationAbstract.ComputeHash(Token: Int64;
@@ -6481,18 +6488,25 @@ end;
 function TBinaryCookieGenerator.Validate(const Cookie: RawUtf8;
   PRecordData: pointer; PRecordTypeInfo: PRttiInfo; PExpires, PIssued: PUnixTime;
   Invalidate: boolean; Now32: TUnixTimeMinimal): TBinaryCookieGeneratorSessionID;
+begin
+  result := Validate(pointer(Cookie), length(Cookie), PRecordData,
+    PRecordTypeInfo, PExpires, PIssued, Invalidate, Now32)
+end;
+
+function TBinaryCookieGenerator.Validate(Cookie: PUtf8Char; CookieLen: PtrInt;
+  PRecordData: pointer; PRecordTypeInfo: PRttiInfo; PExpires, PIssued: PUnixTime;
+  Invalidate: boolean; Now32: TUnixTimeMinimal): TBinaryCookieGeneratorSessionID;
 var
-  clen, len: integer;
+  len: integer;
   ccend: PAnsiChar;
   cc: TCookieContent; // local working buffer on stack (no memory allocation)
 begin
   result := 0; // parsing/crc/timeout error
-  clen := length(Cookie);
-  len := Base64uriToBinLength(clen);
+  len := Base64uriToBinLength(CookieLen);
   if (self = nil) or
      (len < SizeOf(cc.head)) or
      (len > SizeOf(cc)) or
-     (not Base64uriDecode(pointer(Cookie), @cc, clen)) or
+     (not Base64uriDecode(pointer(Cookie), @cc, CookieLen)) or
      (cc.head.session < cardinal(fContext.SessionSequenceStart)) or
      (cc.head.session > cardinal(fContext.SessionSequence)) or
      (cc.head.issued = 0) or
@@ -6521,7 +6535,8 @@ begin
       if Now32 >= fNextUnixTimeMinimalInvalidateCheck then
       begin // cleanup of deprecated invalid sessions once per minute
         fNextUnixTimeMinimalInvalidateCheck := Now32 + SecsPerMin;
-        RemoveSortedInt64SmallerThan(fContext.Invalid, fInvalidCount, Int64(Now32) shl 32);
+        RemoveSortedInt64SmallerThan(fContext.Invalid, fInvalidCount,
+          Int64(Now32) shl 32);
       end;
       if FastFindInt64Sorted(pointer(fContext.Invalid), fInvalidCount - 1,
            PInt64(@cc.head.session)^) >= 0 then // branchless O(log(n)) search
@@ -6567,7 +6582,6 @@ begin
   if result then
     fAes.Init(fContext.CryptKey, 128, {avx=}false);
 end;
-
 
 
 { ************* Rnd/Hash/Sign/Cipher/Asym/Cert/Store High-Level Algorithms Factories }
