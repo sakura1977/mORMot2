@@ -1902,7 +1902,7 @@ type
   // - will default setup a TLS connection on the OS-designed LDAP server
   // - Authentication will use Username/Password properties
   // - is not thread-safe, but you can call Lock/UnLock to share the connection
-  TLdapClient = class(TSynLocked)
+  TLdapClient = class(TObjectOSLock)
   protected
     fSettings: TLdapClientSettings;
     fSock: TCrtSocket;
@@ -3073,7 +3073,7 @@ end;
 function DNsToCN(const dc, ou, cn: TRawUtf8DynArray): RawUtf8;
 var
   w: TTextWriter;
-  tmp: TTextWriterStackBuffer;
+  tmp: TTextWriterStackBuffer; // 8KB work buffer on stack
 begin
   w := TTextWriter.CreateOwnedStream(tmp);
   try
@@ -5246,7 +5246,7 @@ end;
 function TLdapResultList.ExportToLdifContent(aHumanFriendly: boolean;
   aMaxLineLen: PtrInt): RawUtf8;
 var
-  tmp: TTextWriterStackBuffer;
+  tmp: TTextWriterStackBuffer; // 8KB work buffer on stack
   w: TTextWriter;
   i: PtrInt;
 begin
@@ -5372,7 +5372,7 @@ begin
       inc(attr);
     end;
     if ObjectAttributeField = '*' then
-      v^.AddOrUpdateFrom(variant(a), {onlymissing=}true)
+      v^.AddOrUpdateFrom(a, {onlymissing=}true)
     else
       v^.AddValue(ObjectAttributeField, variant(a), {owned=}true);
     a.Clear; // mandatory to prepare the next a.Init in this loop
@@ -6112,8 +6112,7 @@ begin
       end;
   end;
   // a non-recoverable socket error occured at sending the request
-  raise ENetSock.Create('%s.SendPacket(%s) failed',
-    [ClassNameShort(self)^, fSock.Server], res, @raw);
+  raise ENetSock.Create('SendPacket(%s) failed', self, [fSock.Server], res, @raw);
 end;
 
 procedure TLdapClient.ReceivePacketFillSockBuffer;

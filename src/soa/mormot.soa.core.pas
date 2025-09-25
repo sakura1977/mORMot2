@@ -795,8 +795,8 @@ type
     ['{8D518FCB-62C3-42EB-9AE7-96ED322140F7}']
     /// will be called when a callback is released on the client side
     // - this method matches the TInterfaceFactory.MethodIndexCallbackReleased
-    // signature, so that it will be called with the interface instance by
-    // TServiceContainerServer.ReleaseFakeCallback
+    // signature, so that it will be called as POST root/cacheflush/_callback_
+    // to execute TServiceContainerServer.ClientFakeCallbackRelease()
     // - you may use it as such - see sample restws_chatserver.dpr:
     // ! procedure TChatService.CallbackReleased(const callback: IInvokable;
     // !   const interfaceName: RawUtf8);
@@ -961,7 +961,7 @@ type
     // a TServicesPublishedInterfaces JSON array, e.g.
     // $ [{"PublicUri":{"Address":"1.2.3.4","Port":"123","Root":"root"},"Names":['Calculator']},...]
     procedure FindServiceAll(const aServiceName: RawUtf8;
-      aWriter: TJsonWriter); overload;
+      aWriter: TJsonWriter; aTix64: Int64 = 0); overload;
     /// the number of milliseconds after which an entry expires
     // - is 0 by default, meaning no expiration
     // - you can set it to a value so that any service URI registered with
@@ -1710,7 +1710,7 @@ function TServiceContainer.AsJson: RawJson;
 var
   WR: TTextWriter;
   i: PtrInt;
-  temp: TTextWriterStackBuffer;
+  temp: TTextWriterStackBuffer; // 8KB work buffer on stack
 begin
   result := '';
   if (self = nil) or
@@ -1867,12 +1867,12 @@ begin
 end;
 
 procedure TServicesPublishedInterfacesList.FindServiceAll(
-  const aServiceName: RawUtf8; aWriter: TJsonWriter);
+  const aServiceName: RawUtf8; aWriter: TJsonWriter; aTix64: Int64);
 var
   i: PtrInt;
-  tix: Int64;
 begin
-  tix := GetTickCount64;
+  if aTix64 = 0 then
+    aTix64 := GetTickCount64;
   Safe.ReadLock;
   try
     aWriter.Add('[');
@@ -1881,7 +1881,7 @@ begin
       // for RegisterFromServer: return all TServicesPublishedInterfaces
       for i := 0 to Count - 1 do
         if (fTimeOut = 0) or
-           (fTimeoutTix[i] < tix) then
+           (fTimeoutTix[i] < aTix64) then
         begin
           aWriter.AddRecordJson(@List[i], TypeInfo(TServicesPublishedInterfaces));
           aWriter.AddComma;
@@ -1893,7 +1893,7 @@ begin
       for i := Count - 1 downto 0 do        // downwards to return the latest first
         if FindPropName(List[i].Names, aServiceName) >= 0 then
           if (fTimeOut = 0) or
-             (fTimeoutTix[i] < tix) then
+             (fTimeoutTix[i] < aTix64) then
           begin
             aWriter.AddRecordJson(@List[i].PublicUri, TypeInfo(TRestServerUri));
             aWriter.AddComma;

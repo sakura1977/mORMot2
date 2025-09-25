@@ -17,6 +17,7 @@ uses
   mormot.core.unicode,
   mormot.core.datetime,
   mormot.core.rtti,
+  mormot.core.interfaces,
   mormot.core.data,
   mormot.core.variants,
   mormot.core.json,
@@ -42,7 +43,16 @@ uses
   mormot.net.ldap,
   mormot.net.dns,
   mormot.net.rtsphttp,
-  mormot.net.tunnel;
+  mormot.net.tunnel,
+  mormot.soa.core,
+  mormot.rest.core,
+  mormot.rest.server,
+  mormot.rest.memserver,
+  mormot.rest.http.server,
+  mormot.rest.http.client;
+
+const
+  SYNOPSE_IP = '82.67.73.95'; // the mormot's home in the French mountains :)
 
 type
   /// this test case will validate several low-level protocols
@@ -60,14 +70,19 @@ type
     reqthree: boolean;
     reqfour: Int64;
     // for _TTunnelLocal
-    tunnelsession: Int64;
     tunnelappsec: RawUtf8;
     tunneloptions: TTunnelOptions;
-    tunnelexecutedone: boolean;
-    tunnelexecuteremote, tunnelexecutelocal: TNetPort;
+    tunnelsequence: integer;
     procedure TunnelExecute(Sender: TObject);
-    procedure TunnelExecuted(Sender: TObject);
-    procedure TunnelTest(const clientcert, servercert: ICryptCert);
+    function TunnelBackgroundOpen(l: TTunnelLocal; s: TTunnelSession;
+     const r: ITunnelTransmit; const sc, vc: ICryptCert): TLoggedWorkThread;
+    procedure CheckBlocks(const log: ISynLog; const sent, recv: RawByteString;
+      num: integer);
+    procedure TunnelTest(var rnd: TLecuyer; const clientcert, servercert: ICryptCert);
+    procedure TunnelSocket(const log: ISynLog; var rnd: TLecuyer;
+      clientinstance, serverinstance: TTunnelLocal);
+    procedure TunnelRelay(relay: TTunnelRelay; const agent: array of ITunnelAgent;
+      const console: array of ITunnelConsole; var rnd: TLecuyer);
     procedure RunLdapClient(Sender: TObject);
     procedure RunPeerCacheDirect(Sender: TObject);
     function OnPeerCacheDirect(var aUri: TUri; var aHeader: RawUtf8;
@@ -100,7 +115,7 @@ type
     /// RTSP over HTTP, with always temporary buffering
     procedure RTSPOverHTTPBufferedWrite;
     /// validate mormot.net.tunnel
-    procedure _TTunnelLocal;
+    procedure Tunnel;
     /// validate IP processing functions
     procedure IPAddresses;
     /// validate mormot.net.openapi unit
@@ -217,20 +232,21 @@ const
 const
   // some reference OpenAPI/Swagger definitions
   // - downloaded as openapi-ref.zip since some of those endpoints are unstable
-  OpenApiName: array[0 .. 5] of RawUtf8 = (
+  OpenApiName: array[0 .. 6] of RawUtf8 = (
     'FinTrack',
     'Nakama',  // https://github.com/heroiclabs/nakama
     'Pets2',   // https://petstore.swagger.io/v2/swagger.json
     'Pets3',   // https://petstore3.swagger.io/api/v3/openapi.json
     'Qdrant',  // https://qdrant.github.io/qdrant/redoc/v1.8.x/openapi.json
-    'VAS');    // https://platform-api-staging.vas.com/api/v1/swagger.json
+    'VAS',     // https://platform-api-staging.vas.com/api/v1/swagger.json
+    'JTL');    // https://developer.jtl-software.com/_spec/products/erpapi/@1.1-onprem/openapi.json?download
 
 procedure TNetworkProtocols.OpenAPI;
 var
   i: PtrInt;
   fn: TFileName;
   key, prev, dto, client: RawUtf8;
-  ref: RawByteString;
+  refzip: RawByteString;
   api: TRawUtf8DynArray;
   oa: TOpenApiParser;
   timer: TPrecisionTimer;
@@ -262,9 +278,13 @@ begin
       api[i] := StringFromFile(fn);
       if api[i] <> '' then
         continue; // already downloaded
-      ref := DownloadFile('https://synopse.info/files/openapi-ref.zip');
-      if UnZipMemAll(ref, WorkDir) then // one url to rule them all
-        api[i] := StringFromFile(fn);  // try now
+      if refzip <> '' then
+        continue; // download .zip once
+      refzip := DownloadFile('https://synopse.info/files/openapi-ref.zip');
+      if refzip = '' then
+        refzip := 'none'
+      else if UnZipMemAll(refzip, WorkDir) then // one url to rule them all
+        api[i] := StringFromFile(fn); // try once
     end;
   for i := 0 to high(api) do
     if api[i] <> '' then
@@ -823,14 +843,14 @@ procedure CheckSynopseReverse(test: TNetworkProtocols; const ip: RawUtf8);
 begin
   if ip = 'blog.synopse.info' then // occurs on some weird DNS servers
     test.Check(true)
-  else
-    test.CheckEqual(ip, '62-210-254-173.rev.poneytelecom.eu');
+  else // French marmots have fiber connection in their mountains
+    test.CheckUtf8(PosEx('fbx.proxad.net', ip) <> 0, ip);
 end;
 
 procedure TNetworkProtocols.RunLdapClient(Sender: TObject);
 var
   rev: RawUtf8;
-  endtix: Int64;
+  endtix: cardinal;
   one: TLdapClient;
   dv: variant;
 begin
@@ -869,14 +889,14 @@ begin
   // retry reverse lookup DNS after some time
   if synopsednsip <> '' then
   begin
-    endtix := GetTickCount64 + 2000; // never wait forever
+    endtix := GetTickSec + 5; // never wait forever
     repeat
       inc(fAssertions);
       rev := DnsReverseLookup(synopsednsip);
       if rev <> '' then
         break; // success
       Sleep(100); // wait a little and retry up to 2 seconds
-    until GetTickCount64 > endtix;
+    until GetTickSec > endtix;
     CheckSynopseReverse(self, rev);
   end;
 end;
@@ -908,7 +928,7 @@ var
   utc1, utc2: TDateTime;
   ntp, usr, pwd, ku, main, txt: RawUtf8;
   dn: TNameValueDNs;
-  endtix: Int64;
+  endtix: cardinal;
 begin
   // validate NTP/SNTP client using NTP_DEFAULT_SERVER = time.google.com
   if not Executable.Command.Get('ntp', ntp) then
@@ -966,17 +986,19 @@ begin
   CheckEqual(DnsLookup('LocalHost'), '127.0.0.1');
   CheckEqual(DnsLookup('::1'), '127.0.0.1');
   CheckEqual(DnsLookup('1.2.3.4'), '1.2.3.4');
+  CheckEqual(NetAddrResolve('1.2.3.4'), '1.2.3.4');
   if hasinternet then
   begin
-    endtix := GetTickCount64 + 2000; // never wait forever
+    endtix := GetTickSec + 5; // never wait forever
     repeat
       inc(fAssertions);
       ip := DnsLookup('synopse.info');
       if ip <> '' then
         break;
       Sleep(100); // some DNS servers may fail at first: wait a little
-    until GetTickCount64 > endtix;
-    rev := '62.210.254.173';
+    until GetTickSec > endtix;
+    CheckEqual(NetAddrResolve('synopse.info'), ip, 'NetAddrResolve');
+    rev := SYNOPSE_IP; // the marmots' home IP
     CheckEqual(ip, rev, 'dns1');
     repeat
       inc(fAssertions);
@@ -984,7 +1006,7 @@ begin
       if ip <> '' then
         break;
       Sleep(100); // some DNS servers may fail at first: wait a little
-    until GetTickCount64 > endtix;
+    until GetTickSec > endtix;
     CheckEqual(ip, rev, 'dns2');
     inc(fAssertions);
     rev := DnsReverseLookup(ip);
@@ -993,7 +1015,8 @@ begin
     else
       CheckSynopseReverse(self, rev);
     // async validate actual LDAP client on public ldap.forumsys.com server
-    Run(RunLdapClient, self, 'ldap', true, false);
+    if not fOwner.MultiThread then
+      Run(RunLdapClient, self, 'ldap', true, false); // fails in the background
   end;
   // validate LDAP distinguished name conversion (no client)
   CheckEqual(DNToCN('CN=User1,OU=Users,OU=London,DC=xyz,DC=local'),
@@ -1491,135 +1514,427 @@ begin
     end;
 end;
 
-procedure TNetworkProtocols.TunnelExecute(Sender: TObject);
-begin
-  // one of the two handshakes should be done in another thread
-  tunnelexecutelocal := (Sender as TTunnelLocal).Open(
-    tunnelsession, tunneloptions, 1000, tunnelappsec,
-    cLocalhost, tunnelexecuteremote);
-  Check(tunnelexecutelocal <> 0);
-  Check(tunnelexecuteremote <> 0);
-end;
+type
+   TTunnelExecute = class
+   public
+     local: TTunnelLocal;
+     session: TTunnelSession;
+     remote: ITunnelTransmit;
+     signcert, verifcert: ICryptCert;
+   end;
 
-procedure TNetworkProtocols.TunnelExecuted(Sender: TObject);
-begin
-  tunnelexecutedone := true;
-end;
-
-procedure TNetworkProtocols.TunnelTest(const clientcert, servercert: ICryptCert);
+function TNetworkProtocols.TunnelBackgroundOpen(l: TTunnelLocal; s: TTunnelSession;
+  const r: ITunnelTransmit; const sc, vc: ICryptCert): TLoggedWorkThread;
 var
-  clientinstance, serverinstance: TTunnelLocal;
-  clientcb, servercb: ITunnelTransmit;
-  clienttunnel, servertunnel: ITunnelLocal;
+  context: TTunnelExecute;
+  name: RawUtf8;
+begin
+  context := TTunnelExecute.Create;
+  context.local := l;
+  context.session := s;
+  context.remote := r;
+  context.signcert := sc;
+  context.verifcert := vc;
+  inc(tunnelsequence);
+  Make(['open', tunnelsequence], name);
+  result := TLoggedWorkThread.Create(TSynLog, name, context,
+    TunnelExecute, {suspended=}false, {ManualWaitForAndFree=}true);
+end;
+
+procedure TNetworkProtocols.TunnelExecute(Sender: TObject);
+var
+  exec: TTunnelExecute;
+  port: TNetPort;
+begin
+  exec := Sender as TTunnelExecute;
+  // one of the two handshakes should be done in another thread
+  if not CheckFailed(exec <> nil) then
+  try
+    check(exec.local <> nil);
+    check(exec.session <> 0);
+    with exec do
+      port := local.Open(session, remote, tunneloptions, 1000, tunnelappsec,
+        cLocalHost, ['remoteHost', Executable.Host], signcert, verifcert);
+    check(port <> 0);
+    checkEqual(port, exec.local.Port);
+    check(exec.local.Port <> 0);
+    check(exec.local.RemotePort <> 0);
+  finally
+    exec.Free; // always free transient call parameters
+  end;
+end;
+
+procedure TNetworkProtocols.CheckBlocks(const log: ISynLog; const sent, recv: RawByteString; num: integer);
+begin
+  CheckUtf8(sent = recv, 'block% %=%', [num, length(sent), length(recv)]);
+  if (sent <> recv) and
+     Assigned(log) then
+  begin
+    log.Log(sllDebug, 'block%: sent=%', [num, sent], self);
+    log.Log(sllDebug, 'block%: recv=%', [num, recv], self);
+  end;
+end;
+
+procedure TNetworkProtocols.TunnelSocket(const log: ISynLog; var rnd: TLecuyer;
+  clientinstance, serverinstance: TTunnelLocal);
+var
   i: integer;
-  sent, received, sent2, received2: RawByteString;
+  nr: TNetResult;
   clientsock, serversock: TNetSocket;
   local, remote: TNetPort;
+  closed: PBoolean;
+  sent, sent2: RawUtf8;
+  received, received2: RawByteString;
+  nfo: variant;
 begin
-  // setup the two instances with the specified options and certificates
-  clientinstance := TTunnelLocalClient.Create;
-  clientinstance.SignCert := clientcert;
-  clientinstance.VerifyCert := servercert;
-  clienttunnel := clientinstance;
-  clientcb := clientinstance;
-  serverinstance := TTunnelLocalServer.Create;
-  serverinstance.SignCert := servercert;
-  serverinstance.VerifyCert := clientcert;
-  servertunnel := serverinstance;
-  servercb := serverinstance;
-  clienttunnel.SetTransmit(servercb); // set before Open()
-  servertunnel.SetTransmit(clientcb);
-  // validate handshaking
-  tunnelsession := Random64;
-  tunnelappsec := RandomAnsi7(10);
-  TLoggedWorkThread.Create(
-    TSynLog, 'servertunnel', serverinstance, TunnelExecute, TunnelExecuted);
-  local := clienttunnel.Open(
-    tunnelsession, tunneloptions, 1000, tunnelappsec, clocalhost, remote);
-  Check(local <> 0);
-  Check(remote <> 0);
-  SleepHiRes(1000, tunnelexecutedone);
-  CheckEqual(local, tunnelexecuteremote);
-  CheckEqual(remote, tunnelexecutelocal);
-  Check(tunnelexecutedone, 'TunnelExecuted');
-  tunnelexecutedone := false; // for the next run
-  Check(clienttunnel.LocalPort <> '');
-  Check(servertunnel.LocalPort <> '');
-  Check(servertunnel.LocalPort <> clienttunnel.LocalPort, 'ports');
-  Check(clienttunnel.Encrypted = (toEncrypted * tunneloptions <> []), 'cEncrypted');
-  Check(servertunnel.Encrypted = (toEncrypted * tunneloptions <> []), 'cEncrypted');
-  Check(NewSocket('127.0.0.1', clienttunnel.LocalPort, nlTcp, {bind=}false,
-    1000, 1000, 1000, 0, clientsock) = nrOk);
-  Check(NewSocket('127.0.0.1', servertunnel.LocalPort, nlTcp, {bind=}false,
-    1000, 1000, 1000, 0, serversock) = nrOk);
+  local := clientinstance.Port;
+  remote := serverinstance.Port;
+  Check(local <> 0, 'no local');
+  Check(remote <> 0, 'no remote');
+  Check(remote = clientinstance.RemotePort);
+  Check(local = serverinstance.RemotePort);
+  Check(clientinstance.LocalPort <> '', 'no client localport');
+  Check(serverinstance.LocalPort <> '', 'no server localport');
+  Check(serverinstance.LocalPort <> clientinstance.LocalPort, 'ports');
+  if Assigned(log) then
+    log.Log(sllTrace, 'TunnelTest: sockets start', self);
+  nr := NewSocket('127.0.0.1', clientinstance.LocalPort, nlTcp, {bind=}false,
+    1000, 1000, 1000, 0, clientsock);
+  CheckUtf8(nr = nrOk, 'clientsock=%', [ToText(nr)^]);
+  nr := NewSocket('127.0.0.1', serverinstance.LocalPort, nlTcp, {bind=}false,
+    1000, 1000, 1000, 0, serversock);
+  CheckUtf8(nr = nrOk, 'serversock=%', [ToText(nr)^]);
+  if not CheckFailed(Assigned(clientinstance.Thread), 'no client thread') and
+     not CheckFailed(Assigned(serverinstance.Thread), 'no server thread') then
   try
     // validate raw TCP tunnelling
-    CheckEqual(clientinstance.Thread.Received, 0);
-    CheckEqual(clientinstance.Thread.Sent, 0);
-    CheckEqual(serverinstance.Thread.Received, 0);
-    CheckEqual(serverinstance.Thread.Sent, 0);
+    if Assigned(log) then
+      log.Log(sllTrace, 'TunnelTest: sockets started', self);
+    CheckEqual(clientinstance.BytesIn, 0);
+    CheckEqual(clientinstance.BytesOut, 0);
+    CheckEqual(serverinstance.BytesIn, 0);
+    CheckEqual(serverinstance.BytesOut, 0);
     for i := 1 to 100 do
     begin
-      sent := RandomWinAnsi(Random32(200) + 1);
-      sent2 := RandomWinAnsi(Random32(200) + 1);
+      rnd.FillAscii(rnd.Next(200) + 1, sent);
+      rnd.FillAscii(rnd.Next(200) + 1, sent2);
       Check(clientsock.SendAll(pointer(sent), length(sent)) = nrOk);
       Check(serversock.RecvWait(1000, received) = nrOk);
-      CheckEqual(sent, received);
+      CheckBlocks(log, sent, received, 1);
+      if CheckFailed(clientinstance.Thread.Processing, 'no client process') or
+         CheckFailed(serverinstance.Thread.Processing, 'no server process') then
+        break; // don't try any further
       Check(clientsock.SendAll(pointer(sent2), length(sent2)) = nrOk);
       Check(serversock.SendAll(pointer(sent), length(sent)) = nrOk);
       Check(clientsock.RecvWait(1000, received) = nrOk);
       Check(serversock.RecvWait(1000, received2) = nrOk);
-      CheckEqual(sent, received);
-      CheckEqual(sent2, received2);
-      CheckEqual(clientinstance.Thread.Received, serverinstance.Thread.Sent);
-      CheckEqual(clientinstance.Thread.Sent, serverinstance.Thread.Received);
-      Check(clientinstance.Thread.Received <> 0);
-      Check(clientinstance.Thread.Sent <> 0);
-      Check(serverinstance.Thread.Received <> 0);
-      Check(serverinstance.Thread.Sent <> 0);
+      CheckBlocks(log, sent, received, 2);
+      CheckBlocks(log, sent2, received2, 3);
+      CheckEqual(clientinstance.BytesIn, serverinstance.BytesOut);
+      CheckEqual(clientinstance.BytesOut, serverinstance.BytesIn);
+      Check(clientinstance.BytesIn <> 0);
+      Check(clientinstance.BytesOut <> 0);
+      Check(serverinstance.BytesIn <> 0);
+      Check(serverinstance.BytesOut <> 0);
     end;
-    Check(clientinstance.Thread.Received < clientinstance.Thread.Sent, 'smaller');
-    Check(serverinstance.Thread.Received > serverinstance.Thread.Sent, 'bigger');
+    Check(clientinstance.BytesIn < clientinstance.BytesOut, 'smaller');
+    Check(serverinstance.BytesIn > serverinstance.BytesOut, 'bigger');
+    CheckEqual(serverinstance.FramesIn, clientinstance.FramesOut, 'frames1');
+    CheckEqual(serverinstance.FramesOut, clientinstance.FramesIn, 'frames2');
+    nfo := serverinstance.TunnelInfo;
+    Check(_Safe(nfo)^.Count > 4);
+    if Assigned(log) then
+      log.Log(sllTrace, 'TunnelTest: server=%', [nfo], self);
+    nfo := clientinstance.TunnelInfo;
+    Check(_Safe(nfo)^.Count > 4);
+    if Assigned(log) then
+      log.Log(sllTrace, 'TunnelTest: client=%', [nfo], self);
   finally
+    if Assigned(log) then
+      log.Log(sllTrace, 'TunnelTest: sockets stop', self);
     clientsock.ShutdownAndClose(true);
     serversock.ShutdownAndClose(true);
   end;
-  servertunnel.SetTransmit(nil); // avoid memory leak due to circular references
+  clientinstance.ClosePort;
+  closed := @serverinstance.Closed; // trick to access this propery by value
+  SleepHiRes(1000, closed^);
 end;
 
-procedure TNetworkProtocols._TTunnelLocal;
+procedure TNetworkProtocols.TunnelTest(var rnd: TLecuyer;
+  const clientcert, servercert: ICryptCert);
 var
-  c, s: ICryptCert;
+  log: ISynLog;
+  sess: TTunnelSession;
+  clientinstance, serverinstance: TTunnelLocal;
+  clienttunnel, servertunnel: ITunnelLocal;
+  local, remote: TNetPort;
+  worker: TLoggedWorkThread;
 begin
-  c := Cert('syn-es256').Generate([cuDigitalSignature]);
-  s := Cert('syn-es256').Generate([cuDigitalSignature]);
+  // setup the two instances with the specified options and certificates
+  TSynLogTestLog.EnterLocal(log, 'TunnelTest [%]', [ToText(tunneloptions)], self);
+  clientinstance := TTunnelLocalClient.Create(TSynLog);
+  serverinstance := TTunnelLocalServer.Create(TSynLog);
+  //clientinstance.VerboseLog := true;
+  //serverinstance.VerboseLog := true;
+  clienttunnel := clientinstance;
+  servertunnel := serverinstance;
+  // perform handshaking
+  repeat
+    sess := rnd.Next31;
+  until sess <> 0;
+  rnd.FillAscii(10, tunnelappsec);
+  worker := TunnelBackgroundOpen(
+    serverinstance, sess, clienttunnel, servercert, clientcert);
+  try
+    local := clientinstance.Open(
+      sess, servertunnel, tunneloptions, 1000, tunnelappsec, clocalhost,
+      ['remoteHost', Executable.Host], clientcert, servercert);
+    worker.WaitFinished(5000);
+  finally
+    worker.Free;
+  end;
+  remote := clienttunnel.RemotePort;
+  CheckEqual(local, servertunnel.RemotePort);
+  CheckEqual(remote, serverinstance.Port);
+  Check(clienttunnel.Encrypted = (toEncrypted * tunneloptions <> []), 'cEncrypted');
+  Check(servertunnel.Encrypted = (toEncrypted * tunneloptions <> []), 'sEncrypted');
+  // create two local sockets and let them play with the tunnel
+  TunnelSocket(log, rnd, clientinstance, serverinstance);
+  // avoid circular references memory leak (not needed over SOA websockets)
+  clientinstance.RawTransmit := nil;
+end;
+
+const
+  AGENT_COUNT = 7;
+  CONSOLE_COUNT = 4;
+
+procedure TNetworkProtocols.TunnelRelay(relay: TTunnelRelay;
+  const agent: array of ITunnelAgent; const console: array of ITunnelConsole;
+  var rnd: TLecuyer);
+var
+  log: ISynLog;
+  a: ITunnelAgent;
+  session: array of TTunnelSession;
+  worker: array of TLoggedWorkThread; // as multi-threaded as possible
+  agentcallback, consolecallback: array of ITunnelTransmit;
+  agentlocal, consolelocal: array of TTunnelLocal;
+  i, j, c: PtrInt;
+  local: TNetPort;
+begin
+  TSynLogTestLog.EnterLocal(log, self, 'TTunnelRelay');
+  if not CheckEqual(relay.ConsoleCount, length(console)) then
+    exit; // avoid "division by zero" below
+  // emulate connection of AGENT_COUNT tunnels using several consoles
+  // (see ITunnelOpen main comment about the typical TTunnelRelay steps)
+  SetLength(agentcallback, AGENT_COUNT);
+  SetLength(consolecallback, AGENT_COUNT);
+  SetLength(agentlocal, AGENT_COUNT);
+  SetLength(consolelocal, AGENT_COUNT);
+  // 1) TTunnelLocal.Create() to have an ITunnelTransmit callback
+  if Assigned(log) then
+    log.Log(sllInfo, 'Tunnel: create % TTunnelLocal callbacks', [AGENT_COUNT], self);
+  for i := 0 to AGENT_COUNT - 1 do
+  begin
+    agentlocal[i]   := TTunnelLocalClient.Create(TSynLog);;
+    consolelocal[i] := TTunnelLocalServer.Create(TSynLog);
+    agentcallback[i]   := agentlocal[i];
+    consolecallback[i] := consolelocal[i];
+    check(Assigned(agentcallback[i]));
+    check(Assigned(consolecallback[i]));
+  end;
+  // 2) ITunnelConsole.TunnelPrepare() to retrieve a session
+  if Assigned(log) then
+    log.Log(sllInfo, 'Tunnel: ITunnelOpen.TunnelPrepare', self);
+  SetLength(session, AGENT_COUNT);
+  for i := 0 to AGENT_COUNT - 1 do
+  begin
+    c := i mod relay.ConsoleCount; // round-robin of agents over consoles
+    Check(c <= high(console));
+    session[i] := console[c].TunnelPrepare(consolecallback[i]);
+    check(session[i] <> 0);
+    for j := 0 to i - 1 do
+      check(session[j] <> session[i], 'unique session');
+    // 3) ITunnelAgent.TunnelPrepare() with this session
+    if i >= length(agent) then
+      a := agent[0]
+    else
+      a := agent[i];
+    check(a.TunnelPrepare(session[i], agentcallback[i]));
+  end;
+  // 4) TTunnelLocal.Open() on the console and agent sides
+  if Assigned(log) then
+    log.Log(sllInfo, 'Tunnel: reciprocal Open() handshake', self);
+  try
+    SetLength(worker, AGENT_COUNT);
+    for i := 0 to AGENT_COUNT - 1 do
+    begin
+      if i >= length(agent) then
+        a := agent[0]
+      else
+        a := agent[i];
+      worker[i] := TunnelBackgroundOpen(agentlocal[i],
+        session[i], a, nil, nil);
+      c := i mod relay.ConsoleCount; // round-robin of agents over consoles
+      local := consolelocal[i].Open(
+        session[i], console[c], tunneloptions, 1000, tunnelappsec, cLocalhost,
+        ['agentNumber', i]);
+      check(local <> 0);
+      checkEqual(local, consolelocal[i].Port);
+    end;
+    if Assigned(log) then
+      log.Log(sllInfo, 'Tunnel: wait for background threads', self);
+    for i := 0 to AGENT_COUNT - 1 do
+    begin
+      worker[i].WaitFinished(1000);
+      CheckEqual(agentlocal[i].RemotePort, consolelocal[i].Port);
+      CheckEqual(agentlocal[i].Port, consolelocal[i].RemotePort);
+    end;
+    // 5a) ITunnelOpen.TunnelCommit or TunnelRollback against Open() result
+    if Assigned(log) then
+      log.Log(sllInfo, 'Tunnel: all TunnelCommit()', self);
+    for i := 0 to AGENT_COUNT - 1 do
+    begin
+      if i >= length(agent) then
+        a := agent[0]
+      else
+        a := agent[i];
+      Check(a.TunnelCommit(session[i]));
+      c := i mod relay.ConsoleCount; // round-robin of agents over consoles
+      Check(console[c].TunnelCommit(session[i]));
+    end;
+    // create two local sockets and let them play with each tunnel
+    if Assigned(log) then
+      log.Log(sllInfo, 'Tunnel: actual sockets relay on loopback', self);
+    for i := 0 to AGENT_COUNT - 1 do
+      TunnelSocket(log, rnd, agentlocal[i], consolelocal[i]);
+  finally
+    for i := 0 to AGENT_COUNT - 1 do
+      worker[i].Free;
+  end;
+  // release internal references
+  if Assigned(log) then
+    log.Log(sllInfo, 'Tunnel: finalize agent/console references', self);
+  // retrieve SOA agents + consoles endpoints (emulated on stack)
+  agentcallback := nil;
+  consolecallback := nil;
+end;
+
+procedure TNetworkProtocols.Tunnel;
+var
+  clientcert, servercert: ICryptCert;
+  bak: TSynLogLevels;
+  relay: TTunnelRelay;
+  rnd: TLecuyer;
+  i: PtrInt;
+  agent: array of ITunnelAgent;     // single instance (sicShared mode)
+  console: array of ITunnelConsole; // one per console (sicPerSession)
+  restserver: TRestServerFullMemory;
+  httpserver: TRestHttpServer;
+  agentclient, consoleclient: array of TRestHttpClientWebsockets;
+begin
+  bak := TSynLog.Family.Level;
+  TSynLog.Family.Level := LOG_VERBOSE; // for convenient LUTI debugging
+  // 1. validate TTunnelLocal and all its handshaking options
+  RandomLecuyer(rnd);
   // plain tunnelling
-  TunnelTest(nil, nil);
+  TunnelTest(rnd, nil, nil);
   // symmetric secret encrypted tunnelling
   tunneloptions := [toEncrypt];
-  TunnelTest(nil, nil);
+  TunnelTest(rnd, nil, nil);
   // ECDHE encrypted tunnelling
   tunneloptions := [toEcdhe];
-  TunnelTest(nil, nil);
+  TunnelTest(rnd, nil, nil);
   // tunnelling with mutual authentication
   tunneloptions := [];
-  TunnelTest(c, s);
+  clientcert := Cert('syn-es256').Generate([cuDigitalSignature]);
+  servercert := Cert('syn-es256').Generate([cuDigitalSignature]);
+  TunnelTest(rnd, clientcert, servercert);
   // symmetric secret encrypted tunnelling with mutual authentication
   tunneloptions := [toEncrypt];
-  TunnelTest(c, s);
+  TunnelTest(rnd, clientcert, servercert);
   // ECDHE encrypted tunnelling with mutual authentication
   tunneloptions := [toEcdhe];
-  TunnelTest(c, s);
+  TunnelTest(rnd, clientcert, servercert);
+  // options (e.g. encryption/ecdhe) are now considered validated
+  tunneloptions := [];
+  // 2. validate TTunnelRelay and its associated TTunnelAgent/TTunnelConsole
+  SetLength(console, CONSOLE_COUNT); // several agents per console
+  relay := TTunnelRelay.Create(TSynLog, {timeoutsecs=}120);
+  try
+    // no SOA transmission first
+    TSynLog.Add.Log(sllInfo, 'Tunnel: retrieve SOA endpoints', self);
+    SetLength(agent, 1);
+    Check(relay.Resolve(ITunnelAgent, agent[0]), 'sicShared agent');
+    Check(Assigned(agent[0]));
+    CheckEqual(relay.ConsoleCount, 0);
+    for i := 0 to high(console) do
+      Check(relay.Resolve(ITunnelConsole, console[i]), 'sicPerSession');
+    TunnelRelay(relay, agent, console, rnd);
+    agent := nil;
+    console := nil;
+    // setup a SOA WebSockets server as actual relay over WebSockets
+    restserver := TRestServerFullMemory.CreateWithOwnModel(
+      [], {withauth=}true, 'tun');
+    try
+      restserver.CreateMissingTables;
+      restserver.ServiceDefine(relay.Agent, [ITunnelAgent]);
+      restserver.ServiceContainer.InjectResolver([relay]);
+      restserver.ServiceDefine(TTunnelconsole, [ITunnelConsole], sicPerSession);
+      restserver.LogClass := TSynLog;
+      httpserver := TRestHttpServer.Create('8888', [restserver], '+',
+        WEBSOCKETS_DEFAULT_MODE);
+      try
+        httpserver.WebSocketsEnable('', 'key', false, []);
+        // setup as many SOA clients over WebSockets as needed
+        SetLength(agentclient, AGENT_COUNT);
+        SetLength(agent, AGENT_COUNT);
+        for i := 0 to high(agentclient) do
+        begin
+          agentclient[i] := TRestHttpClientWebsockets.CreateWithOwnModel(
+            'localhost', '8888', 'tun');
+          agentclient[i].WebSocketsUpgrade('key', false, []);
+          check(agentclient[i].SetUser('User', 'synopse'));
+          agentclient[i].ServiceDefine(ITunnelAgent, sicShared);
+          agentclient[i].Resolve(ITunnelAgent, agent[i]);
+        end;
+        SetLength(consoleclient, CONSOLE_COUNT);
+        SetLength(console, CONSOLE_COUNT);
+        for i := 0 to high(consoleclient) do
+        begin
+          consoleclient[i] := TRestHttpClientWebsockets.CreateWithOwnModel(
+            'localhost', '8888', 'tun');
+          consoleclient[i].WebSocketsUpgrade('key', false, []);
+          check(consoleclient[i].SetUser('User', 'synopse'));
+          consoleclient[i].ServiceDefine(ITunnelConsole, sicPerSession);
+          consoleclient[i].Resolve(ITunnelConsole, console[i]);
+        end;
+        //TunnelRelay(relay, agent, console, rnd);
+      finally
+        agent := nil; // keep refcount clean
+        console := nil;
+        ObjArrayClear(consoleclient);
+        ObjArrayClear(agentclient);
+        httpserver.Free;
+      end;
+    finally
+      restserver.Free;
+    end;
+  finally
+    TSynLog.Add.Log(sllInfo, 'Tunnel: eventual TTunnelRelay.Free', self);
+    relay.Free;
+  end;
+  // 3. cleanup
+  TSynLog.Family.Level := bak;
 end;
 
 procedure TNetworkProtocols.IPAddresses;
 var
-  i, n: PtrInt;
+  i, n, n2: PtrInt;
   s: ShortString;
-  txt: RawUtf8;
+  txt, uri: RawUtf8;
   ip: THash128Rec;
   sub: TIp4SubNets;
-  bin: RawByteString;
+  bin, bin2: RawByteString;
   timer: TPrecisionTimer;
 begin
   FillZero(ip.b);
@@ -1705,8 +2020,8 @@ begin
   try
     CheckEqual(sub.AfterAdd, 0);
     bin := sub.SaveToBinary;
-    if CheckEqual(length(bin), 4) then
-      CheckEqual(PInteger(bin)^, 0);
+    if CheckEqual(length(bin), 8) then
+      CheckEqual(PInt64(bin)^, IP4SUBNET_MAGIC);
     Check(not sub.Match('190.16.1.1'));
     Check(not sub.Match('190.16.1.135'));
     Check(not sub.Match('190.16.1.250'));
@@ -1725,7 +2040,7 @@ begin
     Check(not sub.Match('190.16.1.1'));
     Check(not sub.Match('190.16.1.135'));
     Check(not sub.Match('190.16.1.250'));
-    Check(sub.LoadFromBinary(bin), 'load1');
+    CheckEqual(sub.LoadFromBinary(bin), 1, 'load1');
     CheckEqual(sub.AfterAdd, 1);
     Check(sub.Match('190.16.1.1'));
     Check(sub.Match('190.16.1.135'));
@@ -1749,7 +2064,7 @@ begin
     bin := sub.SaveToBinary;
     sub.Clear;
     Check(not sub.Match('190.16.43.1'));
-    Check(sub.LoadFromBinary(bin), 'load2');
+    CheckEqual(sub.LoadFromBinary(bin), 2, 'load');
     CheckEqual(sub.AfterAdd, 2);
     Check(sub.Match('190.16.1.1'));
     Check(sub.Match('190.16.1.135'));
@@ -1774,22 +2089,26 @@ begin
     Check(sub.SaveToBinary = bin, 'loadtext');
     Check(sub.Match('1.2.3.4'));
     Check(not sub.Match('1.2.3.5'));
+    //deleteFile('firehol.netset');
     txt := DownloadFile('https://raw.githubusercontent.com/firehol/blocklist-ipsets/' +
       'refs/heads/master/firehol_level1.netset', 'firehol.netset');
     if txt <> '' then
     begin
+      Make(['file://', WorkDir, 'firehol.netset'], uri);
+      CheckUtf8(DownloadFile(uri) = txt, uri);
       sub.Clear;
       timer.Start;
       n := sub.AddFromText(txt);
       NotifyTestSpeed('parse TIp4SubNets', n, length(txt), @timer);
+      // typically 4491 subnets, 612,537,665 unique IPs, 19 unique subnets
       Check(n > 4000);
       CheckEqual(sub.AfterAdd, n);
-      CheckEqual(length(sub.SubNet), 18);
+      CheckUtf8(length(sub.SubNet) in [17 .. 20], 'sub=%', [length(sub.SubNet)]);
       Check(not sub.Match('1.2.3.4'));
       Check(not sub.Match('1.2.3.5'));
       Check(not sub.Match('192.168.1.1'), '192'); // only IsPublicIP() was added
       Check(not sub.Match('10.18.1.1'), '10');
-      Check(not sub.Match('62.210.254.173'), 'synopse.info');
+      Check(not sub.Match(SYNOPSE_IP), 'synopse.info');
       // 223.254.0.0/16 as https://check.spamhaus.org/results/?query=SBL212803
       Check(sub.Match('223.254.0.1') ,'a0');
       Check(sub.Match('223.254.1.1'), 'b0');
@@ -1819,14 +2138,20 @@ begin
         Check(sub.AddFromText(txt) < 1000, 'spamhaus within firehol');
         sub.Clear;
         Check(not sub.Match('10.18.1.1'), '10');
-        Check(sub.AddFromText(txt) > 1000, 'spamhaus=1525');
+        n2 := sub.AddFromText(txt);
+        Check(n2 > 1000, 'spamhaus=1525');
+        Check(not sub.Match(SYNOPSE_IP), 'cauterets.site');
         Check(sub.Match('223.254.0.1') ,'a2'); // 223.254.0.0/16
         Check(sub.Match('223.254.1.1'), 'b2');
         Check(sub.Match('223.254.200.129'), 'c2');
+        bin2 := sub.SaveToBinary;
         CheckEqual(sub.AddFromText(txt), 0, 'twice');
+        CheckEqual(sub.SaveToBinary, bin2);
+        sub.Clear;
+        CheckEqual(sub.LoadFrom(txt), n2, 'loadtxt');
+        Check(sub.SaveToBinary = bin2, 'savebin');
       end;
-      sub.Clear;
-      Check(sub.LoadFromBinary(bin), 'loadbin');
+      CheckEqual(sub.LoadFrom(bin), n, 'loadfrom');
       Check(sub.SaveToBinary = bin, 'savebin');
       Check(sub.Match('223.254.0.1') ,'a3'); // 223.254.0.0/16
       Check(sub.Match('223.254.1.1'), 'b3');
@@ -1866,7 +2191,7 @@ end;
 
 function TNetworkProtocols.OnPeerCacheRequest(Ctxt: THttpServerRequestAbstract): cardinal;
 begin
-  // a local web server is safer than an Internet resource
+  // a local web server is safer and less error-prone than an Internet resource
   result := HTTP_SUCCESS;
   Ctxt.OutContent := FakeGif(Ctxt.Url);
   Ctxt.OutContentType := 'image/gif';
@@ -1892,7 +2217,7 @@ var
 
   procedure WaitNotProcessing(const Context: string);
   var
-    endtix: Int64;
+    endtix: Int64; // ms resolution
   begin
     if not (gasProcessing in hpc.State) then
     begin
@@ -2211,13 +2536,23 @@ begin
   end;
 end;
 
+const
+  HDR1: PUtf8Char = 'one: value'#13#10'cookie: name=value';
+  HDR2: PUtf8Char = 'one: value'#13#10'cookie: name = value ';
+  HDR3: PUtf8Char = 'cookie: name=value'#13#10 +
+    'Cookie: name 1=value1; name 2 = value 2; name3=value3'#13#10 +
+    'cookone: value'#13#10;
+  HDR4: PUtf8Char = 'cookie: name=value'#10'toto: titi'#10#10 +
+    'Cookie: name 1=value1; name 2 = value 2; name3=value3'#13#10 +
+    'cookone: value'#13#10#13#10;
+
 procedure TNetworkProtocols.HTTP;
 var
   met: TUriMethod;
   s: RawUtf8;
   hc: THttpCookies;
   U: TUri;
-  h: PUtf8Char;
+  h, v: PUtf8Char;
   l: PtrInt;
   dig: THashDigest;
 
@@ -2231,10 +2566,17 @@ var
     CheckEqual(hc.Value(2), 'value 2');
     CheckEqual(hc.Name(3), 'name3');
     CheckEqual(hc.Value(3), 'value3');
+    {$ifdef HASINLINE}
     CheckEqual(hc.Cookie['name'], 'value');
     CheckEqual(hc.Cookie['name 1'], 'value1');
     CheckEqual(hc.Cookie['name 2'], 'value 2');
     CheckEqual(hc.Cookie['name3'], 'value3');
+    {$else}
+    CheckEqual(hc.GetCookie('name'), 'value');
+    CheckEqual(hc.GetCookie('name 1'), 'value1');
+    CheckEqual(hc.GetCookie('name 2'), 'value 2');
+    CheckEqual(hc.GetCookie('name3'), 'value3');
+    {$endif HASINLINE}
   end;
 
 begin
@@ -2276,17 +2618,24 @@ begin
   CheckEqual(StatusCodeToText(499)^, 'Invalid Request');
   CheckEqual(StatusCodeToText(666)^, 'Client Side Connection Error');
   // validate TUri data structure
+  U.Clear;
+  Check(U.UriScheme = usUndefined);
+  CheckEqual(U.Uri, '');
   Check(U.From('toto.com'));
   CheckEqual(U.Uri, 'http://toto.com/');
+  Check(U.UriScheme = usHttp);
   Check(not U.Https);
   Check(U.From('toto.com:123'));
   CheckEqual(U.Uri, 'http://toto.com:123/');
+  Check(U.UriScheme = usHttp);
   Check(not U.Https);
   Check(U.From('https://toto.com:123/tata/titi'));
   CheckEqual(U.Uri, 'https://toto.com:123/tata/titi');
+  Check(U.UriScheme = usHttps);
   Check(U.Https);
   CheckEqual(U.Address, 'tata/titi');
   Check(U.From('https://toto.com:123/tata/tutu:tete'));
+  Check(U.UriScheme = usHttps);
   CheckEqual(U.Address, 'tata/tutu:tete');
   CheckEqual(U.Uri, 'https://toto.com:123/tata/tutu:tete');
   Check(U.From('http://user:password@server:port/address'));
@@ -2301,48 +2650,129 @@ begin
   CheckEqual(U.User, 'user');
   CheckEqual(U.Password, '');
   Check(U.From('toto.com/tata/tutu:tete'));
+  Check(U.UriScheme = usHttp);
   CheckEqual(U.Uri, 'http://toto.com/tata/tutu:tete');
   CheckEqual(U.User, '');
   CheckEqual(U.Password, '');
+  CheckEqual(U.URI, 'http://toto.com/tata/tutu:tete');
   Check(U.From('file://server/path/to%20image.jpg'));
   CheckEqual(U.Scheme, 'file');
+  Check(U.UriScheme = usFile);
   CheckEqual(U.Server, 'server');
   CheckEqual(U.Address, 'path/to%20image.jpg');
-  Check(not U.From('file:///path/to%20image.jpg'), 'false if valid');
+  CheckEqual(U.Uri, 'file://server/path/to%20image.jpg');
+  Check(U.From('file://server/c:\path\to'));
+  CheckEqual(U.Scheme, 'file');
+  CheckEqual(U.Server, 'server');
+  CheckEqual(U.Address, 'c:\path\to');
+  Check(U.From('file:////server/folder/data.xml'));
+  CheckEqual(U.Scheme, 'file');
+  CheckEqual(U.Server, 'server');
+  CheckEqual(U.Address, 'folder/data.xml');
+  Check(not U.From('file:///C:/DirA/DirB/With%20Spaces.txt'));
   CheckEqual(U.Scheme, 'file');
   CheckEqual(U.Server, '');
+  CheckEqual(U.Address, 'C:/DirA/DirB/With%20Spaces.txt');
+  Check(not U.From('FILE:///path/to%20image.jpg'), 'false if valid');
+  CheckEqual(U.Scheme, 'FILE');
+  Check(U.UriScheme = usFile);
+  CheckEqual(U.Server, '');
+  CheckEqual(U.User, '');
+  CheckEqual(U.Password, '');
   CheckEqual(U.Address, 'path/to%20image.jpg');
-  // validate THttpCookies
+  CheckEqual(U.Uri, 'file:///path/to%20image.jpg');
+  Check(U.From('ftp://user:password@host:port/path'), 'ftp');
+  CheckEqual(U.Scheme, 'ftp');
+  Check(U.UriScheme = usFtp);
+  CheckEqual(U.Server, 'host');
+  CheckEqual(U.Port, 'port');
+  CheckEqual(U.User, 'user');
+  CheckEqual(U.Password, 'password');
+  CheckEqual(U.Address, 'path');
+  CheckEqual(U.Uri, 'ftp://host:port/path');
+  Check(U.From('ftpS://user:password@host/path'), 'ftps');
+  CheckEqual(U.Scheme, 'ftpS');
+  Check(U.UriScheme = usFtps);
+  CheckEqual(U.Server, 'host');
+  CheckEqual(U.Port, '989');
+  CheckEqual(U.User, 'user');
+  CheckEqual(U.Password, 'password');
+  CheckEqual(U.Address, 'path');
+  CheckEqual(U.Uri, 'ftps://host/path');
+  s := '?subject=This%20is%20the%20subject' +
+       '&cc=someone_else@example.com&body=This%20is%20the%20body';
+  Check(U.From('mailto://someone@example.com' + s));
+  CheckEqual(U.Scheme, 'mailto');
+  Check(U.UriScheme = usCustom);
+  CheckEqual(U.Server, 'example.com');
+  CheckEqual(U.Port, '');
+  CheckEqual(U.User, 'someone');
+  CheckEqual(U.Password, '');
+  CheckEqual(U.Address, s);
+  CheckEqual(U.Uri, 'mailto://example.com/' + s);
+  U.Clear; // TUri may be used to create an URI from some parameters
+  U.Server := '127.0.0.1';
+  U.Port := '991';
+  U.Address := 'endpoint';
+  CheckEqual(U.Uri, 'http://127.0.0.1:991/endpoint');
+  U.Clear;
+  U.Https := true;
+  U.Server := '127.0.0.1';
+  U.Address := 'endpoint';
+  CheckEqual(U.Port, '');
+  CheckEqual(U.Uri, 'https://127.0.0.1/endpoint');
+  CheckEqual(U.Port, '');
+  U.Port := '443';
+  CheckEqual(U.Uri, 'https://127.0.0.1/endpoint');
+  U.Port := '444';
+  CheckEqual(U.Uri, 'https://127.0.0.1:444/endpoint');
+  // validate THttpCookies and CookieFromHeaders()
   hc.ParseServer('');
   CheckEqual(length(hc.Cookies), 0);
-  hc.ParseServer('one: value'#13#10'cookie: name=value');
+  hc.ParseServer(HDR1);
   CheckEqual(hc.Name(0), 'name');
   CheckEqual(hc.Value(0), 'value');
   CheckEqual(length(hc.Cookies), 1);
-  CheckEqual(hc.Cookie['name'], 'value');
+  CheckEqual(hc.GetCookie('name'), 'value');
   CheckEqual(hc.Cookies[0].NameLen, 4);
   CheckEqual(hc.Cookies[0].ValueLen, 5);
-  Check(hc.Cookie['name2'] <> 'value');
+  Check(hc.GetCookie('name2') <> 'value');
   hc.Clear;
   CheckEqual(length(hc.Cookies), 0);
-  hc.ParseServer('one: value'#13#10'cookie: name = value ');
+  hc.ParseServer(HDR2);
   CheckEqual(hc.Name(0), 'name');
   CheckEqual(hc.Value(0), 'value');
   CheckEqual(length(hc.Cookies), 1);
-  CheckEqual(hc.Cookie['name'], 'value');
+  CheckEqual(hc.GetCookie('name'), 'value');
   CheckEqual(hc.Cookies[0].NameLen, 4);
   CheckEqual(hc.Cookies[0].ValueLen, 5);
-  Check(hc.Cookie['name2'] <> 'value');
-  hc.ParseServer('cookie: name=value'#13#10 +
-    'Cookie: name 1=value1; name 2 = value 2; name3=value3'#13#10 +
-    'cookone: value'#13#10);
+  Check(hc.GetCookie('name2') <> 'value');
+  hc.ParseServer(HDR3);
   CheckEqual(length(hc.Cookies), 4);
   Check4;
-  hc.ParseServer('cookie: name=value'#10'toto: titi'#10#10 +
-    'Cookie: name 1=value1; name 2 = value 2; name3=value3'#13#10 +
-    'cookone: value'#13#10#13#10);
+  hc.ParseServer(HDR4);
   CheckEqual(length(hc.Cookies), 4, 'malformatted CRLF');
   Check4;
+  v := nil;
+  CheckEqual(CookieFromHeaders(HDR1, 'name', v), 5);
+  Check((v <> nil) and (v^ = 'v'));
+  CheckEqual(CookieFromHeaders(HDR1, 'name'), 'value');
+  CheckEqual(CookieFromHeaders(HDR1, 'name2', v), 0);
+  CheckEqual(CookieFromHeaders(HDR1, 'name3'), '');
+  v := nil;
+  CheckEqual(CookieFromHeaders(HDR2, 'name', v), 5);
+  Check((v <> nil) and (v^ = 'v'));
+  CheckEqual(CookieFromHeaders(HDR2, 'name'), 'value');
+  CheckEqual(CookieFromHeaders(HDR2, 'name3'), '');
+  CheckEqual(CookieFromHeaders(HDR3, 'name'), 'value');
+  CheckEqual(CookieFromHeaders(HDR3, 'name 1'), 'value1');
+  CheckEqual(CookieFromHeaders(HDR3, 'name 2'), 'value 2');
+  CheckEqual(CookieFromHeaders(HDR3, 'name3'), 'value3');
+  CheckEqual(CookieFromHeaders(HDR4, 'name'), 'value');
+  CheckEqual(CookieFromHeaders(HDR4, 'name 1'), 'value1');
+  CheckEqual(CookieFromHeaders(HDR4, 'name 2'), 'value 2');
+  CheckEqual(CookieFromHeaders(HDR4, 'name3'), 'value3');
+  // validate HttpRequestLength() and HttpRequestHash()
   h := HttpRequestLength(
     'Content-Length: 100'#13#10'content-range: bytes 100-199/3083'#13#10, l);
   check(h <> nil);

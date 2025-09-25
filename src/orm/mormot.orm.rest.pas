@@ -100,7 +100,7 @@ type
     fCache: TOrmCache;
     fTransactionActiveSession: cardinal;
     fTransactionTable: TOrmClass;
-    fTempJsonWriter: TJsonWriter;
+    fTempJsonWriter: TJsonWriter; // shared with a 64KB internal buffer
     /// compute SELECT ... FROM TABLE WHERE ...
     function SqlComputeForSelect(TableModelIndex: integer; Table: TOrmClass;
       const FieldNames, WhereClause: RawUtf8): RawUtf8;
@@ -154,14 +154,16 @@ type
     // this value as insertion ID
     // - override this method for proper calling the database engine
     // - this method must be implemented in a thread-safe manner
-    function EngineAdd(TableModelIndex: integer; const SentData: RawUtf8): TID; virtual; abstract;
+    function EngineAdd(TableModelIndex: integer;
+      const SentData: RawUtf8): TID; virtual; abstract;
     /// update a member
     // - implements REST PUT collection
     // - SentData can contain the JSON object with field values to be added
     // - returns true on success
     // - override this method for proper calling the database engine
     // - this method must be implemented in a thread-safe manner
-    function EngineUpdate(TableModelIndex: integer; ID: TID; const SentData: RawUtf8): boolean; virtual; abstract;
+    function EngineUpdate(TableModelIndex: integer; ID: TID;
+      const SentData: RawUtf8): boolean; virtual; abstract;
     /// delete a member
     // - implements REST DELETE collection
     // - returns true on success
@@ -259,13 +261,16 @@ type
     /// internal TOrm value serialization to a JSON object
     // - will use shared AcquireJsonWriter instance if available
     procedure GetJsonValue(Value: TOrm; withID: boolean;
-      const Fields: TFieldBits; out Json: RawUtf8); overload;
+      const Fields: TFieldBits; var Json: RawUtf8); overload;
     /// internal TOrm value serialization to a JSON object
     // - will use shared AcquireJsonWriter instance if available
     procedure GetJsonValue(Value: TOrm; withID: boolean; Occasion: TOrmOccasion;
       var Json: RawUtf8); overload;
       {$ifdef FPC_OR_DELPHIXE} inline; {$endif} // avoid URW1111 on Delphi 2010
     /// access to a thread-safe internal cached TJsonWriter instance
+    // - with a TRawByteStringStream and 128KB of non-resizable working buffer
+    // - sharing an instance make sense because it is likely to be needed
+    // within a TSqlDatabase global Lock on SQLite3
     function AcquireJsonWriter(var tmp: TTextWriterStackBuffer): TJsonWriter;
       {$ifdef HASINLINE} inline; {$endif}
     /// release the thread-safe cached TJsonWriter returned by AcquireJsonWriter
@@ -602,7 +607,9 @@ implementation
 constructor TRestOrm.Create(aRest: TRest);
 begin
   inherited Create;
-  fTempJsonWriter := TJsonWriter.CreateOwnedStream(16384, {nosharedstream=}true);
+  fTempJsonWriter := // generous 128KB buffer with no resize
+    TJsonWriter.CreateOwnedStream(128 shl 10, {nosharedstream=}true);
+  fTempJsonWriter.FlushToStreamNoAutoResize := true; // stick to BufferSize
   if aRest = nil then
     exit;
   fRest := aRest;
@@ -678,10 +685,10 @@ begin
 end;
 
 procedure TRestOrm.GetJsonValue(Value: TOrm; withID: boolean;
-  const Fields: TFieldBits; out Json: RawUtf8);
+  const Fields: TFieldBits; var Json: RawUtf8);
 var
   WR: TJsonWriter;
-  tmp: TTextWriterStackBuffer;
+  tmp: TTextWriterStackBuffer; // 8KB work buffer on stack
 begin
   // faster than Json := Value.GetJsonValues(true, withID, Fields);
   WR := AcquireJsonWriter(tmp);
@@ -724,10 +731,11 @@ begin
     ForceID := false;
   props := Value.Orm;
   if CustomFields <> nil then
-    if DoNotAutoComputeFields then
-      fields := CustomFields^ * props.CopiableFieldsBits
-    else
-      fields := CustomFields^ * props.CopiableFieldsBits + props.ComputeBeforeAddFieldsBits
+  begin
+    fields := CustomFields^ * props.CopiableFieldsBits; // refine from ALL_FIELDS
+    if not DoNotAutoComputeFields then
+      fields := fields + props.ComputeBeforeAddFieldsBits;
+  end
   else if WithBlobs then
     fields := props.CopiableFieldsBits
   else
@@ -1090,7 +1098,7 @@ begin
         '=':
           begin
             // SELECT RowID from Table where RowID=10
-            P := GotoNextNotSpace(P + 1);
+            P := IgnoreAndGotoNextNotSpace(P);
             if PWord(P)^ = ord(':') + ord('(') shl 8 then
               inc(P, 2); // handle inlined parameters
             SetInt64(P, V);
@@ -1109,7 +1117,7 @@ begin
             // SELECT RowID from Table where RowID in [1,2,3]
             P := GotoNextNotSpace(P + 2);
             if (P^ = '(') and
-               (GotoNextNotSpace(P + 1)^ in ['0'..'9']) then
+               (IgnoreAndGotoNextNotSpace(P)^ in ['0'..'9']) then
             begin
               CsvToInt64DynArray(P + 1, Data);
               if Data <> nil then
@@ -1369,7 +1377,7 @@ begin
     exit;
   sql := TrimU(SqlWhere);
   if not EndWith(sql, ' LIMIT 1') then
-    sql := sql + ' LIMIT 1'; // we keep a single record below
+    Append(sql, ' LIMIT 1'); // we keep a single record below
   T := MultiFieldValues(POrmClass(Value)^, FieldsCsv, sql);
   if T <> nil then
   try

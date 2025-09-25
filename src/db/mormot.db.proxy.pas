@@ -504,7 +504,7 @@ type
   // TSqlDBServerSockets - this abstract class won't set any HTTP server
   TSqlDBServerAbstract = class
   protected
-    fSafe: TOSLightLock;
+    fSafe: TOSLightLock; // = TOSLightMutex = SRW lock or direct pthread mutex
     fServer: THttpServerGeneric;
     fThreadPoolCount: integer;
     fPort, fDatabaseName: RawUtf8;
@@ -783,7 +783,7 @@ end;
 function TSqlDBProxyConnectionProtocol.TransactionStarted(
   connection: TSqlDBConnection; sessionID: integer): boolean;
 var
-  tixend, tix: Int64;
+  tixend, tix: Int64; // retry resolution is in ms
 begin
   if sessionID = 0 then
     ESqlDBRemote.RaiseUtf8(
@@ -797,7 +797,7 @@ begin
       'commit/execute/rollback should be in the same thread/connection',
       [self, connection.Properties]);
   tix := GetTickCount64;
-  tixend := tix + fTransactionRetryTimeout;
+  tixend := tix + fTransactionRetryTimeout; // typical 100ms retry timeout
   repeat
     fSafe.Lock;
     try
@@ -1304,7 +1304,7 @@ end;
 procedure TSqlDBProxyConnection.StartTransaction;
 var
   started: boolean;
-  endtix: Int64;
+  endtix: Int64; // timeout is in ms resolution
 begin
   inherited StartTransaction;
   started := false;
@@ -1955,7 +1955,7 @@ var
   status: integer;
 begin
   inherited;
-  fServer := THttpApiServer.Create('', nil, nil, '', []);
+  fServer := THttpApiServer.Create('', nil, nil, '', [], nil, fThreadPoolCount);
   status := THttpApiServer(fServer).AddUrl(
     fDatabaseName, fPort, fHttps, '+', true);
   if status <> NO_ERROR then
@@ -1968,8 +1968,6 @@ begin
         '%.Create: error registering URI % on port %: is not another server ' +
         'instance running on this port?', [self, fDatabaseName, fPort]);
   fServer.OnRequest := Process;
-  if fThreadPoolCount > 1 then
-    THttpApiServer(fServer).Clone(fThreadPoolCount - 1);
 end;
 
 {$endif USEHTTPSYS}

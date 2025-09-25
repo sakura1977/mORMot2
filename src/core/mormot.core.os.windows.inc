@@ -17,52 +17,68 @@ function PosExtString(Str: PChar): PChar; forward;
 procedure _DoWin32PWideCharToUtf8(P: PWideChar; Len: PtrInt; var res: RawUtf8);
 var
   tmp: TSynTempBuffer;
-begin
+begin // FPC RTL is fine, and recent Delphi just calls WideCharToMultiByte() API
   tmp.Init(Len * 3);
-  Len := UnicodeToUtf8(tmp.Buf, Len * 3 + 16, P, Len); // use RTL if complex
+  Len := UnicodeToUtf8(tmp.Buf, Len * 3 + 16, P, Len);
   if Len > 0 then
     dec(Len); // UnicodeToUtf8() result includes the null terminator
   FastSetString(res, tmp.buf, Len);
   tmp.Done;
 end; // warning: Delphi 7/2007 UnicodeToUtf8() RTL doesn't handle surrogates
 
-function IsExtendedPathName(Name: PWideChar): boolean; // in '\\?\...' format
+function IsExtendedPathNameW(Name: PWideChar): boolean; // in '\\?\...' format
 begin
   result := (Name <> nil) and
-            (Name[0] = '\') and
-            (Name[1] = '\') and
-            (Name[2] = '?') and
-            (Name[3] = '\');
+            (PCardinalArray(Name)[0] = ord('\') + ord('\') shl 16) and
+            (PCardinalArray(Name)[1] = ord('?') + ord('\') shl 16);
+end;
+
+function Win32FullPathW(Name, Dest: PWideChar; MaxDest: DWord): boolean;
+var
+  len: DWord;
+  dummy: PWideChar;
+begin
+  len := GetFullPathNameW(Name, MaxDest, Dest, dummy);
+  result := (len > 0) and
+            (len <= MaxDest); // ensure was not actually truncated in Dest[]
 end;
 
 procedure ExtendedPathName(Name: PWideChar; Len: PtrInt; var Temp: TW32Temp);
-var
-  fp: PWideChar;
 begin
   Len := Len * 2 + 2; // in bytes, +2 to include ending #0
   if (Len <= MAX_PATH * 2) or
-     ((Len <= SizeOf(Temp) - 8) and
-      IsExtendedPathName(Name)) then // in '\\?\...' format
+     ((Len <= SizeOf(Temp)) and
+      IsExtendedPathNameW(Name)) then // in '\\?\...' format
   begin
     MoveFast(Name^, Temp[0], Len); // we can use the supplied UTF-16 file name
     exit;
   end;
   // need to switch to extended-length path
   Temp[0] := #0;
-  if Len > SizeOf(Temp) - 8 then
+  if Len >= SizeOf(Temp) - 16 then
     exit; // avoid buffer overflow
   // append the full path name to the \\?\ prefix
-  Temp[0] := '\';
-  Temp[1] := '\';
-  Temp[2] := '?';
-  Temp[3] := '\';
-  if ((ord(Name[0]) in [ord('A')..ord('Z'), ord('a')..ord('z')]) and
-      (Name[1] = ':')) or
-     (GetFullPathNameW(Name, high(Temp) - 4, @Temp[4], fp) = 0) then
-    MoveFast(Name^, Temp[4], Len);
+  PCardinal(@Temp[0])^ := ord('\') + ord('\') shl 16;
+  PCardinal(@Temp[2])^ := ord('?') + ord('\') shl 16;
+  if (ord(Name[0]) in [ord('A')..ord('Z'), ord('a')..ord('z')]) and
+     (Name[1] = ':') then // 'c:\toto' can directly return '\\?\c:\toto'
+    MoveFast(Name^, Temp[4], Len)
+  else if PCardinal(Name)^ = ord('\') + ord('\') shl 16 then
+  begin // '\\server\toto' should return '\\?\UNC\server\toto'
+    PCardinal(@Temp[4])^ := ord('U') + ord('N') shl 16;
+    PCardinal(@Temp[6])^ := ord('C') + ord('\') shl 16;
+    MoveFast(Name[2], Temp[8], Len - 4);
+  end
+  else if not Win32FullPathW(Name, @Temp[4], high(Temp) - 4) then
+    Temp[0] := #0; // GetFullPathNameW() failure or W32_MAX overflow
 end;
 
 {$ifdef UNICODE}
+
+function IsExtendedPathName(const Name: TFileName): boolean;
+begin
+  result := IsExtendedPathNameW(pointer(Name)); // string=PWideChar
+end;
 
 function W32(const FileName: TFileName; var Temp: TW32Temp; DoCopy: boolean): PWideChar;
 var
@@ -71,8 +87,9 @@ begin
   result := pointer(FileName);
   len := length(FileName);
   if (len = 0) or
-     ((len < MAX_PATH) and
-      not DoCopy) then
+     ((not DoCopy) and // temp copy is forced e.g. for GetFileVersionInfoSizeW()
+      ((len < MAX_PATH) or
+       IsExtendedPathName(FileName))) then
     exit; // most common case could direclty use FileName[] UTF-16 content
   ExtendedPathName(pointer(FileName), len, Temp);
   result := @Temp;
@@ -92,11 +109,18 @@ begin
   if dst <> nil then
     repeat
       dec(l);
-      dst[l] := s[l]; // fast direct conversion using 7-bit WideChar -> AnsiChar
+      dst[l] := cardinal(s[l]); // fast direct 7-bit conversion
     until l = 0;
 end;
 
 {$else}
+
+function IsExtendedPathName(const Name: TFileName): boolean; // string=PAnsiChar
+begin
+  result := (Name <> '') and
+            (PCardinal(Name)^ = ord('\') + ord('\') shl 8 +
+                                ord('?') shl 16 + ord('\') shl 24);
+end;
 
 procedure W32Convert(const FileName: TFileName; var Temp: TW32Temp);
 var
@@ -114,11 +138,13 @@ begin
   if FileName = '' then
     exit;
   len := length(FileName);
-  if (len < MAX_PATH) and
+  if ((len < MAX_PATH) or
+      ((len < W32_MAX) and
+       IsExtendedPathName(FileName))) and
      IsAnsiCompatible(pointer(FileName), len) then
     // most common cases do not need any Unicode conversion
     for i := 0 to len do // includes #0 terminator
-      PWordArray(@Temp)[i] := PByteArray(FileName)[i]
+      PWordArray(@Temp)[i] := cardinal(PByteArray(FileName)[i])
   else
     // use a temporary SynUnicode variable for complex UTF-16 conversion
     // or if MAX_PATH is reached and \\?\ prefix is needed for extended-length
@@ -166,7 +192,6 @@ begin
   Win32PWideCharToString(P, StrLenW(P), string(fn));
 end;
 
-// local RTL wrapper functions to avoid linking mormot.core.unicode.pas
 procedure Win32PWideCharToUtf8(P: PWideChar; Len: PtrInt; out res: RawUtf8);
 var
   i: PtrInt;
@@ -177,7 +202,7 @@ begin
     begin
       R := FastSetString(res, Len);
       for i := 0 to Len - 1 do
-        R[i] := PWordArray(P)[i]; // fast direct conversion
+        R[i] := PWordArray(P)[i]; // fast direct ASCII 7-bit conversion
     end
     else
       DoWin32PWideCharToUtf8(P, Len, res); // use RTL or mormot.core.unicode
@@ -282,6 +307,28 @@ begin // case-insensitive extension, then filename using plain string/PChar
   result := StrICompPChar(PosExtString(pointer(A)), PosExtString(pointer(B)));
   if result = 0 then
     result := AnsiCompareFileName(string(A), string(B)); // as user-expected
+end;
+
+// https://learn.microsoft.com/en-us/windows/win32/fileio/maximum-file-path-limitation
+function TDirectoryBrowser.Make(const fn: TFileName): TFileName;
+begin
+  if not fExtendedPath and
+     (length(fCurrentDir) + length(fn) >= MAX_PATH - 5) then
+  begin
+    // use long path prefix from now on
+    fExtendedPath := true;
+    if (fCurrentDir[1] <> '\') and
+       (fCurrentDir[2] <> '\') then
+      // convert e.g. into '\\?\c:\toto\'
+      fCurrentDir := '\\?\' + fCurrentDir
+    else
+    begin
+      // '\\server\toto\' should translate into '\\?\UNC\server\toto\'
+      delete(fCurrentDir, 1, 1);
+      fCurrentDir := '\\?\UNC' + fCurrentDir;
+    end;
+  end;
+  result := fCurrentDir + fn;
 end;
 
 function LibraryOpen(const LibraryName: TFileName): TLibHandle;
@@ -499,7 +546,7 @@ begin
             (StdOut <> INVALID_HANDLE_VALUE);
 end;
 
-procedure AllocConsole;
+procedure WinAllocConsole;
 begin
   ConsoleOutputCP := 0; // reset to force calling GetConsoleOutputCP() again
   Windows.AllocConsole;
@@ -538,20 +585,20 @@ begin
   result := Windows.GetModuleHandle(lpModuleName); // call either A or W API
 end;
 
-function WinError(err: cardinal; src: pointer; ss: PShortString; s: PString): boolean;
+function WinError(err: cardinal; lib: HMODULE; ss: PShortString; s: PString): boolean;
 var
   errbak, flags, len: PtrUInt;
   tmp: array[0..511] of WideChar;
 begin
   errbak := GetLastError;
   flags := FORMAT_MESSAGE_FROM_SYSTEM;
-  if src <> nil then // Module specific error codes - no fallback to system
+  if lib <> 0 then
     flags := FORMAT_MESSAGE_FROM_HMODULE;
   // first try if there is an English message version of this error err
-  len := FormatMessageW(flags, src, err, ENGLISH_LANGID, @tmp, SizeOf(tmp), nil);
+  len := FormatMessageW(flags, pointer(lib), err, ENGLISH_LANGID, @tmp, SizeOf(tmp), nil);
   if len = 0 then
     // typically ERROR_RESOURCE_LANG_NOT_FOUND or ERROR_MUI_FILE_NOT_FOUND
-    len := FormatMessageW(flags, src, err, 0, @tmp, SizeOf(tmp), nil);
+    len := FormatMessageW(flags, pointer(lib), err, 0, @tmp, SizeOf(tmp), nil);
   SetLastError(errbak);
   while (len <> 0) and
         (ord(tmp[len - 1]) in [0..32, ord('.')]) do
@@ -559,37 +606,46 @@ begin
   if s <> nil then
     Win32PWideCharToString(@tmp, len, s^)
   else if len <> 0 then
-    ss^[0] := AnsiChar(UnicodeToUtf8(@ss^[1], 255, @tmp, len)); // RTL
+    ss^[0] := AnsiChar(UnicodeToUtf8(@ss^[1], 255, @tmp, len)); // use RTL
   result := len <> 0;
 end;
 
-function WinApiErrorString(Code: cardinal; ModuleName: PChar): string;
+function WinApiErrorString(Code: cardinal; Lib: HMODULE): string;
 var
   tmp: TShort47;
 begin
-  if ModuleName <> nil then // first try from the supplied library name
-    if WinError(Code, pointer(GetModuleHandle(ModuleName)), nil, @result) then
-      exit;
+  if Lib <> 0 then
+    if WinError(Code, Lib, nil, @result) then
+      exit; // retrieved directly from supplied library name
   tmp[0] := #0;
   if AppendWinErrorText(Code, tmp, #0) then // try known system constants
     SetStringFromAnsi7Buffer(result, @tmp[1], ord(tmp[0]))
   else
-    WinError(Code, nil, nil, @result); // fallback to FormatMessageW()
+    WinError(Code, 0, nil, @result); // fallback to FormatMessageW()
 end;
 
-function WinApiErrorShort(Code: cardinal; ModuleName: PChar): shortstring;
+function WinApiErrorShort(Code: cardinal; Lib: HMODULE): shortstring;
 begin
-  if ModuleName <> nil then // first try from the supplied library name
-    if WinError(Code, pointer(GetModuleHandle(ModuleName)), @result, nil) then
-      exit;
-  GetErrorShortVar(Code, result); // regular system information
+  if (Lib = 0) or
+     not WinError(Code, Lib, @result, nil) then // try from library name
+    GetErrorShortVar(Code, result); // regular system information
+end;
+
+function WinApiErrorUtf8(Code: cardinal; Lib: HMODULE): RawUtf8;
+var
+  tmp: ShortString;
+begin
+  if (Lib = 0) or
+     not WinError(Code, Lib, @tmp, nil) then // try from library name
+    GetErrorShortVar(Code, tmp); // regular system information
+  ShortStringToAnsi7String(tmp, result);
 end;
 
 procedure GetErrorShortVar(error: integer; var dest: ShortString);
 begin
   dest[0] := #0;
   if not AppendWinErrorText(error, dest, #0) then // try known system constants
-    WinError(error, nil, @dest, nil); // fallback to FormatMessageW
+    WinError(error, 0, @dest, nil); // fallback to FormatMessageW
 end;
 
 procedure OsErrorShort(Code: cardinal; Dest: PShortString; NoInt: boolean);
@@ -597,13 +653,14 @@ begin
   WinErrorShort(Code, Dest, NoInt);
 end;
 
-procedure RaiseLastModuleError(ModuleName: PChar; ModuleException: ExceptClass);
+procedure RaiseLastModuleError(const Context: ShortString; Lib: HMODULE;
+  ModuleException: ExceptClass);
 var
   code: integer;
 begin
   code := GetLastError;
   raise ModuleException.CreateFmt('%s error [%s] (0x%x)',
-    [ModuleName, WinApiErrorString(code, ModuleName), code]);
+    [Context, WinApiErrorString(code, Lib), code]);
 end;
 
 function WinLastError(const Context: ShortString; Code: integer): string;
@@ -680,7 +737,7 @@ var
 
 function GetFileNameFromUrl(const Uri: RawUtf8): TFileName;
 var
-  len: DWORD;
+  len: DWord;
   u: TSynTempBuffer;
   fn: array[0..MAX_PATH] of WideChar;
 begin
@@ -1052,6 +1109,14 @@ begin
             DeleteFileW(W32(aFileName, tmp));
 end;
 
+function RemoveDir(const aDirName: TFileName): boolean;
+var
+  tmp: TW32Temp;
+begin
+  result := (aDirName <> '') and
+            RemoveDirectoryW(W32(aDirName, tmp));
+end;
+
 function FileShare(aMode: integer): DWord;
 begin
   case (aMode and $f0) of
@@ -1220,7 +1285,7 @@ end;
 
 function ExpandFileName(const FileName: TFileName): TFileName;
 var
-  w, fp: PWideChar;
+  w: PWideChar;
   t1, t2: TW32Temp;
 begin
   result := FileName;
@@ -1229,11 +1294,11 @@ begin
   w := W32(FileName, t1);
   if w = nil then
     exit;
-  if not IsExtendedPathName(w) then // W32() may have converted to extended-length
-    if GetFullPathNameW(w, high(t2), @t2, fp) = 0 then
-      exit
+  if not IsExtendedPathNameW(w) then // W32() may have converted w^ to \\?\
+    if Win32FullPathW(w, @t2, high(t2)) then
+      w := @t2 // full expanded file name from Windows API
     else
-      w := @t2; // full expanded file name from Windows API
+      exit; // GetFullPathNameW() failure or W32_MAX overflow
   Win32PWideCharToFileName(w, result);
 end;
 
@@ -1254,8 +1319,8 @@ const
   SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE = 2; // devmode
 var
   CreateSymbolicLinkW: function(lpSymlinkFileName, lpTargetFileName: PWideChar;
-    dwFlags: DWORD): BOOL; stdcall;
-  CreateSymbolicLinkFlags: DWORD = SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE;
+    dwFlags: DWord): BOOL; stdcall;
+  CreateSymbolicLinkFlags: DWord = SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE;
 
 function FileSymLink(const SymLink, Target: TFileName): boolean;
 var
@@ -1315,7 +1380,8 @@ begin
   // warning: GetSystemTimeAsFileTime() is fast, but not monotonic!
   t32 := Windows.GetTickCount; // we only have the 32-bit counter on XP
   p := @LastTickXP;
-  inc(p^.H, ord(t32 < p^.L)); // wrap-up overflow after 49.7 days
+  if t32 < p^.L then // wrap-up overflow after 49.7 days
+    inc(p^.H);
   p^.L := t32;
   result := p^.V;
 end; // warning: FPC's GetTickCount64 doesn't handle 49.7 days wrap on XP :(
@@ -2059,15 +2125,15 @@ end;
 // some definitions missing on Delphi and/or FPC
 type
   TProcessEntry32 = record
-    dwSize: DWORD;
-    cntUsage: DWORD;
-    th32ProcessID: DWORD;          // this process
+    dwSize: DWord;
+    cntUsage: DWord;
+    th32ProcessID: DWord;          // this process
     th32DefaultHeapID: PtrUInt;
-    th32ModuleID:DWORD;            // associated exe
-    cntThreads: DWORD;
-    th32ParentProcessID: DWORD;    // this process's parent process
+    th32ModuleID:DWord;            // associated exe
+    cntThreads: DWord;
+    th32ParentProcessID: DWord;    // this process's parent process
     pcPriClassBase: integer;          // Base priority of process's threads
-    dwFlags: DWORD;
+    dwFlags: DWord;
     szExeFile: array [0..MAX_PATH - 1] of WideChar;   // Path
   end;
 
@@ -2541,7 +2607,7 @@ begin
   if not NoLineFeed then
   begin
     SetLength(txt, l + 2); // faster to reallocate than WriteFile() twice
-    PWord(@PByteArray(txt)[l])^ := CRLFW;
+    PWord(@PByteArray(txt)[l])^ := EOLW;
     inc(l, 2);
   end;
   ConsoleCriticalSection.Lock;
@@ -2596,41 +2662,60 @@ begin
   ConsoleHandleCtrlCPressed := true;
 end;
 
-procedure ConsoleWaitForEnterKey;
+function WinWaitFor(ms: cardinal; h: THandle; checkSubThreadQuit: boolean): TWinWaitFor;
 var
+  mainthread: boolean;
   msg: TMsg;
+begin
+  mainthread := (GetCurrentThreadID = MainThreadID);
+  // first process Windows messages (if needed)
+  result := wwfQuit;
+  if mainthread then // same logic than Application.ProcessMessages
+    while PeekMessage(msg, 0, 0, 0, PM_REMOVE) do
+      if msg.Message = WM_QUIT then
+        exit // always stop waiting when the process is gracefully closing
+      else
+      begin
+        TranslateMessage(msg);
+        DispatchMessage(msg);
+      end
+  else if checkSubThreadQuit then // e.g. from ConsoleWaitForEnterKey
+    while PeekMessage(msg, 0, 0, 0, PM_REMOVE) do
+      if msg.Message = WM_QUIT then
+        exit;
+  // proper Sleep/WaitForSingleObject call
+  mainthread := mainthread and IsMultiThread;
+  if h = 0 then
+  begin
+    if mainthread then
+      CheckSynchronize(ms) // call any Synchronize() event at full speed
+    else
+      Windows.Sleep(ms);
+    result := wwfTimeout;
+    exit;
+  end;
+  if mainthread then
+    CheckSynchronize(0);
+  case WaitForSingleObject(h, ms) of
+    WAIT_TIMEOUT:
+      result := wwfTimeout;
+    WAIT_OBJECT_0:
+      result := wwfSignaled;
+  else
+    result := wwfFailed;
+  end;
+  if mainthread then
+    CheckSynchronize(0);
+end;
+
+procedure ConsoleWaitForEnterKey;
 begin
   ConsoleHandleCtrlCPressed := false;
   HandleCtrlC(TConsoleHandleCtrlC.HandleCtrlC);
   try
-    if GetCurrentThreadID = MainThreadID then
-      // process the messages from the main thread while waiting
-      while not ConsoleKeyPressed(VK_RETURN) and
-            not ConsoleHandleCtrlCPressed do
-      begin
-        if IsMultiThread then
-          CheckSynchronize{$ifndef DELPHI6OROLDER}(100){$endif}
-        else
-          Windows.Sleep(100);
-        while PeekMessage(msg, 0, 0, 0, PM_REMOVE) do
-          if msg.Message = WM_QUIT then
-            exit // stop waiting when the process is gracefully closing
-          else
-          begin
-            TranslateMessage(msg);
-            DispatchMessage(msg);
-          end;
-      end
-    else
-      // just intercept any WM_QUIT message on this sub-thread
-      while not ConsoleKeyPressed(VK_RETURN) and
-            not ConsoleHandleCtrlCPressed do
-      begin
-        Windows.Sleep(100);
-        if PeekMessage(msg, 0, 0, 0, PM_REMOVE) then
-          if msg.Message = WM_QUIT then
-            exit; // nothing to dispatch with PostThreadMessage()
-      end;
+    while (WinWaitFor({ms=}100, {handle=}0, {wm_quit=}true) = wwfTimeout) and
+          not ConsoleKeyPressed(VK_RETURN) and
+          not ConsoleHandleCtrlCPressed do ;
   finally
     HandleCtrlC(nil);
   end;
@@ -2678,6 +2763,7 @@ var
     if VerQueryValueW(pt, Utf8ToWin32PWideChar(lngnfo + From, u), str, sz) and
        (sz > 0) then
       Win32PWideCharToUtf8(str, Res);
+    u.Done;
   end;
 
 begin
@@ -2727,7 +2813,7 @@ begin
         result := true;
       end;
     finally
-      Freemem(pt);
+      FreeMem(pt);
     end;
   end;
 end;
@@ -2872,6 +2958,16 @@ begin
   // nothing to be done on Windows: PAGE_EXECUTE_READWRITE always work
 end;
 
+function _GetLargeMem(BigSize: PtrUInt): pointer;
+begin
+  result := VirtualAlloc(nil, BigSize, MEM_COMMIT, PAGE_READWRITE);
+end;
+
+procedure _FreeLargeMem(p: pointer; BigSize: PtrUInt);
+begin
+  VirtualFree(p, 0, MEM_RELEASE);
+end;
+
 
 { ****************** Operating System Specific Types (e.g. TWinRegistry) }
 
@@ -2961,7 +3057,7 @@ begin
 end;
 
 function TWinRegistry.ReadMax(const entry: SynUnicode;
-  Data: pointer; MaxDataLen: DWORD): DWORD;
+  Data: pointer; MaxDataLen: DWord): DWord;
 var
   tmp: RawByteString;
 begin
@@ -3023,7 +3119,7 @@ var
 function IsUacVirtualizationEnabled: boolean;
 var
   token: THandle;
-  enabled, len: DWORD;
+  enabled, len: DWord;
 begin
   if IsUacEnabled = lsUntested then
     if OSVersion < wVista then
@@ -3181,9 +3277,9 @@ type
   PCERT_INFO = pointer;
 
   CERT_CONTEXT = record
-    dwCertEncodingType: DWORD;
+    dwCertEncodingType: DWord;
     pbCertEncoded: PByte;
-    cbCertEncoded: DWORD;
+    cbCertEncoded: DWord;
     pCertInfo: PCERT_INFO;
     hCertStore: HCERTSTORE;
   end;
@@ -3358,8 +3454,9 @@ begin
   inherited Create;
   if Path = '' then
   begin
-    TService.DoLog(sllError,
-      'CreateNewService(''%'',''%'') with no Path', [Name, DisplayName], self);
+    if Assigned(WindowsServiceLog) then
+      TService.DoLog(sllError, 'CreateNewService(''%'',''%'') with no Path',
+        [Name, DisplayName], self);
     exit;
   end;
   if TargetComputer = '' then
@@ -3404,8 +3501,9 @@ begin
   t5.Done;
   if fHandle = 0 then
     RaiseLastError('TServiceController.CreateService:', EService);
-  TService.DoLog(sllInfo, 
-    'CreateService(''%'',''%'',''%'')', [Name, DisplayName, exeName], self);
+  if Assigned(WindowsServiceLog) then
+    TService.DoLog(sllInfo, 'CreateService(''%'',''%'',''%'')',
+      [Name, DisplayName, exeName], self);
 end;
 
 constructor TServiceController.CreateOpenService(
@@ -3461,7 +3559,8 @@ begin
     result := ssNotInstalled
   else
     result := CurrentStateToServiceState(GetStatus.dwCurrentState);
-  TService.DoLog(sllTrace, 'GetState(%)=%', [fName, ToText(result)^], self);
+  if Assigned(WindowsServiceLog) then
+    TService.DoLog(sllTrace, 'GetState(%)=%', [fName, ToText(result)^], self);
 end;
 
 function TServiceController.GetStatus: TServiceStatus;
@@ -3980,7 +4079,7 @@ begin
         end;
       end
       else
-        TService.DoLog(sllLastError, 'GetServicePid(%)', [aServiceName], nil);
+        TService.DoLog(sllLastError, 'GetServicePid(%)', [aServiceName]);
     finally
       CloseServiceHandle(svc);
     end
@@ -4069,17 +4168,17 @@ end;
 function CancelProcess(pid: cardinal; waitseconds: integer): boolean;
 begin
   result := false;
-  if integer(pid) <= 0 then
+  if (integer(pid) <= 0) or
+     (GetConsoleWindow <> 0) or
+     not AttachConsole(pid) then
     exit;
-  if GetConsoleWindow <> 0 then              // can attach to a single console
-    FreeConsole;
-  if not AttachConsole(pid) then             // attach to the pid console
-    exit;
+  // we are now attached to the pid console
   SetConsoleCtrlHandler(nil, true);          // nil=ignore the event ourself
   GenerateConsoleCtrlEvent(CTRL_C_EVENT, 0); // send Ctrl+C event
   FreeConsole;                               // detach
   SetConsoleCtrlHandler(nil, false);         // remove our nil=ignore handler
-  result := WaitProcess(pid, waitseconds);
+  result := (waitseconds = 0) or
+            WaitProcess(pid, waitseconds);
 end;
 
 function QuitProcess(pid: cardinal; waitseconds: integer): boolean;
@@ -4125,7 +4224,7 @@ end;
 var
   OnHandleCtrlC: TThreadMethod;
 
-function ConsoleCtrlHandler(typ : dword) : BOOL; stdcall;
+function ConsoleCtrlHandler(typ : DWord) : BOOL; stdcall;
 begin
   result := false;
   if Assigned(OnHandleCtrlC) then
@@ -4232,10 +4331,12 @@ function CreateProcessW(lpApplicationName: PWideChar; lpCommandLine: PWideChar;
 function GetExitCodeProcess(hProcess: THandle; out lpExitCode: cardinal): BOOL;
   stdcall; external kernel32;
 
-function CreateJobToClose(parentpid: cardinal): THandle;
+function CreateJobToClose(parentpid: cardinal; const ctxt: ShortString;
+   allowSilentBreakaway: boolean): THandle;
 var
   security: TSecurityAttributes;
   limits: TJobObjectExtendedLimitInformation;
+  flags: cardinal;
   jobname: RawUtf8;
 begin
   security.nLength := SizeOf(security);
@@ -4244,28 +4345,38 @@ begin
   _fmt('AutoCloseChild%d', [parentpid], jobname);
   result := CreateJobObjectA(@security, pointer(jobname));
   if result = 0 then
+  begin
+    if Assigned(WindowsServiceLog) then
+      TService.DoLog(sllLastError, '%: CreateJobObjectA(%)', [ctxt, jobname]);
     exit;
+  end;
   FillCharFast(limits, SizeOf(limits), 0);
-  limits.BasicLimitInformation.LimitFlags :=
-    JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE or
-    JOB_OBJECT_LIMIT_BREAKAWAY_OK;
+  flags := JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE or JOB_OBJECT_LIMIT_BREAKAWAY_OK;
+  if allowSilentBreakaway then // relaxed for children (e.g. ServiceUI.exe)
+    flags := flags or JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK;
+  limits.BasicLimitInformation.LimitFlags := flags;
   if SetInformationJobObject(result, ExtendedLimitInformation,
        @limits, SizeOf(limits)) then
-    exit;
+  begin
+    if Assigned(WindowsServiceLog) then
+      TService.DoLog(sllTrace, '%: SetInformationJobObject(%) success',
+        [ctxt, jobname]);
+    exit; // success
+  end;
+  if Assigned(WindowsServiceLog) then
+    TService.DoLog(sllLastError, '%: SetInformationJobObject(%)',
+      [ctxt, jobname]);
   CloseHandle(result); // error initializing the job (too old or too new OS?)
   result := 0;
 end;
 
 function AssignJobToProcess(job, process: THandle; const ctxt: ShortString): boolean;
 begin
-  result := (job <> 0) and
-            AssignProcessToJobObject(job, process);
-  if result then
-    TService.DoLog(sllTrace, 'RunCommand: % AssignProcessToJobObject success',
-      [ctxt], nil)
-  else
-    TService.DoLog(sllDebug, 'RunCommand: % AssignProcessToJobObject failed as %',
-      [ctxt, WinErrorShort(GetLastError)], nil);
+  result := AssignProcessToJobObject(job, process);
+  if not result then
+    TService.DoLog(sllLastError, '%: AssignProcessToJobObject', [ctxt])
+  else if Assigned(WindowsServiceLog) then
+    TService.DoLog(sllTrace, '%: AssignProcessToJobObject success', [ctxt]);
 end;
 
 function RunProcess(const path, arg1: TFileName; waitfor: boolean;
@@ -4297,57 +4408,88 @@ begin
 end;
 
 function RunCommand(const cmd: TFileName; waitfor: boolean; const env: TFileName;
-  options: TRunOptions; waitfordelayms: cardinal; processhandle: PHandle;
-  redirected: PRawByteString; const onoutput: TOnRedirect;
-  const wrkdir: TFileName): integer;
+  options: TRunOptions; processhandle: PHandle): integer;
 var
   processinfo: TProcessInformation;
 begin
-  result := RunCommandWin(cmd, waitfor, processinfo, env, options,
-    waitfordelayms, redirected, onoutput, wrkdir);
+  result := RunCommandWin(cmd, waitfor, processinfo, env, options);
   if processhandle <> nil then
     processhandle^ := processinfo.hProcess;
 end;
 
+function RunRedirect(const cmd: TFileName; exitcode: PInteger;
+  const onoutput: TOnRedirect; waitfordelayms: cardinal; setresult: boolean;
+  const env, wrkdir: TFileName; options: TRunOptions): RawByteString;
+var
+  res: integer;
+  redir: PRawByteString;
+  processinfo: TProcessInformation;
+begin
+  result := '';
+  redir := nil; // if onoutput is enough (e.g. to avoid huge result)
+  if setresult then
+    redir := @result;
+  res := RunCommandWin(cmd, {wait=}true, processinfo, env, options,
+    waitfordelayms, redir, onoutput, wrkdir);
+  if exitcode <> nil then
+    exitcode^ := res;
+end;
+
 function RunCommandWin(const cmd: TFileName; waitfor: boolean;
-  var processinfo: TProcessInformation; const env: TFileName;
+  var processinfo: TWinProcessInfo; const env: TFileName;
   options: TRunOptions; waitfordelayms: cardinal;
   redirected: PRawByteString; const onoutput: TOnRedirect;
   const wrkdir: TFileName; jobtoclose: PHandle): integer;
 var
   startupinfo: TStartupInfo; // _STARTUPINFOW or _STARTUPINFOA is equal here
-  security: TSecurityAttributes;
+  procsec, pipesec: TSecurityAttributes;
   exe, path: TFileName;
   rd, wr, job: THandle;
   // CreateProcess can alter the strings -> use local SynUnicode temp variables
   wcmd, wenv, wpath: SynUnicode;
   endtix: Int64;
-  flags, exitcode, err, res: cardinal;
+  flags, exitcode: cardinal;
   ram: TRunAbortMethods;
-  created, terminated: boolean;
+  created: boolean;
   i, l: PtrInt;
 
-  procedure RedirectOutput(flush: boolean);
+  procedure ReturnLastError(const Api: ShortString; ctxt: cardinal);
+  var
+    err: cardinal;
+  begin
+    err := GetLastError;
+    TService.DoLog(sllDebug, 'RunCommand: % = % (ctxt=%)',
+      [Api, WinErrorShort(err), Int64(ctxt)]);
+    result := -err; // returns OS API error as negative number
+  end;
+
+  function RedirectOutputAborted(killed: boolean): boolean;
   var
     new: RawByteString;
     pending, n: cardinal;
-    tmp: TSynTempBuffer;
+    tmp: TBuffer4K;
   begin
+    result := false;
+    if rd = 0 then
+      exit;
     repeat
       pending := 0;
       if not PeekNamedPipe(rd, nil, 0, nil, @pending, nil) or
-         (pending = 0) then
+         (pending = 0) then // idle
       begin
-        if (not flush) and
-           Assigned(onoutput) and
-           onoutput('', processinfo.dwProcessId) then
-            exitcode := WAIT_OBJECT_0; // onoutput() returned true to abort
+        if Assigned(onoutput) then
+          result := onoutput('', processinfo.dwProcessId); // true = aborted
         break;
       end;
       if pending > SizeOf(tmp) then
         pending := SizeOf(tmp);
       n := 0;
-      Win32Check(ReadFile(rd, tmp, pending, n, nil));
+      if not ReadFile(rd, tmp, pending, n, nil) then
+      begin
+        ReturnLastError('ReadFile', pending);
+        result := true; // abort
+        exit;
+      end;
       if n <= 0 then
         break;
       if redirected <> nil then
@@ -4356,18 +4498,79 @@ var
         MoveFast(tmp, PByteArray(redirected^)[l], n); // append without convert
         inc(l, n);
       end;
-      if Assigned(onoutput) then
+      if Assigned(onoutput) and
+         not result then
       begin
-        SetString(new, PAnsiChar(@tmp), n);
+        FastSetRawByteString(new, @tmp, n);
         if onoutput(new, processinfo.dwProcessId) then // notify new content
-          // onoutput() callback returned true to stop the execution
-          if not flush then
-          begin
-            exitcode := WAIT_OBJECT_0;
+        begin
+          result := true; // onoutput() returned true to abort
+          if not killed then
             break;
-          end;
+        end;
       end;
     until false;
+  end;
+
+  function RedirectAndWait(endtix: Int64): boolean;
+  begin
+    repeat
+      // note: WaitForMultipleObjects() with rd burns 100% of one core :(
+      case WinWaitFor({ms=}50, processinfo.hProcess) of
+        wwfSignaled:
+          break;
+        wwfFailed, wwfQuit:
+          begin
+            ReturnLastError('RedirectAndWait abort', processinfo.dwProcessId);
+            result := false;
+            exit;
+          end;
+      end;
+    until RedirectOutputAborted({killed=}false) or
+          ((endtix <> 0) and
+           (GetTickCount64 > endtix));
+    result := true;
+  end;
+
+  procedure AbortProcess;
+  var
+    terminated: boolean;
+
+  begin
+    // it is time to gracefully or force process ending
+    if RunAbortTimeoutSecs > 0 then
+    begin
+      endtix := GetTickCount64 + RunAbortTimeoutSecs * 1000;
+      terminated := false;
+      if ramCtrlC in ram then
+      begin
+        // try Ctrl+C (if not disabled above)
+        terminated := CancelProcess(processinfo.dwProcessId, {wait=}0) and
+                      RedirectAndWait(endtix);
+        TService.DoLog(sllTrace, 'RunCommand: CancelProcess(pid=%)=%',
+          [processinfo.dwProcessId, ord(terminated)]);
+      end;
+      if (ramQuit in ram) and
+         not terminated then
+      begin
+        // try WM_QUIT
+        terminated := QuitProcess(processinfo.dwProcessId, {wait=}0) and
+                      RedirectAndWait(endtix);
+        TService.DoLog(sllTrace, 'RunCommand: QuitProcess(%)=%',
+          [processinfo.dwProcessId, ord(terminated)]);
+      end;
+      if GetExitCodeProcess(processinfo.hProcess, exitcode) then
+        result := exitcode
+      else
+        ReturnLastError('GetExitCodeProcess(soft)', processinfo.dwProcessId)
+    end;
+    if exitcode <> STILL_ACTIVE then
+      exit;
+    // soft ending via Ctrl+C or WM_QUIT was not enough: hard kill
+    result := 255;
+    terminated := TerminateProcess(processinfo.hProcess, result);
+    TService.DoLog(sllTrace, 'RunCommand: TerminateProcess(%)=%',
+      [processinfo.dwProcessId, ord(terminated)]);
   end;
 
 begin
@@ -4400,9 +4603,9 @@ begin
   if (path = '') and
      FileExists(Executable.ProgramFilePath + exe) then
     path := Executable.ProgramFilePath; // prefers the current folder
-  // prepare the CreateProcess arguments
+  // prepare the main CreateProcessW arguments
   wcmd := SynUnicode(cmd);
-  UniqueString(wcmd);
+  UniqueString(wcmd); // CreateProcessW() modifies wcmd buffer in-place
   wpath := SynUnicode(path);
   if env <> '' then
   begin
@@ -4416,22 +4619,26 @@ begin
     else
       UniqueString(wenv);
   end;
-  security.nLength := SizeOf(security);
-  security.bInheritHandle := true;
-  security.lpSecurityDescriptor := nil;
-  // launch the process
+  // prepare redirection and execution context
+  FillCharFast(procsec, SizeOf(procsec), 0);
+  procsec.nLength := SizeOf(procsec);
   FillCharFast(startupinfo, SizeOf(startupinfo), 0);
   startupinfo.cb := SizeOf(startupinfo);
-  ram := RunAbortMethods;
   l := 0;
   rd := 0;
   job := 0;
   if Assigned(jobtoclose) then
     jobtoclose^ := job;
+  ram := RunAbortMethods; // local copy to exclude ramCtrlC
   if Assigned(onoutput) or
      (redirected <> nil) then
-    if CreatePipe(rd, wr, @security, 0) then
+  begin
+    FillCharFast(pipesec, SizeOf(pipesec), 0);
+    pipesec.nLength := SizeOf(pipesec);
+    pipesec.bInheritHandle := true;
+    if CreatePipe(rd, wr, @pipesec, 0) then
     begin
+      procsec.bInheritHandle := true;
       SetHandleInformation(rd, HANDLE_FLAG_INHERIT, 0);
       startupinfo.wShowWindow := SW_HIDE;
       startupinfo.hStdInput := GetStdHandle(STD_INPUT_HANDLE);
@@ -4444,154 +4651,92 @@ begin
     end
     else
       rd := 0;
+  end;
   // https://docs.microsoft.com/en-en/windows/desktop/ProcThread/process-creation-flags
   flags := CREATE_UNICODE_ENVIRONMENT or CREATE_DEFAULT_ERROR_MODE;
+  // by default, just behave as a standard Windows process would
   if not (roWinNoProcessDetach in options) then
+  begin
+    // RunProcess() option is [] to launch a detached console and a new process group
+    // RunCommand() and RunRedirect() use RUN_CMD = [roWinNoProcessDetach]
     flags := flags or (DETACHED_PROCESS or CREATE_NEW_PROCESS_GROUP);
+    exclude(ram, ramCtrlC); // not compatible with detached console or group
+  end;
+  if roWinNewConsole in options then
+  begin
+    // DETACHED_PROCESS is mutually exclusive with CREATE_NEW_CONSOLE
+    flags := (flags or CREATE_NEW_CONSOLE) and not DETACHED_PROCESS;
+    exclude(ram, ramCtrlC); // not compatible with stand-alone console
+  end;
   if roWinJobCloseChildren in options then
-    // create the child process in a new job object
-    flags := flags or CREATE_BREAKAWAY_FROM_JOB;
+    flags := flags or CREATE_BREAKAWAY_FROM_JOB; // child process in a new job
   // actually create the new process
-  created := CreateProcessW(nil, pointer(wcmd), @security, @security, true,
+  created := CreateProcessW(nil, pointer(wcmd), @procsec, @procsec, true,
     flags, pointer({%H-}wenv), pointer(wpath), startupinfo, processinfo);
   if (not created) and
      (flags and CREATE_BREAKAWAY_FROM_JOB <> 0) then
   begin
-    TService.DoLog(sllTrace,
-      'RunCommand: unsupported CREATE_BREAKAWAY_FROM_JOB = %',
-      [WinErrorShort(GetLastError)], nil);
+    TService.DoLog(sllLastError,
+      'RunCommand: possible unsupported CREATE_BREAKAWAY_FROM_JOB', []);
     flags := flags and (not CREATE_BREAKAWAY_FROM_JOB);
     wcmd := SynUnicode(cmd); // CreateProcesW() modified wcmd content: recreate
     UniqueString(wcmd);
-    created := CreateProcessW(nil, pointer(wcmd), @security, @security, true,
+    created := CreateProcessW(nil, pointer(wcmd), @procsec, @procsec, true,
       flags, pointer({%H-}wenv), pointer(wpath), startupinfo, processinfo);
   end;
-  if not created then
-  begin
-    err := GetLastError;
-    TService.DoLog(sllTrace,  'RunCommand: CreateProcess = %',
-      [WinErrorShort(err)], nil);
-    result := -err; // returns CreateProcessW() error as negative number
-    exit;
-  end;
-  // setup the newly created process
-  if flags and CREATE_BREAKAWAY_FROM_JOB <> 0 then
-  begin
-    job := CreateJobToClose(processinfo.dwProcessID);
-    if (job <> 0) and
-       not AssignJobToProcess(job, processinfo.hProcess, 'CloseChildren') then
+  if created then
+  try
+    // setup the newly created process
+    if flags and CREATE_BREAKAWAY_FROM_JOB <> 0 then
     begin
-      CloseHandle(job);
-      job := 0;
-    end
-    else if Assigned(jobtoclose) then
-      jobtoclose^ := job;
-  end;
-  if Assigned(onoutput) then
-    onoutput('', processinfo.dwProcessId);
-  // main wait (and redirect) until the process is finished (or not)
-  if rd <> 0 then
-  begin
-    // wait and redirect - see https://stackoverflow.com/a/25725197/458259
-    CloseHandle(wr);
-    if waitfordelayms = INFINITE then
-      endtix := 0
-    else
+      // roWinJobCloseChildren = run the new process in its own Job
+      job := CreateJobToClose(processinfo.dwProcessID, 'CloseChildren',
+        {allowSilentBreakaway:}true);
+      if (job <> 0) and
+         not AssignJobToProcess(job, processinfo.hProcess, 'CloseChildren') then
+      begin
+        CloseHandle(job);
+        job := 0;
+      end
+      else if Assigned(jobtoclose) then
+        jobtoclose^ := job;
+    end;
+    if Assigned(onoutput) then
+      onoutput('', processinfo.dwProcessId); // notify started
+    // main wait (and redirect) until the process is finished (or not)
+    endtix := 0;
+    if waitfordelayms <> INFINITE then
       endtix := GetTickCount64 + waitfordelayms;
-    repeat
-      exitcode := WaitForSingleObject(processinfo.hProcess, 50);
-      // note: WaitForMultipleObjects() with rd burns 100% of one core :(
-      Win32Check(exitcode <> WAIT_FAILED);
-      RedirectOutput({flush=}false);
-    until (exitcode = WAIT_OBJECT_0) or
-          ((endtix <> 0) and
-           (GetTickCount64 > endtix));
+    if rd <> 0 then
+      CloseHandle(wr) // https://stackoverflow.com/a/25725197/458259
+    else if not waitfor then
+    begin
+      // no wait nor redirection: just launch the process
+      result := 0; // 0 is no true exit code, but CreateProcessW() success
+      exit;
+    end;
+    RedirectAndWait(endtix);
+    // retrieve the exit code or abort the process on timeout
     if GetExitCodeProcess(processinfo.hProcess, exitcode) and
        (exitcode <> STILL_ACTIVE) then
-      result := exitcode // process ended from natural death -> return code
+      result := exitcode // process finished with an exit code
     else
-    begin
-      result := -GetLastError; // not able to retrieve exit code
-      // e.g. -STILL_ACTIVE if aborted by onoutput()=true above
-      terminated := false;
-      if RunAbortTimeoutSecs > 0 then
-      begin
-        if ramCtrlC in ram then  // try Ctrl+C (disabled above)
-        begin
-          terminated := CancelProcess(processinfo.dwProcessId, RunAbortTimeoutSecs);
-          TService.DoLog(sllTrace, 'RunCommand: CancelProcess(%)=%',
-            [processinfo.dwProcessId, ord(terminated)], nil);
-        end;
-        if (not terminated) and
-           (ramQuit in ram) then
-        begin // try WM_QUIT
-          terminated := QuitProcess(processinfo.dwProcessId, 0);
-          TService.DoLog(sllTrace, 'RunCommand: QuitProcess(%)=%',
-            [processinfo.dwProcessId, ord(terminated)], nil);
-          if terminated then
-          begin
-            endtix := GetTickCount64 + RunAbortTimeoutSecs * 1000; // wait ended
-            repeat
-              res := WaitForSingleObject(processinfo.hProcess, 10);
-              RedirectOutput({flush=}true); // mandatory to unlock pipe
-            until (res <> WAIT_TIMEOUT) or
-                  (GetTickCount64 > endtix);
-            terminated := res = WAIT_OBJECT_0;
-          end;
-        end;
-      end;
-      RedirectOutput({flush=}true); // ensure there is no pending data
-      if terminated and
-         // gracefully ended -> try to retrieve the exit code
-         GetExitCodeProcess(processinfo.hProcess, exitcode) then
-        result := exitcode
-      else
-      begin
-        TerminateProcess(processinfo.hProcess, result); // forced kill
-        TService.DoLog(sllTrace, 'RunCommand: TerminateProcess(%)=%',
-          [processinfo.dwProcessId, result], nil);
-      end;
-    end;
+      AbortProcess;
+    // eventually retrieve any pending output
+    if rd <> 0 then
+      RedirectOutputAborted({killed=}true);
+  finally
+    // release the handles created for this process
+    CloseHandle(processinfo.hProcess);
+    CloseHandle(processinfo.hThread);
+    if rd <> 0 then // CloseHandle(wr) has already be done
+      CloseHandle(rd);
+    if (job <> 0) and
+       not Assigned(jobtoclose) then
+        CloseHandle(job); // caller should make CloseHandle(jobtoclose^)
   end
-  else if waitfor then
-    if WaitForSingleObject(processinfo.hProcess, waitfordelayms) = WAIT_FAILED then
-      if waitfordelayms <> INFINITE then
-        result := -1 // still runing after waitfordelayms
-      else
-        result := -GetLastError // failed to wait
-    else if GetExitCodeProcess(processinfo.hProcess, exitcode) then
-        result := exitcode      // waited for process to end -> return code
-      else
-        result := -GetLastError // was not able to retrieve exit code
   else
-    // waitfor is false: asynchronous process launch
-    result := 0;
-  // release the handles created for this process
-  CloseHandle(processinfo.hProcess);
-  CloseHandle(processinfo.hThread);
-  if rd <> 0 then // CloseHandle(wr) has already be done
-    CloseHandle(rd);
-  if (job <> 0) and
-     not Assigned(jobtoclose) then
-      CloseHandle(job); // caller should make CloseHandle(jobtoclose^)
-end;
-
-function RunRedirect(const cmd: TFileName; exitcode: PInteger;
-  const onoutput: TOnRedirect; waitfordelayms: cardinal; setresult: boolean;
-  const env, wrkdir: TFileName; options: TRunOptions): RawByteString;
-var
-  res: integer;
-  redir: PRawByteString;
-begin
-  result := '';
-  if setresult then
-    redir := @result
-  else
-    redir := nil;
-  res := RunCommand(cmd, true, env, options, waitfordelayms, nil,
-    redir, onoutput, wrkdir);
-  if exitcode <> nil then
-    exitcode^ := res;
+    ReturnLastError('CreateProcessW', flags);
 end;
 
 
@@ -4633,14 +4778,14 @@ type
     ProcessorMask: PtrUInt;
     case Relationship: TSystemLogicalProcessorRelation of
       RelationProcessorCore: (
-        ProcessorCoreFlags: BYTE);
+        ProcessorCoreFlags: byte);
       RelationNumaNode: (
         NumaNodeNumber: DWord);
       RelationCache: (
         Cache: record
-          Level: BYTE;
-          Associativity: BYTE;
-          LineSize: WORD;
+          Level: byte;
+          Associativity: byte;
+          LineSize: Word;
           Size: DWord;
           CacheType: TSystemLogicalProcessorCache;
         end);
@@ -4716,7 +4861,8 @@ begin
     RedirectCode(@ByteScanIndex,    @ByteScanIndexPas);
     RedirectCode(@IntegerScanIndex, @IntegerScanIndexPas);
     RedirectCode(@WordScanIndex,    @WordScanIndexPas);
-    // note: FillCharFast is handled by mormot.core.base via ERMSB
+    // note: FillCharFast is handled by mormot.core.base via ERMSB, but some
+    // other (e.g. crypto) code is likely to fail at runtime - use HASNOSSE2
   end;
   {$endif HASNOSSE2}
   {$endif ASMX86}
@@ -4783,7 +4929,7 @@ begin
   if (PtrUInt(P) > MIN_PTR_VALUE) and
      (PtrUInt(SystemInfo.lpMinimumApplicationAddress) <= MIN_PTR_VALUE) then
     PtrUInt(SystemInfo.lpMinimumApplicationAddress) := MIN_PTR_VALUE;
-  Freemem(P);
+  FreeMem(P);
   FillCharFast(mem, SizeOf(mem), 0);
   mem.dwLength := SizeOf(mem);
   if GlobalMemoryStatusEx(mem) then
@@ -4975,14 +5121,12 @@ begin
   _fmt('%d x %s (' + CPU_ARCH_TEXT + ')',
     [SystemInfo.dwNumberOfProcessors, cpu], CpuInfoText);
   // 5. compute some minimal entropy using the just retrieved info
-  CoCreateGuid(StartupEntropy); // very fast, and won't hurt
-  {$ifdef CPUINTEL}
-  StartupEntropy.Lo := StartupEntropy.Lo xor Rdtsc; // fast and unpredictable
-  RdRand32(@StartupEntropy.c2, 2);                  // no-op on older CPUs
-  {$endif CPUINTEL}
-  crc32c128(@StartupEntropy, @SystemInfo, SizeOf(SystemInfo));
-  crc32c128(@StartupEntropy, @mem, SizeOf(mem));
-  crc32c128(@StartupEntropy, @OSVersionInfo, SizeOf(OSVersionInfo));
+  CoCreateGuid(SystemEntropy.LiveFeed); // very fast and unique (but not strong)
+  SystemEntropy.Startup := SystemEntropy.LiveFeed;
+  crc32c128(@SystemEntropy.Startup, @SystemInfo, SizeOf(SystemInfo));
+  crc32c128(@SystemEntropy.Startup, @mem, SizeOf(mem));
+  crc32c128(@SystemEntropy.Startup, @OSVersionInfo, SizeOf(OSVersionInfo));
+  // CpuCache, Executable.Hash, CpuFeatures will be added in main mormot.core.os
 end;
 
 procedure FinalizeSpecificUnit;

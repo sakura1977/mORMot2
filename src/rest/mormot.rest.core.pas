@@ -264,9 +264,9 @@ type
 {$ifndef PUREMORMOT2}
 
   TSqlRestServerUriContextCommand = TRestServerUriContextCommand;
-  TSqlRestServerAcquireMode = TRestServerAcquireMode;
-  TSqlRestAcquireExecution = TRestAcquireExecution;
-  TSqlRestBackgroundTimer = TRestBackgroundTimer;
+  TSqlRestServerAcquireMode       = TRestServerAcquireMode;
+  TSqlRestAcquireExecution        = TRestAcquireExecution;
+  TSqlRestBackgroundTimer         = TRestBackgroundTimer;
 
 {$endif PUREMORMOT2}
 
@@ -274,7 +274,7 @@ type
 { ************ TRestRunThreads Multi-Threading Process of a REST instance }
 
   /// access to the Multi-Threading process of a TRest instance
-  TRestRunThreads = class(TSynLocked)
+  TRestRunThreads = class(TObjectOSLock)
   protected
     fOwner: TRest;
     fBackgroundTimer: TRestBackgroundTimer;
@@ -468,7 +468,7 @@ type
     procedure OnRestBackgroundTimerCreate; virtual;
   public
     /// initialize the class, and associate it to a specified database Model
-    constructor Create(aModel: TOrmModel); virtual;
+    constructor Create(aModel: TOrmModel); reintroduce; virtual;
     // inherited classes should unserialize the other aDefinition properties by
     // overriding this method, in a reverse logic to overriden DefinitionTo()
     constructor RegisteredClassCreateFrom(aModel: TOrmModel;
@@ -880,8 +880,8 @@ type
 {$ifndef PUREMORMOT2}
 
 type
-  TSqlRest = TRest;
-  TSqlRestClass = TRestClass;
+  TSqlRest         = TRest;
+  TSqlRestClass    = TRestClass;
   TSqlRestDynArray = TRestDynArray;
 
 {$endif PUREMORMOT2}
@@ -1032,43 +1032,59 @@ type
     fDisplayName: RawUtf8;
     fGroupRights: TAuthGroup;
     fData: RawBlob;
+    // just wrap default ComputeHashedPassword() = SetPassword() plain Sha256()
     procedure SetPasswordPlain(const Value: RawUtf8);
   public
-    /// static function allowing to compute a hashed password
-    // - as expected by this class
-    // - defined as virtual so that you may use your own hashing class
-    // - aHashRound = 0 uses plain Sha256(), as early mORMot 1 encoding
-    // - aHashRound > 0 triggers Pbkdf2HmacSha256() via aHashSalt, and enable
-    // Pbkdf2HmacSha256() to increase security on storage side (reducing brute
-    // force attack via rainbow tables)
-    // - aHashRound < 0 will use standard DIGEST-HA0 hashing, compatible with
-    // TDigestAuthServer, expecting aHashRound as -ord(TDigestAlgo)
-    class function ComputeHashedPassword(const aLogonName, aPasswordPlain: RawUtf8;
-      const aHashSalt: RawUtf8 = ''; aHashRound: integer = 20000): RawUtf8; virtual;
-    /// able to set the PasswordHashHexa field from a plain password content
-    // - in fact, PasswordHashHexa := Sha256('salt'+PasswordPlain) in UTF-8
-    // - use SetPassword() method if you want to customize the hash salt value
-    // and use the much safer Pbkdf2HmacSha256 or DIGEST-HA0 algorithms
+    /// set the PasswordHashHexa field using Sha256 old mORMot 1 encoding
+    // - consider the much safer SetPassword(TModularCryptFormat) method
     property PasswordPlain: RawUtf8
       write SetPasswordPlain;
-    /// set the PasswordHashHexa field using Pbkdf2HmacSha256
-    // - use this method to specify aHashSalt/aHashRound values (see
-    // ComputeHashedPassword method) and increase security on storage side
-    // (reducing brute force attack via rainbow tables)
+    /// set the PasswordHashHexa field using Pbkdf2HmacSha256 old mORMot 1 encoding
+    // - consider the much safer SetPassword(TModularCryptFormat) method
     procedure SetPassword(const aPasswordPlain, aHashSalt: RawUtf8;
       aHashRound: integer = 20000); overload;
+    /// set the PasswordHashHexa field using a "Modular Crypt" hash
+    // - with its default parameters, and a random salt
+    // - the server will send back the actual format (algo and params) expected
+    // for each user during its login handhake, so you could just login with
+    // TRestClientUri.SetUser() with the plain password and no other info
+    // - in practice: you may still consider PasswordPlain/Sha256 or PasswordDigest
+    // from a Web or JavaScript client, but rather use mcfBCryptSha256 or mcfSCrypt
+    // for login from a mORMot 2 client executable; fallback to PBKDF2 variant
+    // if you need to be compatible with mORMot 1 client (but you need to know
+    // the number of rounds)
+    procedure SetPassword(const aPasswordPlain: RawUtf8;
+      aModularCrypt: TModularCryptFormat); overload;
     /// set the PasswordHashHexa field as DIGEST-HA0 from plain password content
     // - will use the current LogonName as part of the digest
+    // - could be called if you want your user to authenticate from a Web client
+    // using the standard "Http-Authenticate: Digest" mechanism (only over TLS)
     procedure SetPasswordDigest(const aPasswordPlain, aRealm: RawUtf8;
       aAlgo: TDigestAlgo = daSHA256);
     /// check if the user can authenticate in its current state
-    // - Ctxt is a TRestServerUriContext instance
+    // - Ctxt is a TRestServerUriContext instance (not yet defined in this unit)
     // - called by TRestServerAuthentication.GetUser() method
     // - this default implementation will return TRUE, i.e. allow the user
     // to log on
     // - override this method to disable user authentication, e.g. if the user
-    // is disabled via a custom ORM boolean or date/time expiration field
+    // is disabled via a custom ORM field, typically marked as unsafe or expired
     function CanUserLog(Ctxt: TObject): boolean; virtual;
+    /// class function called internally to compute a hashed password
+    // - defined as virtual so that you may use your own hashing mechanism
+    // - used by SetPassword/SetPasswordDigest to fill TAuthUser.PasswordHashHexa
+    // - aHashRound = 0 uses plain Sha256(), as early mORMot 1 encoding
+    // - aHashRound > 0 triggers Pbkdf2HmacSha256() via aHashSalt, and enable
+    // Pbkdf2HmacSha256() to increase security on storage side (reducing brute
+    // force attack via rainbow tables) - as mORMot 1 safer approach
+    // - aHashRound < 0 will use standard DIGEST-HA0 hashing, compatible with
+    // TDigestAuthServer, expecting aHashRound as -ord(TDigestAlgo) - to be
+    // used if you want to log from a HTTP client, also from SetPasswordDigest()
+    // - aLogonName is only used for aHashRound < 0 = DIGEST-HA0 hashing
+    // - as a safer alternative, use ModularCryptHash() from mormot.crypt.secure
+    // to fill the PasswordHashHexa field - this class method will recognize its
+    // patterns in aPasswordPlain or you could use the SetPassword() overload
+    class function ComputeHashedPassword(const aLogonName, aPasswordPlain: RawUtf8;
+      const aHashSalt: RawUtf8 = ''; aHashRound: integer = 20000): RawUtf8; virtual;
   published
     /// the User identification Name, as entered at log-in
     // - the same identifier can be used only once (this column is marked as
@@ -1079,11 +1095,21 @@ type
     /// the User Name, as may be displayed or printed
     property DisplayName: RawUtf8
       index 50 read fDisplayName write fDisplayName;
-    /// the hexa encoded associated SHA-256 hash of the password
-    // - see TAuthUser.ComputeHashedPassword() or SetPassword() methods
-    // - store the SHA-256 32 bytes as 64 hexa chars
+    /// the encoded hash of the password
+    // - use SetPassword/SetPasswordDigest methods to compute this value
+    // - old default is to store the SHA-256 32 bytes as 64 hexa chars (mORMot 1
+    // original algo) - or via PBKDF2 (another mORMot 1 option) or as DIGEST-HA0
+    // - as a safer alternative, consider storing ModularCryptHash() hashes from
+    // mormot.crypt.secure via the SetPassword(TModularCryptFormat) overload
+    // - maximum size (i.e. "index" value) was 64 - but has been upgraded to 192
+    // for DIGEST-HA0 with daSHA512 and the new "Modular" hashes: SHA512-Crypt
+    // and SCrypt lengths are both 122 chars, but safe BCrypt is 60 chars so you
+    // could still use it if you can't easily upgrade the database
+    // - you can set directly your own custom "Modular Crypt" hash - e.g. forcing
+    // mcfSCrypt with LogN=20, R=8, P=1 for admin/root login, burning 1.23s and
+    // 1GB RAM on client side during the hashing (but not on the server side)
     property PasswordHashHexa: RawUtf8
-      index 64 read fPasswordHashHexa write fPasswordHashHexa;
+      index 192 read fPasswordHashHexa write fPasswordHashHexa;
     /// the associated access rights of this user
     // - access rights are managed by group
     // - in TAuthSession.User instance, GroupRights property will contain a
@@ -1093,8 +1119,9 @@ type
       read fGroupRights write fGroupRights;
     /// some custom data, associated to the User
     // - Server application may store here custom data
-    // - its content is not used by the framework but 'may' be used by your
-    // application
+    // - TAuthSession.Create will retrieved this field from the database,
+    // unless rsoGetUserRetrieveNoBlobData option is defined
+    // - its content is not used by the framework but 'may' be used by yours
     property Data: RawBlob
       read fData write fData;
   end;
@@ -1297,10 +1324,10 @@ type
   TRestUriContext = class
   protected
     fCall: PRestUriParams;
-    fMethod: TUriMethod;
-    fClientKind: TRestClientKind;
-    fCommand: TRestServerUriContextCommand;
-    fInputCookiesParsed: (icpNotParsed, icpNone, icpAvailable);
+    fMethod: TUriMethod;                                          // 8-bit
+    fClientKind: TRestClientKind;                                 // 8-bit
+    fCommand: TRestServerUriContextCommand;                       // 8-bit
+    fInputCookiesParsed: (icpNotParsed, icpNone, icpAvailable);   // 8-bit
     fInputContentType: RawUtf8;
     fInHeaderLastName: RawUtf8;
     fInHeaderLastValue: RawUtf8;
@@ -1323,7 +1350,10 @@ type
     /// access to all input/output parameters at TRestServer.Uri() level
     // - process should better call Results() or Success() methods to set the
     // appropriate answer or Error() method in case of an error
-    // - low-level access to the call parameters can be made via this pointer
+    // - use Method/RemoteIPNotLocal/UserAgent/AuthenticationBearerToken and
+    // InHeader[]/InCookie[] high-level properties instead of this instance
+    // - low-level access to the request parameters can be made via this pointer,
+    // e.g. to access Call^.Url or Call^.LowLevelConnectionID
     property Call: PRestUriParams
       read fCall;
     /// the used Client-Server method (matching the corresponding HTTP Verb)
@@ -1367,19 +1397,18 @@ type
       read GetInHeader;
     /// retrieve an incoming HTTP cookie value
     // - cookie name are case-sensitive
+    // - consider faster InCookieSearch() if a transient RawUtf8 is not required
     property InCookie[const CookieName: RawUtf8]: RawUtf8
       read GetInCookie;
     /// retrieve a cookie name/value pair in the internal storage
+    // - cookie name are case-sensitive
     function InCookieSearch(const CookieName: RawUtf8): PHttpCookie;
-    {$ifdef HASINLINE} inline; {$endif}
-    /// low-level method called by InCookie[] and InCookieExists()
-    // - will parse once for any coookie in the headers, if needed
-    /// define a new 'name=value' cookie to be returned to the client
+      {$ifdef HASINLINE} inline; {$endif}
+    /// low-level raw cookie value as set by OutCookie[] to be sent as response
     // - if not void, TRestServer.Uri() will define a new 'set-cookie: ...'
-    // header in Call^.OutHead
-    // - you can use COOKIE_EXPIRED as value to delete a cookie in the browser
-    // - if no Path=/.. is included, it will append
-    // $ '; Path=/'+Server.Model.Root+'; HttpOnly'
+    // header in Call^.OutHead to be stored on the HTTP client
+    // - overriden TRestServerUriContext will append "Path=/" or "Secure" members
+    // according to rsoCookieHttpOnlyFlagDisable and rsoCookieSecure options
     property OutSetCookie: RawUtf8
       read fOutSetCookie write SetOutSetCookie;
     /// define a new 'name=value' cookie to be returned to the client
@@ -1490,7 +1519,8 @@ type
     procedure ReturnFileFromFolder(const FolderName: TFileName;
       Handle304NotModified: boolean = true;
       const DefaultFileName: TFileName = 'index.html';
-      const Error404Redirect: RawUtf8 = ''; CacheControlMaxAgeSec: integer = 0); virtual;
+      const Error404Redirect: RawUtf8 = '';
+      CacheControlMaxAgeSec: integer = 0); virtual; abstract;
     /// use this method notify the caller that the resource URI has changed
     // - returns a HTTP_TEMPORARYREDIRECT status with the specified location,
     // or HTTP_MOVEDPERMANENTLY if PermanentChange is TRUE
@@ -1540,7 +1570,7 @@ type
 
 {$ifndef PUREMORMOT2}
 type
-  TSqlUriMethod = TUriMethod;
+  TSqlUriMethod  = TUriMethod;
   TSqlUriMethods = TUriMethods;
 {$endif PUREMORMOT2}
 
@@ -3304,7 +3334,7 @@ end;
 function TRestBackgroundTimer.AsyncBatchStop(Table: TOrmClass): boolean;
 var
   b: PtrInt;
-  start, tix, timeout: Int64;
+  start, tix, timeout: Int64; // SleepStep() uses ms resolution
   {%H-}log: ISynLog;
 begin
   result := false;
@@ -3670,24 +3700,40 @@ class function TAuthUser.ComputeHashedPassword(const aLogonName, aPasswordPlain,
   aHashSalt: RawUtf8; aHashRound: integer): RawUtf8;
 var
   dig: THash512Rec;
+  bytes: PtrInt;
   algo: TDigestAlgo absolute aHashRound;
 begin
+  if (aPasswordPlain <> '') and
+     (aPasswordPlain[1] = '$') and
+     (ModularCryptIdentify(aPasswordPlain) in mcfValid) then
+  begin
+    // already in the expected new and safe "Modular Crypt" format
+    result := aPasswordPlain;
+    exit;
+  end;
   if (aHashSalt = '') or
      (aHashRound = 0) then
-    result := Sha256U(['salt', aPasswordPlain])
-  else if aHashRound > 0 then
   begin
+    // mORMot 1 legacy format
+    result := Sha256U(['salt', aPasswordPlain]);
+    exit;
+  end;
+  if aHashRound > 0 then
+  begin
+    // mORMot 1 PBKDF2-HMAC-SHA256 pattern
     Pbkdf2HmacSha256(aPasswordPlain, aHashSalt, aHashRound, dig.Lo);
-    result := Sha256DigestToString(dig.Lo);
+    bytes := SizeOf(dig.Lo);
   end
   else
   begin
+    // store DIGEST-HA0 = Hash(user:realm:password) with aHashSalt = realm
+    // - could be used e.g. if you need DIGEST auth from web clients
     aHashRound := -aHashRound; // aHashRound < 0 = - ord(TDigestAlgo)
     if aHashRound > ord(high(TDigestAlgo)) then
       algo := daSHA256;
-    BinToHexLower(@dig, // aHashSalt = DIGEST-HA0 realm
-      DigestHA0(algo, aLogonName, aHashSalt, aPasswordPlain, dig), result);
+    bytes := DigestHA0(algo, aLogonName, aHashSalt, aPasswordPlain, dig);
   end;
+  BinToHexLower(@dig, bytes, result);
   FillCharFast(dig, SizeOf(dig), 0);
 end;
 
@@ -3703,6 +3749,14 @@ begin
   if self <> nil then
     fPasswordHashHexa := ComputeHashedPassword(
       fLogonName, aPasswordPlain, aHashSalt, aHashRound);
+end;
+
+procedure TAuthUser.SetPassword(const aPasswordPlain: RawUtf8;
+  aModularCrypt: TModularCryptFormat);
+begin
+  if (self <> nil) and
+     (aModularCrypt in mcfValid) then
+    fPasswordHashHexa := ModularCryptHash(aModularCrypt, aPasswordPlain);
 end;
 
 procedure TAuthUser.SetPasswordDigest(const aPasswordPlain, aRealm: RawUtf8;
@@ -4130,19 +4184,6 @@ begin
   end;
 end;
 
-procedure TRestUriContext.ReturnFileFromFolder(
-  const FolderName: TFileName; Handle304NotModified: boolean;
-  const DefaultFileName: TFileName; const Error404Redirect: RawUtf8;
-  CacheControlMaxAgeSec: integer);
-var
-  fileName: TFileName;
-begin
-  if DefaultFileName <> '' then
-    fileName := MakePath([FolderName, DefaultFileName]);
-  ReturnFile(fileName,
-    Handle304NotModified, '', '', Error404Redirect, CacheControlMaxAgeSec);
-end;
-
 procedure TRestUriContext.Redirect(const NewLocation: RawUtf8;
   PermanentChange: boolean);
 begin
@@ -4164,32 +4205,32 @@ end;
 procedure TRestUriContext.Results(const Values: array of const;
   Status: integer; Handle304NotModified: boolean; CacheControlMaxAgeSec: integer);
 var
-  i, h: PtrInt;
+  n: PtrInt;
   json: RawUtf8;
-  temp: TTextWriterStackBuffer;
+  v: PVarRec;
+  temp: TTextWriterStackBuffer; // 8KB work buffer on stack
 begin
-  h := high(Values);
-  if h < 0 then
+  n := length(Values);
+  if n = 0 then
     json := '{"result":null}'
   else
     with TJsonWriter.CreateOwnedStream(temp) do
     try
       AddShort('{"result":');
-      if h = 0 then
+      v := @Values[0];
+      if n = 1 then
         // result is one value
-        AddJsonEscapeVarRec(@Values[0])
+        AddJsonEscapeVarRec(v)
       else
       begin
         // result is one array of values
         AddDirect('[');
-        i := 0;
         repeat
-          AddJsonEscapeVarRec(@Values[i]);
-          if i = h then
-            break;
+          AddJsonEscapeVarRec(v);
           AddComma;
-          inc(i);
-        until false;
+          inc(v);
+          dec(n);
+        until n = 0;
         AddDirect(']');
       end;
       AddDirect('}');
@@ -4244,7 +4285,7 @@ procedure TRestUriContext.Error(const ErrorMessage: RawUtf8;
   Status, CacheControlMaxAgeSec: integer);
 var
   msg: PRawUtf8;
-  temp: TTextWriterStackBuffer;
+  temp: TTextWriterStackBuffer; // 8KB work buffer on stack
 begin
   fCall^.OutStatus := Status;
   if StatusCodeIsSuccess(Status) then

@@ -61,11 +61,11 @@ const
   /// after how many parameters inlining is not worth it
   INLINED_MAX = 10;
 
-  /// the used TAuthSession.IDCardinal value if the session not started yet
+  /// the used TAuthSession.ID value if the session not started yet
   // - i.e. if the session handling is still in its handshaking phase
   CONST_AUTHENTICATION_SESSION_NOT_STARTED = 0;
 
-  /// the used TAuthSession.IDCardinal value if authentication mode is not set
+  /// the used TAuthSession.ID value if authentication mode is not set
   // - i.e. if TRest.HandleAuthentication equals FALSE
   CONST_AUTHENTICATION_NOT_USED = 1;
 
@@ -421,7 +421,6 @@ const
     ooUpdate,    // oeUpdate
     ooDelete,    // oeDelete
     ooUpdate);   // oeUpdateBlob
-
 
 // backward compatibility types redirections
 {$ifndef PUREMORMOT2}
@@ -959,7 +958,7 @@ type
     // the 'Address_Country' flattened property name
     property NameUnflattened: RawUtf8
       read fNameUnflattened;
-    /// the property index in the RTTI
+    /// the property index in the RTTI, i.e. the index in TFieldBits
     property PropertyIndex: integer
       read fPropertyIndex;
     /// the corresponding column type, as managed by the ORM layer
@@ -1085,6 +1084,7 @@ type
     // - this default implementation will call GetValueVar() for slow comparison
     function CompareValue(Item1, Item2: TObject; CaseInsensitive: boolean): integer; virtual;
     /// retrieve an unsigned 32-bit hash of the corresponding property
+    // - as used by TRestStorageInMemoryUnique when indexing this property
     // - not all kind of properties are handled: only main types
     // - if CaseInsensitive is TRUE, will apply NormToUpper[] 8-bit uppercase,
     // handling RawUtf8 properties just like the SYSTEMNOCASE collation
@@ -2183,8 +2183,6 @@ type
     function GetU(Row: PtrInt; const FieldName: RawUtf8): RawUtf8; overload;
     /// read-only access to a particular field value, as Win Ansi text
     function GetA(Row, Field: PtrInt): WinAnsiString;
-    /// read-only access to a particular field value, as Win Ansi text ShortString
-    function GetS(Row, Field: PtrInt): ShortString;
     /// read-only access to a particular field value, as boolean
     function GetB(Row, Field: PtrInt): boolean;
     /// read-only access to a particular field value, as a Variant
@@ -2788,8 +2786,8 @@ type
   {$endif USERECORDWITHMETHODS}
   private
     fSafe: TRWLock; // thread-safe and not blocking concurrent IsLocked()
-    fID: TIDDynArray;       // array [0..Count-1] of locked TID
-    fTix: TIntegerDynArray; // GetTickCount64 shr 10 values at the Lock() time
+    fID: TIDDynArray;        // array [0..Count-1] of locked TID
+    fTix: TCardinalDynArray; // GetTickSec values at the Lock() time
     fCount: PtrInt;
     fLastPurge: integer;
   public
@@ -2937,16 +2935,16 @@ type
     fFields: TOrmPropInfoList;
     fSimpleFields: TOrmPropInfoObjArray;
     fCopiableFields: TOrmPropInfoObjArray;
-    fDynArrayFields: TOrmPropInfoRttiDynArrayObjArray;
+    fManyFields: TOrmPropInfoRttiManyObjArray;
     fBlobCustomFields: TOrmPropInfoCustomDynArray;
     fBlobFields: TOrmPropInfoRttiRawBlobDynArray;
     fSqlTableName: RawUtf8;
     fLastFieldsSafe: TLightLock; // topmost to ensure proper aarch64 alignment
-    fSafe: TOSLightLock;
+    fSafe: TOSLightLock; // = TOSLightMutex = SRW lock or direct pthread mutex
     fHasNotSimpleFields: boolean;
     fDynArrayFieldsHasObjArray: boolean;
     fHasTypeFields: TOrmFieldTypes;
-    fManyFields: TOrmPropInfoRttiManyObjArray;
+    fDynArrayFields: TOrmPropInfoRttiDynArrayObjArray;
     fRecordManySourceProp: TOrmPropInfoRttiInstance;
     fRecordManyDestProp: TOrmPropInfoRttiInstance;
     fSqlTableNameUpperWithDot: RawUtf8;
@@ -3445,7 +3443,7 @@ function EncodeAsSqlPrepared(const Decoder: TJsonObjectDecoder;
 var
   f: PtrInt;
   W: TJsonWriter;
-  temp: TTextWriterStackBuffer;
+  temp: TTextWriterStackBuffer; // 8KB work buffer on stack
 begin
   W := TJsonWriter.CreateOwnedStream(temp);
   try
@@ -4789,6 +4787,8 @@ begin
   IntValue := GetInteger(pointer(Value));
   if Value = '' then
     result := ''
+  else if fOrmFieldType = oftBoolean then // FPC has weird text RTTI for booleans
+    result := Ansi7ToString(BOOL_UTF8[IntValue <> 0])
   else
     result := EnumType^.GetCaption(IntValue);
 end;
@@ -4911,17 +4911,23 @@ begin
 end;
 
 procedure TOrmPropInfoRttiInt64.SetValueInt64(Instance: TObject; V64: Int64);
+var
+  off: PtrUInt;
 begin
-  if fSetterIsFieldPropOffset <> 0 then
-    PInt64(PtrUInt(Instance) + fSetterIsFieldPropOffset)^ := V64
+  off := fSetterIsFieldPropOffset;
+  if off <> 0 then
+    PInt64(PtrUInt(Instance) + off)^ := V64
   else
     fPropInfo.SetInt64Prop(Instance, V64);
 end;
 
 function TOrmPropInfoRttiInt64.GetValueInt64(Instance: TObject): Int64;
+var
+  off: PtrUInt;
 begin
-  if fGetterIsFieldPropOffset <> 0 then
-    result := PInt64(PtrUInt(Instance) + fGetterIsFieldPropOffset)^
+  off := fGetterIsFieldPropOffset;
+  if off <> 0 then
+    result := PInt64(PtrUInt(Instance) + off)^
   else
     result := fPropInfo.GetInt64Prop(Instance);
 end;
@@ -5083,9 +5089,12 @@ begin
 end;
 
 procedure TOrmPropInfoRttiDouble.SetValueDouble(Instance: TObject; V: double);
+var
+  off: PtrUInt;
 begin
-  if fSetterIsFieldPropOffset <> 0 then
-    unaligned(PDouble(PtrUInt(Instance) + fSetterIsFieldPropOffset)^) := V
+  off := fSetterIsFieldPropOffset;
+  if off <> 0 then
+    unaligned(PDouble(PtrUInt(Instance) + off)^) := V
   else
     fPropInfo.SetDoubleProp(Instance, V);
 end;
@@ -5225,9 +5234,12 @@ end;
 
 procedure TOrmPropInfoRttiCurrency.SetValueCurrency(Instance: TObject;
   V: currency);
+var
+  off: PtrUInt;
 begin
-  if fSetterIsFieldPropOffset <> 0 then
-    PCurrency(PtrUInt(Instance) + fSetterIsFieldPropOffset)^ := V
+  off := fSetterIsFieldPropOffset;
+  if off <> 0 then
+    PCurrency(PtrUInt(Instance) + off)^ := V
   else
     fPropInfo.SetCurrencyProp(Instance, V);
 end;
@@ -5456,9 +5468,12 @@ begin
 end;
 
 procedure TOrmPropInfoRttiInstance.SetInstance(Instance, Value: TObject);
+var
+  off: PtrUInt;
 begin
-  if fSetterIsFieldPropOffset <> 0 then
-    PObject(PtrUInt(Instance) + fSetterIsFieldPropOffset)^ := Value
+  off := fSetterIsFieldPropOffset;
+  if off <> 0 then
+    PObject(PtrUInt(Instance) + off)^ := Value
   else
     fPropInfo.SetOrdProp(Instance, PtrInt(Value));
 end;
@@ -5621,13 +5636,15 @@ begin
 end;
 
 procedure TOrmPropInfoRttiAnsi.CopyValue(Source, Dest: TObject);
+var
+  off: PtrUInt;
 begin
-  if fInPlaceCopySameClassPropOffset = 0 then
+  off := fInPlaceCopySameClassPropOffset;
+  if off = 0 then
     fPropInfo.CopyLongStrProp(Source, Dest)
   else
     // avoid temporary variable use, for simple fields with no getter/setter
-    PRawByteString(PtrUInt(Dest) + fInPlaceCopySameClassPropOffset)^ :=
-      PRawByteString(PtrUInt(Source) + fInPlaceCopySameClassPropOffset)^;
+    PRawByteString(PtrUInt(Dest) + off)^ := PRawByteString(PtrUInt(Source) + off)^;
 end;
 
 procedure TOrmPropInfoRttiAnsi.GetBinary(Instance: TObject; W: TBufferWriter);
@@ -5913,9 +5930,12 @@ procedure TOrmPropInfoRttiRawUtf8.SetValue(Instance: TObject; Value: PUtf8Char;
   ValueLen: PtrInt; wasString: boolean);
 var
   tmp: pointer;
+var
+  off: PtrUInt;
 begin
-  if fSetterIsFieldPropOffset <> 0 then
-    FastSetString(PRawUtf8(PtrUInt(Instance) + fSetterIsFieldPropOffset)^, Value, ValueLen)
+  off := fSetterIsFieldPropOffset;
+  if off <> 0 then
+    FastSetString(PRawUtf8(PtrUInt(Instance) + off)^, Value, ValueLen)
   else
   begin
     tmp := nil; // manual initialization/finalization with no hidden try/finally
@@ -6171,7 +6191,7 @@ begin
   W.Add('"');
   fPropInfo.GetWideStrProp(Instance, Value);
   if pointer(Value) <> nil then
-    W.AddJsonEscapeW(pointer(Value), 0);
+    W.AddJsonEscapeW(pointer(Value));
   W.AddDirect('"');
 end;
 
@@ -6287,7 +6307,7 @@ begin
   W.Add('"');
   fPropInfo.GetUnicodeStrProp(Instance, tmp);
   if tmp <> '' then
-    W.AddJsonEscapeW(pointer(tmp), 0);
+    W.AddJsonEscapeW(pointer(tmp));
   W.AddDirect('"');
 end;
 
@@ -6400,7 +6420,7 @@ procedure TOrmPropInfoRttiDynArray.Serialize(Instance: TObject;
   var data: RawByteString; ExtendedJson: boolean);
 var
   da: TDynArray;
-  temp: TTextWriterStackBuffer;
+  temp: TTextWriterStackBuffer; // 8KB work buffer on stack
 begin
   GetDynArray(Instance, da);
   if da.Count = 0 then
@@ -6410,7 +6430,7 @@ begin
     with TJsonWriter.CreateOwnedStream(temp) do
     try
       if ExtendedJson then // smaller content
-        CustomOptions := CustomOptions + [twoForceJsonExtended];
+        CustomOptions := [twoForceJsonExtended];
       AddDynArrayJson(da);
       SetText(RawUtf8(data));
     finally
@@ -6663,9 +6683,11 @@ function TOrmPropInfoRttiVariant.GetHash(Instance: TObject;
   CaseInsensitive: boolean): cardinal;
 var
   value: Variant;
+  max: integer;
 begin
   fPropInfo.GetVariantProp(Instance, value, {byref=}true);
-  result := VariantHash(value, CaseInsensitive);
+  max := 255; // inlined HashVariant/HashVariantI
+  result := VariantHash(OrmHashSeed, value, max, CaseInsensitive, nil);
 end;
 
 procedure TOrmPropInfoRttiVariant.GetJsonValues(Instance: TObject; W: TJsonWriter);
@@ -6713,9 +6735,11 @@ end;
 function TOrmPropInfoRttiVariant.IsValueVoid(Instance: TObject): boolean;
 var
   value: TVarData;
+  off: PtrUInt;
 begin
-  if fGetterIsFieldPropOffset <> 0 then // avoid any temporary variable
-    result := VarIsEmptyOrNull(PVariant(PtrUInt(Instance) + fGetterIsFieldPropOffset)^)
+  off := fGetterIsFieldPropOffset;
+  if off <> 0 then // avoid any temporary variable
+    result := VarIsEmptyOrNull(PVariant(PtrUInt(Instance) + off)^)
   else
   begin
     PCardinal(@value)^ := varEmpty;
@@ -6729,6 +6753,7 @@ function TOrmPropInfoRttiVariant.CompareValue(Item1, Item2: TObject;
   CaseInsensitive: boolean): integer;
 var
   V1, V2: TVarData;
+  off: PtrUInt;
 begin
   if Item1 = Item2 then
     result := 0
@@ -6736,19 +6761,22 @@ begin
     result := -1
   else if Item2 = nil then
     result := 1
-  else if fGetterIsFieldPropOffset <> 0 then // avoid any temporary variable
-    result := FastVarDataComp(
-            PVarData(PtrUInt(Item1) + fGetterIsFieldPropOffset),
-            PVarData(PtrUInt(Item2) + fGetterIsFieldPropOffset), CaseInsensitive)
   else
   begin
-    PCardinal(@V1)^ := varEmpty;
-    PCardinal(@V2)^ := varEmpty;
-    fPropInfo.GetVariantProp(Item1, variant(V1), {byref=}true);
-    fPropInfo.GetVariantProp(Item2, variant(V2), {byref=}true);
-    result := FastVarDataComp(@V1, @V2, CaseInsensitive);
-    VarClearProc(V1);
-    VarClearProc(V2);
+    off := fGetterIsFieldPropOffset;
+    if off <> 0 then // avoid any temporary variable
+      result := FastVarDataComp(PVarData(PtrUInt(Item1) + off),
+                                PVarData(PtrUInt(Item2) + off), CaseInsensitive)
+    else
+    begin
+      PCardinal(@V1)^ := varEmpty;
+      PCardinal(@V2)^ := varEmpty;
+      fPropInfo.GetVariantProp(Item1, variant(V1), {byref=}true);
+      fPropInfo.GetVariantProp(Item2, variant(V2), {byref=}true);
+      result := FastVarDataComp(@V1, @V2, CaseInsensitive);
+      VarClearProc(V1);
+      VarClearProc(V2);
+    end;
   end;
 end;
 
@@ -6785,10 +6813,12 @@ var
   tmp: TSynTempBuffer;
   vd: TSynVarData;
   v: PSynVarData;
+  off: PtrUInt;
 begin
-  if fSetterIsFieldPropOffset <> 0 then
+  off := fSetterIsFieldPropOffset;
+  if off <> 0 then
   begin // direct assignment
-    v := pointer(PtrUInt(Instance) + fSetterIsFieldPropOffset);
+    v := pointer(PtrUInt(Instance) + off);
     VarClear(PVariant(v)^);
   end
   else
@@ -7212,7 +7242,7 @@ procedure TOrmPropInfoCustomJson.GetValueVar(Instance: TObject; ToSql: boolean;
   var result: RawUtf8; wasSqlString: PBoolean);
 var
   W: TJsonWriter;
-  temp: TTextWriterStackBuffer;
+  temp: TTextWriterStackBuffer; // 8KB work buffer on stack
 begin
   W := TJsonWriter.CreateOwnedStream(temp);
   try
@@ -7779,7 +7809,7 @@ procedure TOrmPropInfoList.ToCsvText(const Prefix: array of const;
 var
   f: PtrInt;
   W: TJsonWriter; // TJsonWriter.Add(Prefix) so TTextWriter is not enough
-  temp: TTextWriterStackBuffer;
+  temp: TTextWriterStackBuffer; // 8KB work buffer on stack
 begin
   W := TJsonWriter.CreateOwnedStream(temp);
   try
@@ -7914,7 +7944,7 @@ begin
     rkChar,
     rkWChar,
     rkWString:
-      result := oftUtf8Text;
+      result := oftUtf8Text; // UTF-16 content will be handled as UTF-8 JSON
     rkDynArray:
       result := oftBlobDynArray;
     {$ifdef PUBLISHRECORD}
@@ -8770,7 +8800,7 @@ begin
         result := UnixTimeToDateTime(GetInt64(P));
       oftUnixMSTime:
         result := UnixMSTimeToDateTime(GetInt64(P));
-    else // oftDateTime and any other kind will try from ISO-8601 text
+    else // oftDateTime and any other kind will try f²rom ISO-8601 text
       result := Iso8601ToDateTimePUtf8Char(P);
     end;
 end;
@@ -8778,11 +8808,6 @@ end;
 function TOrmTableAbstract.GetAsDateTime(Row: PtrInt; const FieldName: RawUtf8): TDateTime;
 begin
   result := GetAsDateTime(Row, FieldIndex(FieldName));
-end;
-
-function TOrmTableAbstract.GetS(Row, Field: PtrInt): ShortString;
-begin
-  Utf8ToShortString(result, Get(Row, Field));
 end;
 
 function TOrmTableAbstract.GetB(Row, Field: PtrInt): boolean;
@@ -9072,7 +9097,7 @@ procedure TOrmTableAbstract.GetJsonValues(Json: TStream; Expand: boolean;
   RowFirst, RowLast: PtrInt; IDBinarySize: integer);
 var
   W: TResultsWriter;
-  tmp: TTextWriterStackBuffer;
+  tmp: TTextWriterStackBuffer; // 8KB work buffer on stack
 begin
   W := TResultsWriter.Create(Json, Expand, false, nil, 0, @tmp);
   try
@@ -9420,7 +9445,7 @@ end;
 function TOrmTableAbstract.GetHtmlTable(const Header: RawUtf8): RawUtf8;
 var
   W: TJsonWriter;
-  temp: TTextWriterStackBuffer;
+  temp: TTextWriterStackBuffer; // 8KB work buffer on stack
 begin
   W := TJsonWriter.CreateOwnedStream(temp);
   try
@@ -10483,7 +10508,7 @@ begin
   end
   else
   begin
-    if Source.VType <> VarType then
+    if cardinal(Source.VType) <> cardinal(VarType) then
       RaiseCastError;
     r := TOrmTableRowVariantData(Source).VRow;
     if r < 0 then
@@ -10568,7 +10593,7 @@ begin
         n := fCount;
       end;
       fID[n] := aID;
-      fTix[n] := GetTickCount64 shr MilliSecsPerSecShl;
+      fTix[n] := GetTickSec;
       inc(fCount);
     finally
       fSafe.WriteUnLock;
@@ -10653,22 +10678,22 @@ begin
      (fCount = 0) or
      (MinutesFromNow = 0) then
     exit; // nothing to purge
-  old := GetTickCount64 shr MilliSecsPerSecShl; // as seconds
+  old := GetTickSec;
   if old - fLastPurge < 60 then
     exit; // no need to purge more than once per minute
   fLastPurge := old;
-  dec(old, MinutesFromNow * 60);
+  dec(old, cardinal(MinutesFromNow) * 60);
   if old <= 0 then
     exit; // this computer just started
   fSafe.WriteLock;
   try
     n := 0;
     for i := 0 to fCount - 1 do // brute force is fast enough every minute
-      if fTix[i] >= old then
+      if fTix[i] >= cardinal(old) then
       begin
         if n <> i then
         begin
-          fID[n] := fID[i];
+          fID[n]  := fID[i]; // in-place purge
           fTix[n] := fTix[i];
         end;
         inc(n);
@@ -11218,7 +11243,7 @@ var
   W: TTextWriter;
   Start: PUtf8Char;
   info: TGetJsonField;
-  temp: TTextWriterStackBuffer;
+  temp: TTextWriterStackBuffer; // 8KB work buffer on stack
 begin
   info.Json := P;
   if info.Json = nil then
@@ -11241,7 +11266,7 @@ begin
   W := TTextWriter.CreateOwnedStream(temp);
   try
     if sfoExtendedJson in Format then
-      W.CustomOptions := W.CustomOptions + [twoForceJsonExtended];
+      W.CustomOptions := [twoForceJsonExtended];
     W.AddDirect('{');
     if (decoded <> 0) and
        (sfoPutIDFirst in Format) then
@@ -11328,25 +11353,12 @@ begin
 end;
 
 const
-  FUNCS: array[0..6] of PAnsiChar = (
-    'MAX(',         // 0
-    'MIN(',         // 1
-    'AVG(',         // 2
-    'SUM(',         // 3
-    'JSONGET(',     // 4
-    'JSONHAS(',     // 5
-    nil);
+  FUNCS = 'MAX(|MIN(|AVG(|SUM(|JSONGET(|JSONHAS(|';
 
 function IsSqlFunction(P: PUtf8Char): boolean;
 begin
-  case IdemPPChar(P, @FUNCS) of
-    0..3:
-      result := PosChar(P + 4, ')') <> nil;
-    4..5:
-      result := PosChar(P + 8, ')') <> nil;
-  else
-    result := false;
-  end;
+  result := (IdemPCharSep(P, FUNCS) >= 0) and
+            (PosChar(P + 4, ')') <> nil);
 end;
 
 function TOrmPropertiesAbstract.IsFieldNameOrFunction(const PropName: RawUtf8): boolean;
@@ -11363,7 +11375,7 @@ begin
   P := pointer(PropName);
   if P[L - 1] = ')' then
   begin
-    case IdemPPChar(P, @FUNCS) of
+    case IdemPCharSep(P, FUNCS) of
       0..3:
         begin
           inc(P, 4);
@@ -11683,7 +11695,8 @@ procedure InitializeUnit;
 var
   ptc: TRttiParserComplexType;
 begin
-  OrmHashSeed := SharedRandom.Generator.Next; // avoid hash flooding
+  // in-memory hashing are seeded from random to avoid hash flooding
+  OrmHashSeed := SystemEntropy.Startup.c1;
   // manual set of OrmFieldTypeComp[] which are not exact TUtf8Compare match
   pointer(@OrmFieldTypeComp[oftAnsiText])   := @AnsiIComp;
   pointer(@OrmFieldTypeComp[oftUtf8Custom]) := @AnsiIComp;
