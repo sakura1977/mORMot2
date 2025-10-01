@@ -34,6 +34,7 @@ uses
   mormot.core.rtti,
   mormot.core.json,
   mormot.core.buffers,
+  mormot.core.interfaces,
   mormot.crypt.core,
   mormot.crypt.ecc,
   mormot.crypt.secure, // IProtocol definition
@@ -625,11 +626,14 @@ begin
     if InStream <> nil then
       body := body + StreamToRawByteString(InStream);
     Ctxt.PrepareDirect(url, method, header, body, DataType, '');
+    // see TRestHttpClientWebsockets.CallbackModeSetHeader
+    block := wscBlockWithAnswer;
     FindNameValue(header, 'SEC-WEBSOCKET-REST:', resthead);
-    if resthead = 'NonBlocking' then
-      block := wscNonBlockWithoutAnswer
-    else
-      block := wscBlockWithAnswer;
+    if resthead <> '' then
+      if resthead = 'NonBlocking' then
+        block := wscNonBlockWithoutAnswer
+      else if resthead = 'WithoutAnswer' then
+       block := wscBlockWithoutAnswer;
     result := fProcess.NotifyCallback(Ctxt, block);
     if IsContentTypeJsonU(Ctxt.OutContentType) then
       HeaderSetText(Ctxt.OutCustomHeaders) // OutContentType='' means JSON

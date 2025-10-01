@@ -675,6 +675,7 @@ begin
       end;
   end;
   SetLength(fStats, fInterface.MethodsCount);
+  fMethods := [mGET, mPOST];
   // prepare some reusable execution context (avoid most memory allocations)
   TInterfaceMethodExecuteCached.Prepare(fInterface, fExecuteCached);
 end;
@@ -1273,7 +1274,7 @@ begin
                   W.AddShorter(',status:');
                   W.AddU(Status);
                 end;
-                if not fExcludeServiceLogCustomAnswer and
+                if not (optExcludeServiceLogCustomAnswer in fOptions) and
                    (len > 0) and
                    (len <= 1024) then
                 begin

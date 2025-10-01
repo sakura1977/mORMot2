@@ -1071,7 +1071,7 @@ type
 {$endif OSWINDOWS}
 
 var
-  /// system and process 256-bit entropy state
+  /// system and process 256-bit entropy dual states
   // - could be used as 512-bit salt: followed by other system global variables
   SystemEntropy: record
     /// 128-bit of entropy quickly gathered during unit/process initialization
@@ -6029,7 +6029,7 @@ begin
             (PCardinal(Host)^ = ord(':') + ord(':') shl 8 + ord('1') shl 16);
 end;
 
-function _RawToBase64(Bin: pointer; Bytes: PtrInt; Base64Uri: boolean): RawUtf8;
+function {%H-}_RawToBase64(Bin: pointer; Bytes: PtrInt; Base64Uri: boolean): RawUtf8;
 begin
   raise EOSException.Create('No RawToBase64(): needs mormot.core.buffers.pas');
 end;

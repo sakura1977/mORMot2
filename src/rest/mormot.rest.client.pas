@@ -38,13 +38,13 @@ uses
   mormot.core.variants,
   mormot.core.data,
   mormot.core.rtti,
-  mormot.crypt.core,
+  mormot.core.log,
+  mormot.core.interfaces,
   mormot.core.json,
   mormot.core.threads,
   mormot.core.perf,
+  mormot.crypt.core,
   mormot.crypt.secure,
-  mormot.core.log,
-  mormot.core.interfaces,
   mormot.orm.base,
   mormot.orm.core,
   mormot.orm.rest,
@@ -360,7 +360,7 @@ type
     Server: RawUtf8;
     /// the remote server version, as retrieved after a SetUser() success
     Version: RawUtf8;
-    /// the remote server session tiemout in minutes, as retrieved after
+    /// the remote server session timeout in minutes, as retrieved after
     // a SetUser() success
     // - will be used to set SessionHeartbeatSeconds default
     ServerTimeout: integer;
@@ -714,9 +714,10 @@ type
     function CallBack(method: TUriMethod; const aMethodName,aSentData: RawUtf8;
       out aResponse: RawUtf8; aTable: TOrmClass = nil; aID: TID = 0;
       aResponseHead: PRawUtf8 = nil): integer;
-    /// to be called before CallBack() if the client could ignore the answer
+    /// to be called before CallBack() to customize the client behavior
     // - do nothing by default, but overriden e.g. in TRestHttpClientWebsockets
-    procedure CallbackNonBlockingSetHeader(out Header: RawUtf8); virtual;
+    procedure CallbackModeSetHeader(Mode: TWebSocketProcessNotifyCallback;
+      var Header: RawUtf8); virtual;
 
     /// access or initialize the internal IoC resolver, used for interface-based
     // remote services, and more generaly any Services.Resolve() call
@@ -1071,7 +1072,7 @@ type
     /// the remote server version, as retrieved after a SetUser() success
     property SessionVersion: RawUtf8
       read fSession.Version;
-    /// the remote server session tiemout in minutes, as retrieved after
+    /// the remote server session timeout in minutes, as retrieved after
     // a SetUser() success
     // - will be used to set SessionHeartbeatSeconds default
     property SessionServerTimeout: integer
@@ -2716,7 +2717,8 @@ begin
   end;
 end;
 
-procedure TRestClientUri.CallbackNonBlockingSetHeader(out Header: RawUtf8);
+procedure TRestClientUri.CallbackModeSetHeader(Mode: TWebSocketProcessNotifyCallback;
+  var Header: RawUtf8);
 begin
   // nothing to do by default (plain REST/HTTP works in blocking mode)
 end;

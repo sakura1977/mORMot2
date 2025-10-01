@@ -800,6 +800,13 @@ type
   // return HTTP_SUCCESS if there is an output body, or HTTP_NOCONTENT if void
   TServiceCustomStatus = type cardinal;
 
+  /// indicates how TWebSocketProcess.NotifyCallback() will work
+  // - published early in this unit to be used at pure REST/SOA level
+  TWebSocketProcessNotifyCallback = (
+    wscBlockWithAnswer,
+    wscBlockWithoutAnswer,
+    wscNonBlockWithoutAnswer);
+
 
 /// returns the interface name of a registered Guid, or its hexadecimal value
 function ToText({$ifdef FPC_HAS_CONSTREF}constref{$else}const{$endif}
@@ -2244,21 +2251,6 @@ type
   // - optFreeTimeout will enable the time check of the _Release call using
   // TRestServer.ServiceReleaseTimeoutMicrosec delay
   TInterfaceMethodOptions = set of TInterfaceMethodOption;
-
-  /// available execution options for an interface-based service provider
-  // - mimics TServiceFactoryServer homonymous boolean properties
-  TInterfaceOption = (
-    optByPassAuthentication,
-    optResultAsJsonObject,
-    optResultAsJsonObjectWithoutResult,
-    optResultAsXMLObject,
-    optResultAsXMLObjectIfAcceptOnlyXML,
-    optExcludeServiceLogCustomAnswer);
-
-  /// set of execution options for an interface-based service provider
-  // - mimics TServiceFactoryServer homonymous boolean properties
-  // - as used by TServiceFactoryServerAbstract.SetWholeOptions()
-  TInterfaceOptions = set of TInterfaceOption;
 
   /// callback called by TInterfaceMethodExecute to process an interface
   // callback parameter
@@ -8213,24 +8205,24 @@ end;
 constructor TWrapperContext.CreateFromUsedInterfaces(
   const aSourcePath, aDescriptions: TFileName);
 var
-  interfaces: TSynObjectListLightLocked;
+  cache: TSynObjectListLightLocked;
   services: TDocVariantData;
   i: PtrInt;
 begin
   Create(aSourcePath, aDescriptions);
-  interfaces := TInterfaceFactory.GetUsedInterfaces;
-  if interfaces = nil then
+  cache := TInterfaceFactory.GetUsedInterfaces;
+  if cache = nil then
     exit;
   {%H-}services.InitFast;
-  interfaces.Safe.ReadLock;
+  cache.Safe.ReadLock;
   try
-    for i := 0 to interfaces.Count - 1 do
+    for i := 0 to cache.Count - 1 do
       services.AddItem(_ObjFast([
         'interfaceName',
-          TInterfaceFactory(interfaces.List[i]).InterfaceRtti.Name,
-        'methods', ContextFromMethods(interfaces.List[i])]));
+          TInterfaceFactory(cache.List[i]).InterfaceRtti.Name,
+        'methods', ContextFromMethods(cache.List[i])]));
   finally
-    interfaces.Safe.ReadUnLock;
+    cache.Safe.ReadUnLock;
   end;
   fSOA.InitObject(['enabled',  true,
                    'services', variant(services)], JSON_FAST);

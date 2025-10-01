@@ -411,6 +411,21 @@ function ToText(si: TServiceInstanceImplementation): PShortString; overload;
 { ************ TServiceFactoryServerAbstract Abstract Service Provider }
 
 type
+  /// available execution options for an interface-based service provider
+  // - mimics TServiceFactoryServer homonymous boolean properties
+  TInterfaceOption = (
+    optByPassAuthentication,
+    optResultAsJsonObject,
+    optResultAsJsonObjectWithoutResult,
+    optResultAsXMLObject,
+    optResultAsXMLObjectIfAcceptOnlyXML,
+    optExcludeServiceLogCustomAnswer);
+
+  /// set of execution options for an interface-based service provider
+  // - mimics TServiceFactoryServer homonymous boolean properties
+  // - as used by TServiceFactoryServerAbstract.SetWholeOptions()
+  TInterfaceOptions = set of TInterfaceOption;
+
   /// abstract TServiceFactoryServer parent with a fluent interface for options
   // - defining methods to customize the service implementation on Server side
   // - as returned by TRestServer.ServiceDefine and ServiceRegister overloaded methods
@@ -421,13 +436,12 @@ type
   // and mormot.soa.server.pas
   TServiceFactoryServerAbstract = class(TServiceFactory)
   protected
-    fByPassAuthentication: boolean;
-    fResultAsJsonObject: boolean;
-    fResultAsJsonObjectWithoutResult: boolean;
-    fResultAsXMLObject: boolean;
-    fResultAsXMLObjectIfAcceptOnlyXML: boolean;
+    fOptions: TInterfaceOptions;
+    fMethods: TUriMethods;
     fResultAsXMLObjectNameSpace: RawUtf8;
-    fExcludeServiceLogCustomAnswer: boolean;
+    function GetOption(opt: TInterfaceOption): boolean;
+      {$ifdef HASINLINE} inline; {$endif}
+    procedure SetOption(opt: TInterfaceOption; enable: boolean);
     function GetAuthGroupIDs(const aGroup: array of RawUtf8;
       out IDs: TIDDynArray): boolean;
   public
@@ -527,6 +541,12 @@ type
     function SetOptions(const aMethod: array of RawUtf8;
       aOptions: TInterfaceMethodOptions;
       aAction: TServiceMethodOptionsAction = moaReplace): TServiceFactoryServerAbstract;
+    /// define the HTTP methods used for TRestServerUriContext.UriComputeRoutes
+    /// - by default, only [mGET, mPOST] are allowed, but you can set any other
+    // set, e.g. [mGET, mPOST, mPUT, mDELETE] if you want to allow more HTTP verbs
+    // - this method returns self in order to allow direct chaining of settings
+    // calls, in a fluent interface
+    function SetMethods(const aMethods: TUriMethods): TServiceFactoryServerAbstract;
     /// define execution options for the whole interface
     // - fluent alternative of setting homonymous boolean properties of this class
     // - this method returns self in order to allow direct chaining of settings
@@ -558,7 +578,7 @@ type
     // (e.g. for returning some HTML content from a public URI, or to implement
     // a public service catalog)
     property ByPassAuthentication: boolean
-      read fByPassAuthentication write fByPassAuthentication;
+      index optByPassAuthentication read GetOption write SetOption;
     /// set to TRUE to return the interface's methods result as JSON object
     // - by default (FALSE), any method execution will return a JSON array with
     // all VAR/OUT parameters, in order
@@ -570,14 +590,14 @@ type
     // - this value can be overridden by setting ForceServiceResultAsJsonObject
     // for a given TRestServerUriContext (e.g. for server-side JavaScript work)
     property ResultAsJsonObject: boolean
-      read fResultAsJsonObject write fResultAsJsonObject;
+      index optResultAsJsonObject read GetOption write SetOption;
     /// set to TRUE to return the interface's methods result as JSON object
     // with no '{"result":{...}}' nesting
     // - could be used e.g. for plain non mORMot REST Client with in sicSingle
     // or sicShared mode kind of services
     // - on client side, consider using TRestClientUri.ServiceDefineSharedApi
     property ResultAsJsonObjectWithoutResult: boolean
-      read fResultAsJsonObjectWithoutResult write fResultAsJsonObjectWithoutResult;
+      index optResultAsJsonObjectWithoutResult read GetOption write SetOption;
     /// set to TRUE to return the interface's methods result as XML object
     // - by default (FALSE), method execution will return a JSON array with
     // all VAR/OUT parameters, or a JSON object if ResultAsJsonObject is TRUE
@@ -589,7 +609,7 @@ type
     // - this value can be overridden by setting ForceServiceResultAsXMLObject
     // for a given TRestServerUriContext instance
     property ResultAsXMLObject: boolean
-      read fResultAsXMLObject write fResultAsXMLObject;
+      index optResultAsXMLObject read GetOption write SetOption;
     /// set to TRUE to return XML objects for the interface's methods result
     // if the Accept: HTTP header is exactly 'application/xml' or 'text/xml'
     // - the header should be exactly 'Accept: application/xml' or
@@ -599,7 +619,7 @@ type
     // - using this method allows to mix standard JSON requests (from JSON
     // or AJAX clients) and XML requests (from XML-only clients)
     property ResultAsXMLObjectIfAcceptOnlyXML: boolean
-      read fResultAsXMLObjectIfAcceptOnlyXML write fResultAsXMLObjectIfAcceptOnlyXML;
+      index optResultAsXMLObjectIfAcceptOnlyXML read GetOption write SetOption;
     /// specify a custom name space content when returning a XML object
     // - by default, no name space will be appended - but such rough XML will
     // have potential validation problems
@@ -610,7 +630,10 @@ type
     /// disable base64-encoded TOrmServiceLog.Output for methods
     // returning TServiceCustomAnswer record (to reduce storage size)
     property ExcludeServiceLogCustomAnswer: boolean
-      read fExcludeServiceLogCustomAnswer write fExcludeServiceLogCustomAnswer;
+      index optExcludeServiceLogCustomAnswer read GetOption write SetOption;
+    /// the HTTP methods used for TRestServerUriContext.UriComputeRoutes
+    property Methods: TUriMethods
+      read fMethods;
   end;
 
 
@@ -1252,6 +1275,20 @@ end;
 
 { TServiceFactoryServerAbstract }
 
+function TServiceFactoryServerAbstract.GetOption(opt: TInterfaceOption): boolean;
+begin
+  result := (opt in fOptions);
+end;
+
+procedure TServiceFactoryServerAbstract.SetOption(opt: TInterfaceOption;
+  enable: boolean);
+begin
+  if enable then
+    include(fOptions, opt)
+  else
+    exclude(fOptions, opt);
+end;
+
 function TServiceFactoryServerAbstract.GetAuthGroupIDs(
   const aGroup: array of RawUtf8; out IDs: TIDDynArray): boolean;
 begin
@@ -1448,14 +1485,15 @@ function TServiceFactoryServerAbstract.SetWholeOptions(
   aOptions: TInterfaceOptions): TServiceFactoryServerAbstract;
 begin
   if self <> nil then
-  begin
-    fByPassAuthentication := (optByPassAuthentication in aOptions);
-    fResultAsJsonObject := (optResultAsJsonObject in aOptions);
-    fResultAsJsonObjectWithoutResult := (optResultAsJsonObjectWithoutResult in aOptions);
-    fResultAsXMLObject := (optResultAsXMLObject in aOptions);
-    fResultAsXMLObjectIfAcceptOnlyXML := (optResultAsXMLObjectIfAcceptOnlyXML in aOptions);
-    fExcludeServiceLogCustomAnswer := (optExcludeServiceLogCustomAnswer in aOptions);
-  end;
+    fOptions := aOptions;
+  result := self;
+end;
+
+function TServiceFactoryServerAbstract.SetMethods(
+  const aMethods: TUriMethods): TServiceFactoryServerAbstract;
+begin
+  if self <> nil then
+    fMethods := aMethods;
   result := self;
 end;
 
@@ -1512,6 +1550,7 @@ var
   ndx: integer;
   im: TServiceInternalMethod;
   m: PtrInt;
+  int: PServiceContainerInterface;
   uri: RawUtf8;
 begin
   if (self = nil) or
@@ -1522,10 +1561,10 @@ begin
     uri := aService.fInterfaceMangledUri
   else
     uri := aService.fInterfaceUri;
-  PServiceContainerInterface(fInterfaces.AddUniqueName(uri, @result))^.
-    Service := aService;
+  int := fInterfaces.AddUniqueName(uri, @result);
+  int^.Service := aService;
   // add associated methods - first SERVICE_PSEUDO_METHOD[], then from interface
-  uri := uri + '.';
+  Append(uri, '.');
   ndx := 0;
   for im := Low(im) to High(im) do
     AddServiceMethodInternal(uri + SERVICE_PSEUDO_METHOD[im], aService, ndx);

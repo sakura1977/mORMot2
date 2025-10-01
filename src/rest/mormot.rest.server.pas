@@ -148,8 +148,8 @@ type
   // - rnTable for ModelRoot/TableName GET POST PUT DELETE BEGIN END ABORT
   // - rnTableID for ModelRoot/TableName/<id> GET LOCK UNLOCK PUT DELETE
   // - rnTableIDBlob for ModelRoot/TableName/<id>/Blob GET PUT
-  // - rnTableMethod for ModelRoot/TableName/MethodName GET POST PUT DELETE
-  // - rnTableIDMethod ModelRoot/TableName/<id>/MethodName GET POST PUT DELETE
+  // - rnTableMethod for ModelRoot/TableName/<method> GET POST PUT DELETE
+  // - rnTableIDMethod for ModelRoot/TableName/<id>/<method> GET POST PUT DELETE
   // - rnState for ModelRoot STATE
   // - rnMethod for ModelRoot/MethodName GET POST PUT DELETE
   // - rnMethodPath for ModelRoot/MethodName/<path:fulluri> GET POST PUT DELETE
@@ -216,7 +216,6 @@ type
     fForceServiceResultAsJsonObjectWithoutResult: boolean;
     fForceServiceResultAsXMLObject: boolean;
     fForceServiceResultAsXMLObjectNameSpace: RawUtf8;
-    fRouterParam: PUtf8Char; // <int:clientid> or <int:tableid>
     fParameters: PUtf8Char;
     fSession: cardinal;
     fSessionOS: TOperatingSystemVersion; // 32-bit raw OS info
@@ -272,7 +271,7 @@ type
     // - return FALSE in case of invalid signature, TRUE if authenticated
     function Authenticate: boolean; virtual;
     /// direct launch of a method-based service
-    // - Uri() did ensure that fServerMethod<>nil and MethodIndex>=0
+    // - Uri/ExecuteCommand did ensure that fServerMethod<>nil and MethodIndex>=0
     procedure ExecuteSoaByMethod; virtual;
     /// direct launch of an interface-based service
     // - Uri() did ensure that Service<>nil before calling it
@@ -500,11 +499,13 @@ type
     procedure ReturnFileFromFolder(const FolderName: TFileName;
       Handle304NotModified: boolean = true;
       const DefaultFileName: TFileName = 'index.html';
-      const Error404Redirect: RawUtf8 = ''; CacheControlMaxAgeSec: integer = 0); override;
+      const Error404Redirect: RawUtf8 = '';
+      CacheControlMaxAgeSec: integer = 0); override;
     /// use this method to send back an error to the caller
     // - overriden method with additional logging
     procedure Error(const ErrorMessage: RawUtf8 = '';
-      Status: integer = HTTP_BADREQUEST; CacheControlMaxAgeSec: integer = 0); override;
+      Status: integer = HTTP_BADREQUEST;
+      CacheControlMaxAgeSec: integer = 0); override;
 
     /// the associated TRestServer instance which executes its URI method
     property Server: TRestServer
@@ -554,7 +555,7 @@ type
       read fTableID;
     /// the current execution command
     property Command: TRestServerUriContextCommand
-      read fCommand;
+      read fCommand write fCommand;
     /// the index of the callback published method within the internal class list
     property MethodIndex: integer
       read fMethodIndex;
@@ -986,9 +987,12 @@ type
   // authenticated could be logged with the same ID (and authorization)
   // than TAuthUser.Logon='*' - of course, this is meaningfull only with
   // an external credential check (e.g. via SSPI or Active Directory)
+  // - saoFullServerVersion will include the full detailed '1.2.3.4' version of
+  // the server executable instead of safer default '1.2' TFileVersion.Main value
   TRestServerAuthenticationOption = (
     saoUserByLogonOrID,
-    saoHandleUnknownLogonAsStar);
+    saoHandleUnknownLogonAsStar,
+    saoFullServerVersion);
 
   /// defines the optional behavior of TRestServerAuthentication class
   TRestServerAuthenticationOptions =
@@ -1472,7 +1476,7 @@ type
     /// the static engine kind of this Table ORM class - set at runtime
     TableStaticKind: TRestServerKind;
     /// the index of the associated method (16-bit is enough, -1 for none)
-    // - for rn*Method*, in TRestServer.PublishedMethod[]
+    // - for rnMethod*, in TRestServer.PublishedMethod[]
     // - for rnInterface*, in Service.InterfaceFactory.Methods[MethodIndex-4] or
     // 0..3 for internal _free_/_contract_/_signature_/_instance_ pseudo-methods
     MethodIndex: {$ifdef CPU32} SmallInt {$else} integer {$endif};
@@ -1524,9 +1528,10 @@ type
       aNode: TRestNode): TRestTreeNode; overload;
     /// register a given URI to the tree, for a given HTTP method
     // - 'modelroot/' will be prefixed to the supplied aUri
-    procedure Setup(aFrom: TUriMethods; const aUri: RawUtf8; aNode: TRestNode;
-      aTable: TOrmModelProperties; aBlob: TOrmPropInfoRttiRawBlob = nil;
-      aMethodIndex: integer = -1; aService: TServiceFactory = nil); overload;
+    procedure Setup(aFrom: TUriMethods; const aUri: array of RawByteString;
+      aNode: TRestNode; aTable: TOrmModelProperties;
+      aBlob: TOrmPropInfoRttiRawBlob = nil; aMethodIndex: integer = -1;
+      aService: TServiceFactory = nil); overload;
     /// quickly search for the node corresponding to Ctxt.Method and Uri
     // - should never raise an exception
     function Lookup(Ctxt: TRestServerUriContext): TRestTreeNode;
@@ -1595,8 +1600,10 @@ type
   // - rsoCookieSecure will add the "Secure" directive in the cookie content
   // - rsoNoUnknownUserResponse returns "Invalid password" instead of "Unknown
   // User" message to avoid client fuzzing about valid User names
-  // - rsoSharedNonce won't generate a server nonce specific to each connection
-  // (may be required e.g. over TPublicRelay)
+  // - rsoPerConnectionNonce will generate a server nonce specific to each
+  // connection: but won't work e.g. over TPublicRelay, or require proper
+  // "proxy_set_header X-Conn-ID $connection" configuration behind nginx proxy
+  // with the corresponding THttpServerGeneric.RemoteConnIDHeader := 'X-Conn-ID'
   TRestServerOption = (
     rsoNoAjaxJson,
     rsoGetAsJsonNotAsString,
@@ -1619,7 +1626,7 @@ type
     rsoSessionInConnectionOpaque,
     rsoCookieSecure,
     rsoNoUnknownUserResponse,
-    rsoSharedNonce);
+    rsoPerConnectionNonce);
 
   /// allow to customize the TRestServer process via its Options property
   TRestServerOptions = set of TRestServerOption;
@@ -2140,7 +2147,7 @@ type
     // bypass the authenticaton process
     // - returns the method index number
     function ServiceMethodByPassAuthentication(
-      const aMethodName: RawUtf8): integer;
+      const aMethodName: RawUtf8): PtrInt;
     /// access or initialize the internal IoC resolver
     // - overriden to create and initialize the internal TServiceContainerServer
     // if no service interface has been registered yet
@@ -3046,7 +3053,15 @@ begin
     ms := 10000; // never wait forever = 10 seconds max
   case Command of
     execSoaByMethod:
-      method := ExecuteSoaByMethod;
+      if fServerMethod <> nil then
+        method := ExecuteSoaByMethod
+      else
+      begin
+        // 400 e.g. after ModelRoot/TableName/<method> with unknown method
+        if Call <> nil then
+          Call^.OutStatus := HTTP_BADREQUEST; // /root ok: 400 not 404
+        exit;
+      end;
     execSoaByInterface:
       method := ExecuteSoaByInterface;
     execOrmGet:
@@ -3769,7 +3784,9 @@ begin
       end;
       where := FormatUtf8('% LIMIT % OFFSET %', [where, results, startindex]);
     end;
-  end;
+  end
+  else
+    select := ROWID_TXT; // /root/tablename returns all IDs of this table
   // execute the select/where request on this table
   sql := Server.fModel.TableProps[TableIndex].SqlFromSelectWhere(
     select, TrimU(where));
@@ -3841,7 +3858,7 @@ begin
           OrmGetTableID
         else if Method <> mLOCK then
           // GET ModelRoot/TableName with 'select=..&where=' or YUI paging
-          OrmGetTable(fParameters);
+          OrmGetTable(fParameters); // use URI parameters after '?'
         if fCall^.OutStatus = HTTP_SUCCESS then
           Server.fStats.NotifyOrm(Method);
       end;
@@ -4572,16 +4589,17 @@ var
   rn: TRestNode;
   met: PServiceContainerInterfaceMethod;
   fact: TInterfaceFactory;
+  methods: TUriMethods;
   _name: RawUtf8;
 
   procedure SetupOne(aName: RawUtf8);
   begin
     if rn = rnInterfaceClientID then
       Append(aName, '/<int:clientid>');
-    Router.Setup([mGET, mPOST, mPUT, mDELETE], aName, rn, nil, nil,
+    Router.Setup(methods, [aName], rn, nil, nil,
       ndx, met^.InterfaceService);
     if rn <> rnInterfaceClientID then
-      Router.Setup([mGET, mPOST, mPUT, mDELETE], aName + '/', rn, nil, nil,
+      Router.Setup(methods, [aName, '/'], rn, nil, nil,
         ndx, met^.InterfaceService); // /Model/Interface/Method/
   end;
 
@@ -4593,26 +4611,32 @@ begin
     met := @services.InterfaceMethod[i];
     ndx := met^.InterfaceMethodIndex; // 0..3 are im* pseudo-methods
     sic := met^.InterfaceService.InstanceCreation;
+    methods := (met^.InterfaceService as TServiceFactoryServerAbstract).Methods;
     rn := rnInterface; // with no <clientid> by default
     case ndx of
       // pseudo-methods have a specific URI behavior
       ord(imContract):
-        ; // keep rnInterface with no <clientid>
+        methods := [mPOST]; // keep rnInterface with no <clientid>
       ord(imInstance):
         if sic <> sicClientDriven then
-          // imInstance is for a new sicClientDriven only
-          continue;
+          continue // imInstance is for a new sicClientDriven only
+        else
+          methods := [mPOST];
       ord(imSignature):
-        if not services.PublishSignature then
-          // imSignature is disabled on this server
-          continue;
+        if services.PublishSignature then
+          methods := [mPOST]
+        else
+          continue; // imSignature is disabled on this server
       ord(imFree):
         if sic in SERVICE_IMPLEMENTATION_NOID then
           // imFree need an ID to release the instance
           continue
         else
+        begin
           // imFree can make early release, e.g. from sicThread
           rn := rnInterfaceClientID; // free requires a <clientid>
+          methods := [mPOST];
+        end;
     else // real/regular interface method
       begin
         // interface methods need a /ClientDrivenID only if sicClientDriven
@@ -4755,7 +4779,7 @@ begin
   for i := 0 to Server.Services.Count - 1 do
   begin
     s := @Server.Services.InterfaceList[i];
-    Router.Setup([mPOST], s^.InterfaceName, // as Server.Services[Uri]
+    Router.Setup([mPOST], [s^.InterfaceName], // as Server.Services[Uri]
       rnInterface, nil, nil, -1, s^.Service);
   end;
   // ServiceMethodIndex will be retrieved from "method": in body
@@ -5073,7 +5097,7 @@ begin
        (saoHandleUnknownLogonAsStar in fOptions) then
       if fServer.Orm.Retrieve('LogonName=?', [], ['*'], result) then
       begin
-        result.LogonName := aUserName;
+        result.LogonName   := aUserName;
         result.DisplayName := aUserName;
       end;
   end;
@@ -5127,6 +5151,7 @@ procedure TRestServerAuthentication.SessionCreateReturns(
   const result, data, header: RawUtf8);
 var
   body: TDocVariantData;
+  vers: string;
 begin
   body.InitFast(10, dvObject);
   if result = '' then
@@ -5145,8 +5170,15 @@ begin
       'logondisplay', DisplayName,
       'logongroup',   GroupRights.IDValue,
       'timeout',      GroupRights.SessionTimeout,
-      'server',       Executable.ProgramName,
-      'version',      Executable.Version.DetailedOrVoid]);
+      'server',       Executable.ProgramName]);
+  if Executable.Version.Major <> 0 then
+  begin
+    if saoFullServerVersion in fOptions then
+      vers := Executable.Version.DetailedOrVoid
+    else
+      vers := Executable.Version.Main;
+    body.AddValue('version', StringToVariant(vers));
+  end;
   Ctxt.ReturnsJson(variant(body), HTTP_SUCCESS, false, twJsonEscape, false, header);
 end;
 
@@ -5271,18 +5303,18 @@ begin
     if PInteger(@ServerProcessKdf)^ = 0 then
     begin
       // first time used: initialize the HMAC-SHA-256 secret for this process
-      ServerProcessKdf.Init(@SystemEntropy, SizeOf(SystemEntropy)); // salt
       Random128(@h.Lo); // 128-bit security is enough
+      ServerProcessKdf.Init(@SystemEntropy, SizeOf(SystemEntropy)); // salt
       ServerProcessKdf.Update(h.Lo);
     end;
     // cache the new nonce for this timestamp (called at most every 4.3 minutes)
-    ServerProcessKdf.Compute(@tix32, 4, h.b);
+    ServerProcessKdf.Compute(@tix32, 4, n^.h.b);
   end;
   h := n^.h; // local copy
   ServerNonceSafe.UnLock;
   if Assigned(Ctxt) and
      Assigned(Ctxt.Server) and
-     not (rsoSharedNonce in Ctxt.Server.Options) then
+     (rsoPerConnectionNonce in Ctxt.Server.Options) then
     DefaultHasher128(@h.Lo, @Ctxt.Call^.LowLevelConnectionID, // maybe AesNiHash
       SizeOf(TRestConnectionID)); // make nonce unique per connection/client
   if Nonce256 <> nil then
@@ -5935,17 +5967,44 @@ end;
 function TRestTreeNode.LookupParam(Ctxt: TObject; Pos: PUtf8Char; Len: integer): boolean;
 var
   ctx: TRestServerUriContext absolute Ctxt;
+  i: PtrInt;
 begin
   if Len < 0 then
     // Pos^ = '?par=val&par=val&...'
     ctx.fParameters := Pos + 1
-  else if Data.Node = rnMethodPath then
-    // ModelRoot/MethodName/<path:fulluri>
-    // could be allocated, because <path:...> will always match the ending
-    FastSetString(ctx.fUriMethodPath, Pos, Len)
   else
-    // <int:clientid> or <int:tableid> (single placeholder by design)
-    ctx.fRouterParam := Pos;
+    case Data.Node of
+      rnMethodPath:
+        // ModelRoot/MethodName/<path:fulluri>
+        // could be allocated, because <path:...> will always match the ending
+        FastSetString(ctx.fUriMethodPath, Pos, Len);
+      rnInterfaceClientID:
+        // <int:clientid> (single placeholder by design)
+        SetQWord(Pos, PQWord(@ctx.fServiceInstanceID)^);
+      rnTableID,
+      rnTableIDBlob:
+        // ModelRoot/TableName/<int:tableid> (single placeholder by design)
+        SetQWord(Pos, PQWord(@ctx.fTableID)^);
+      rnTableIDMethod,
+        // ModelRoot/TableName/<int:tableid>/<method>
+        // - rnTableID did already set ctx.fTableID :)
+      rnTableMethod:
+        // ModelRoot/TableName/<method>
+        begin
+          FastSetString(ctx.fUriMethodPath, Pos, Len);
+          // late resolution to avoid too long ComputeRoutes for no benefit
+          // see https://github.com/synopse/mORMot2/issues/382
+          i := ctx.Server.fPublishedMethods.FindHashed(ctx.fUriMethodPath);
+          if i >= 0 then
+            if (i = ctx.Server.fPublishedMethodAuthIndex) or
+               (i = ctx.Server.fPublishedMethodTimestampIndex) or
+               (i = ctx.Server.fPublishedMethodStatIndex) then
+              i := -1 // internal methods are not associated with any table
+            else if i = ctx.Server.fPublishedMethodBatchIndex then
+              ctx.Command := execOrmWrite; // BATCH is run as ORM write
+          ctx.fMethodIndex := i;
+        end;
+    end;
   result := true;
 end;
 
@@ -5980,6 +6039,7 @@ function TRestRouter.Setup(aFrom: TUriMethod; const aUri: RawUtf8;
 var
   names: TRawUtf8DynArray;
   uri: RawUtf8;
+  exec: TRestServerUriContextCommand;
 begin
   if (aFrom < low(fTree)) or
      (aFrom > high(fTree)) then
@@ -5998,51 +6058,51 @@ begin
   inc(fTreeCount[aFrom]);
   inc(fNodeCount[aNode]);
   result.Data.Node := aNode;
+  exec := execNone;
   case aNode of
     rnTable,
     rnTableID,
     rnTableIDBlob:
       if aFrom in [mGET, mLOCK, mUNLOCK, mHEAD] then
-        result.Data.Command := execOrmGet
+        exec := execOrmGet
       else
-        result.Data.Command := execOrmWrite;
+        exec := execOrmWrite;
     rnState:
-      result.Data.Command := execOrmGet;
+      exec := execOrmGet;
     rnTableMethod,
     rnTableIDMethod,
     rnMethod,
     rnMethodPath:
-      result.Data.Command := execSoaByMethod;
+      exec := execSoaByMethod;
     rnInterface,
     rnInterfaceClientID:
-      result.Data.Command := execSoaByInterface;
-  else
-    ERestTree.RaiseUtf8('%.Setup(%)?', [self, ToText(aNode)^]);
+      exec := execSoaByInterface;
   end;
+  if exec = execNone then
+    ERestTree.RaiseUtf8('%.Setup(%)?', [self, ToText(aNode)^]);
+  result.Data.Command := exec;
 end;
 
-procedure TRestRouter.Setup(aFrom: TUriMethods; const aUri: RawUtf8;
+procedure TRestRouter.Setup(aFrom: TUriMethods; const aUri: array of RawByteString;
   aNode: TRestNode; aTable: TOrmModelProperties; aBlob: TOrmPropInfoRttiRawBlob;
   aMethodIndex: integer; aService: TServiceFactory);
 var
   m: TUriMethod;
   n: TRestTreeNode;
+  uri: RawUtf8;
 begin
+  Join(aUri, uri);
   for m := low(fTree) to high(fTree) do
     if m in aFrom then
     begin
-      n := Setup(m, aUri, aNode);
+      n := Setup(m, uri, aNode);
       n.Data.Table := aTable;
       n.Data.Blob := aBlob;
       n.Data.MethodIndex := aMethodIndex; // method or service method index
       if (aMethodIndex >= 0) and
          (n.Data.Command = execSoaByMethod) then
-      begin
         if aMethodIndex >= length(fOwner.fPublishedMethod) then
           ERestException.RaiseUtf8('%.Setup method?', [self]);
-        if aMethodIndex = fOwner.fPublishedMethodBatchIndex then
-          n.Data.Command := execOrmWrite; // BATCH is run as ORM write
-      end;
       n.Data.Service := aService as TServiceFactoryServer;
     end;
 end;
@@ -6071,7 +6131,8 @@ begin
     exit;
   // copy the execution node information into Ctxt
   Ctxt.fNode := result.Data.Node;
-  Ctxt.fCommand := result.Data.Command;
+  if Ctxt.fCommand = execNone then
+    Ctxt.fCommand := result.Data.Command;
   t := result.Data.Table;
   if t <> nil then
   begin
@@ -6079,8 +6140,6 @@ begin
     Ctxt.fTable := t.Props.Table;
     Ctxt.fTableIndex := t.TableIndex;
     Ctxt.fTableModelProps := t;
-    if result.Data.Node in [rnTableID, rnTableIDBlob, rnTableIDMethod] then
-      SetQWord(Ctxt.fRouterParam, PQWord(@Ctxt.fTableID)^);
     if result.Data.TableMain = nil then
     begin
       // retrieve once the low-level ORM engine information of this table
@@ -6100,8 +6159,6 @@ begin
     rnTableIDBlob:
       // remote ORM request with BLOB field
       Ctxt.fUriBlobField := result.Data.Blob;
-    rnTableMethod,
-    rnTableIDMethod,
     rnMethod,
     rnMethodPath:
       begin
@@ -6109,15 +6166,21 @@ begin
         i := result.Data.MethodIndex;
         Ctxt.fMethodIndex  := i;
         Ctxt.fServerMethod := @fOwner.fPublishedMethod[i];
-        // for rnMethodPath: Ctxt.fUriPath was set in LookupParam
+        // for rnMethodPath: Ctxt.fUriPath was set in TRestTreeNode.LookupParam
+      end;
+    rnTableMethod,
+    rnTableIDMethod:
+      begin
+        // method-based service request ending with */<method>
+        i := Ctxt.fMethodIndex; // was set in TRestTreeNode.LookupParam
+        if i >= 0 then
+          Ctxt.fServerMethod := @fOwner.fPublishedMethod[i];
       end;
     rnInterface,
     rnInterfaceClientID:
       begin
         // interface-based service request
         Ctxt.fService := result.Data.Service;
-        if result.Data.Node = rnInterfaceClientID then
-          SetQWord(Ctxt.fRouterParam, PQWord(@Ctxt.fServiceInstanceID)^);
         i := result.Data.MethodIndex;
         if i >= 0 then // -1 for TRestServerRoutingJsonRpc
         begin
@@ -6197,6 +6260,8 @@ begin
   fPublishedMethodAuthIndex := -1;
   fPublishedMethodBatchIndex := -1;
   // setup default mORMot authentication schemes (if specified)
+  if fModel.TablesMax < 0 then // before AuthenticationRegister() User+Group add
+    fOptions := [rsoNoTableURI, rsoNoInternalState]; // no table/state to send
   if aHandleUserAuthentication then
     AuthenticationRegister([
       TRestServerAuthenticationDefault
@@ -6205,8 +6270,6 @@ begin
       {$endif DOMAINRESTAUTH}]);
   // initialize TRestServer
   fRootRedirectForbiddenToAuth := Model.Root + '/auth';
-  if fModel.TablesMax < 0 then
-    fOptions := [rsoNoTableURI, rsoNoInternalState]; // no table/state to send
   fAssociatedServices := TServicesPublishedInterfacesList.Create(0);
   fServicesRouting := TRestServerRoutingRest;
   fServiceReleaseTimeoutMicrosec := 500;
@@ -6924,7 +6987,7 @@ begin
        not (rsoNoTableURI in fOptions) then
     begin
       // ModelRoot
-      r.Setup([mGET, mPOST, mBEGIN, mEND, mABORT], '', rnTable, nil);
+      r.Setup([mGET, mPOST, mBEGIN, mEND, mABORT], [], rnTable, nil);
       if not (rsoNoInternalState in fOptions) then
         r.Setup(mSTATE, '', rnState);
       for i := 0 to fModel.TablesMax do
@@ -6932,34 +6995,26 @@ begin
         m := fModel.TableProps[i];
         t := m.Props.SqlTableName;
         // ModelRoot/TableName
-        r.Setup([mGET, mPOST, mPUT, mDELETE, mBEGIN], t, rnTable, m);
-        // ModelRoot/TableName/TableID
+        r.Setup([mGET, mPOST, mPUT, mDELETE, mBEGIN], [t], rnTable, m);
+        // ModelRoot/TableName/<int:tableid>
         r.Setup([mGET, mLOCK, mUNLOCK, mPUT, mDELETE],
-          t + '/<int:tableid>', rnTableID, m);
+          [t, '/<int:tableid>'], rnTableID, m);
         for j := 0 to high(m.Props.BlobFields) do
         begin
           b := m.Props.BlobFields[j];
-          // ModelRoot/TableName/TableID/BlobField
+          // ModelRoot/TableName/<int:tableid>/BlobField
           r.Setup([mGET, mPUT],
-            t + '/<int:tableid>/' + b.Name, rnTableIDBlob, m, b);
-          // ModelRoot/TableName/BlobField/TableID
+            [t,'/<int:tableid>/', b.Name], rnTableIDBlob, m, b);
+          // ModelRoot/TableName/BlobField/<int:tableid>
           r.Setup([mGET, mPUT],
-            t + '/' + b.Name + '/<int:tableid>', rnTableIDBlob, m, b);
+            [t, '/', b.Name, '/<int:tableid>'], rnTableIDBlob, m, b);
         end;
-        for j := 0 to high(fPublishedMethod) do
-          if (j <> fPublishedMethodAuthIndex) and
-             (j <> fPublishedMethodTimestampIndex) and
-             (j <> fPublishedMethodStatIndex) then
-          begin
-            sm := @fPublishedMethod[j];
-            // ModelRoot/TableName/MethodName
-            r.Setup(sm^.Methods,
-              t + '/' + sm^.Name, rnTableMethod, m, nil, j);
-            if j <> fPublishedMethodBatchIndex then
-              // ModelRoot/TableName/TableID/MethodName
-              r.Setup(sm^.Methods,
-                t + '/<int:tableid>/' + sm^.Name, rnTableIDMethod, m, nil, j);
-          end;
+        // ModelRoot/TableName/<int:tableid>/<method>
+        r.Setup([mGET, mPOST, mPUT, mDELETE],
+          [t, '/<int:tableid>/<method>'], rnTableIDMethod, m, nil);
+        // ModelRoot/TableName/<method>
+        r.Setup([mGET, mPOST, mPUT, mDELETE],
+          [t, '/<method>'], rnTableMethod, m, nil);
       end;
     end;
     // method-based services
@@ -6972,20 +7027,20 @@ begin
       if n = '' then
         continue;
       // ModelRoot/MethodName and ModelRoot/MethodName/
-      r.Setup(sm^.Methods, n, rnMethod, nil, nil, j);
-      r.Setup(sm^.Methods, n + '/', rnMethod, nil, nil, j);
+      r.Setup(sm^.Methods, [n], rnMethod, nil, nil, j);
+      r.Setup(sm^.Methods, [n, '/'], rnMethod, nil, nil, j);
       if (j <> fPublishedMethodAuthIndex) and
          (j <> fPublishedMethodStatIndex) and
          (j <> fPublishedMethodBatchIndex) then
       begin
         // ModelRoot/MethodName/<path:fulluri>
         r.Setup(sm^.Methods,
-          n + '/<path:fulluri>', rnMethodPath, nil, nil, j);
+          [n, '/<path:fulluri>'], rnMethodPath, nil, nil, j);
         if (rsoMethodUnderscoreAsSlashUri in fOptions) and
            (PosExChar('_', n) <> 0) then
           // ModelRoot/Method/Name from Method_Name
           r.Setup(sm^.Methods,
-            StringReplaceChars(n, '_', '/'), rnMethod, nil, nil, j);
+            [StringReplaceChars(n, '_', '/')], rnMethod, nil, nil, j);
       end;
     end;
     // interface-based services
@@ -7344,6 +7399,7 @@ var
   one: TUriMethod;
   pos: PtrInt;
   obj: TObject;
+  met: PRestServerMethod;
 begin
   // handle '_VERB1_[_VERB2_][..]MethodName' pattern
   TrimSelf(aMethodName);
@@ -7371,18 +7427,16 @@ begin
      (Model.GetTableIndex(aMethodName) >= 0) then
     EServiceException.RaiseUtf8('Published method name %.% ' +
       'conflicts with a Table in the Model!', [obj, aMethodName]);
-  with PRestServerMethod(fPublishedMethods.AddUniqueName(aMethodName,
-    'Duplicated published method name %.%', [obj, aMethodName], @result))^ do
-  begin
-    Callback := aEvent;
-    ByPassAuthentication := aByPassAuthentication;
-    Methods := m;
-  end;
+  met := fPublishedMethods.AddUniqueName(aMethodName,
+    'Duplicated published method name %.%', [obj, aMethodName], @result);
+  met^.Callback := aEvent;
+  met^.ByPassAuthentication := aByPassAuthentication;
+  met^.Methods := m;
   ResetRoutes;  // fRouter will be re-generated when needed
 end;
 
 function TRestServer.ServiceMethodByPassAuthentication(
-  const aMethodName: RawUtf8): integer;
+  const aMethodName: RawUtf8): PtrInt;
 var
   i: PtrInt;
 begin
@@ -7707,7 +7761,7 @@ begin
     fRouterSafe.ReadUnLock;
     if (node = nil) or
        (ctxt.fNode = rnNone) then
-      ctxt.Error('Invalid URI', HTTP_BADREQUEST) // root ok: 400 not 404
+      ctxt.Error('Invalid URI', HTTP_BADREQUEST) // /root ok: 400 not 404
     else if (RootRedirectGet <> '') and
             (ctxt.Method = mGet) and
             (ctxt.fNode = rnTable) and // Url = Model.Root

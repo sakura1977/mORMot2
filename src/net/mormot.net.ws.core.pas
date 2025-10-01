@@ -37,6 +37,7 @@ uses
   mormot.core.rtti,
   mormot.core.json,
   mormot.core.buffers,
+  mormot.core.interfaces,
   mormot.crypt.core,
   mormot.crypt.ecc,
   mormot.crypt.jwt,
@@ -178,6 +179,8 @@ type
     // - GetTickCount64 resolution is around 16ms on Windows and 4ms on Linux,
     // so default 10 (ms) value seems fine for a cross-platform similar behavior
     // (resulting in a <16ms period on Windows, and <12ms period on Linux)
+    // - setting 0 will disable any frame gathering (may be used on a loopback
+    // or a local network for very low latency - not useful on the Internet)
     SendDelay: cardinal;
     /// will close the connection after a given number of invalid Heartbeat sent
     // - when a Hearbeat is failed to be transmitted, the class will start
@@ -630,12 +633,6 @@ type
     wspAnswer,
     wspError,
     wspClosed);
-
-  /// indicates how TWebSocketProcess.NotifyCallback() will work
-  TWebSocketProcessNotifyCallback = (
-    wscBlockWithAnswer,
-    wscBlockWithoutAnswer,
-    wscNonBlockWithoutAnswer);
 
   /// used to manage a thread-safe list of WebSockets frames
   // - TSynLocked because SendPendingOutgoingFrames() locks it and may take time
@@ -1945,7 +1942,8 @@ begin
   end
   else
     head := 'request';
-  FrameCompress(head, [RawUtf8(Method), Ctxt.Url, Ctxt.InHeaders, ord(aNoAnswer)],
+  FrameCompress(head,
+    [RawUtf8(Method), Ctxt.Url, Ctxt.InHeaders, ord(aNoAnswer)],
     Ctxt.InContent, RawUtf8(InContentType), request);
   if fSequencing then
     // 'r000001' -> 'a000001'
@@ -3274,12 +3272,16 @@ begin
     aMode in [wscBlockWithoutAnswer, wscNonBlockWithoutAnswer], request, head);
   case aMode of
     wscNonBlockWithoutAnswer:
+      if fSettings.SendDelay <> 0 then
       begin
         // add to the internal sending list for asynchronous sending
         SendFrameAsync(request); // with potential jumboframes gathering
         result := HTTP_SUCCESS;
         exit;
-      end;
+      end
+      else
+        // frame gathering and delayed output has been disabled with SendDelay=0
+        aMode := wscBlockWithoutAnswer;
     wscBlockWithAnswer:
       // need to block until all previous answers are received
       if fIncoming.AnswerToIgnore > 0 then
@@ -3902,9 +3904,11 @@ end;
 
 function TSocketIOLocalNamespace.RegisterEvent(const aEventName: RawUtf8;
   const aCallback: TOnSocketIOEvent): TSocketIOLocalNamespace;
+var
+  h: PEventHandler;
 begin
-  PEventHandler(fHandlers.AddUniqueName(aEventName,
-     'Duplicated event name %', [aEventName]))^.OnEvent := aCallback;
+  h := fHandlers.AddUniqueName(aEventName, 'Duplicated h name %', [aEventName]);
+  h^.OnEvent := aCallback;
   result := self;
 end;
 
@@ -3912,24 +3916,28 @@ procedure TSocketIOLocalNamespace.RegisterPublishedMethods(aInstance: TObject);
 var
   met: TPublishedMethodInfoDynArray;
   m: PtrInt;
+  h: PEventHandler;
 begin
   for m := 0 to GetPublishedMethods(aInstance, met) - 1 do
-    PEventHandler(fHandlers.AddUniqueName(met[m].Name,
-       'Duplicated event name % on %', [met[m].Name, aInstance]))^.
-      OnMethod := TOnSocketIOMethod(met[m].Method);
+  begin
+    h := fHandlers.AddUniqueName(met[m].Name,
+       'Duplicated h name % on %', [met[m].Name, aInstance]);
+    h^.OnMethod := TOnSocketIOMethod(met[m].Method);
+  end;
 end;
 
 procedure TSocketIOLocalNamespace.RegisterFrom(aAnother: TSocketIOLocalNamespace);
 var
   i: integer;
-  s: PEventHandler;
+  s, d: PEventHandler;
 begin
   if aAnother = nil then
     exit;
   s := pointer(aAnother.fHandler);
   for i := 1 to length(aAnother.fHandler) do
   begin
-    PEventHandler(fHandlers.AddUniqueName(s^.Name))^ := s^;
+    d := fHandlers.AddUniqueName(s^.Name);
+    d^ := s^;
     inc(s);
   end;
 end;

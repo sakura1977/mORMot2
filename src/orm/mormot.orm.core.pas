@@ -6036,7 +6036,7 @@ end;
 
 function TOrmTableJson.ParseAndConvert(Buffer: PUtf8Char; BufferLen: PtrInt): boolean;
 var
-  i, max, resmax, f: PtrInt;
+  i, max, resmax, f, fc: PtrInt;
   P: PUtf8Char;
   datavoid: TOrmTableData; // used for all JSON "" values
   info: TGetJsonField;
@@ -6054,19 +6054,18 @@ begin
   fDataStart := Buffer; // before first value, to ensure offset=0 means nil
   {$endif NOPOINTEROFFSET}
   info.Json := GotoNextNotSpace(Buffer);
-  if IsNotExpandedBuffer(info.Json, Buffer + BufferLen, fFieldCount, fRowCount) then
+  if IsNotExpandedBuffer(info.Json, Buffer + BufferLen, fc, max) then
   begin
     // A. Not Expanded (more optimized) format as array of values
     // {"fieldCount":2,"values":["f1","f2","1v1",1v2,"2v1",2v2...],"rowCount":20}
     // 1. check RowCount and DataLen
-    if fRowCount < 0 then
-    begin
+    if max < 0 then
       // IsNotExpandedBuffer() detected invalid input
-      fRowCount := 0;
       exit;
-    end;
+    fRowCount := max;
+    fFieldCount := fc;
     // 2. initialize and fill fResults[] PPUtf8CharArray memory
-    max := (fRowCount + 1) * fFieldCount;
+    max := (max + 1) * fc;
     SetLength(fJsonData, max);
     {$ifndef NOTORMTABLELEN}
     SetLength(fLen, max);
@@ -6458,10 +6457,8 @@ var
   fieldname: PUtf8Char;
   props: TOrmProperties;
 begin
-  if aTable = nil then // avoid any GPF
-    exit;
   fTable := aTable;
-  if aTable.fData = nil then
+  if aTable.RowCount = 0 then
     exit; // void content
   props := nil;
   if aCheckTableName <> ctnNoCheck then
@@ -8164,8 +8161,7 @@ begin
     exit;
   T := TOrmTableJson.CreateFromTables(ObjectsClass, sql, json,
     {ownJSON=}(GetRefCount(json) = 1));
-  if (T = nil) or
-     (T.fData = nil) then
+  if T.RowCount = 0 then
   begin
     T.Free;
     exit;
