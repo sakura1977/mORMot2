@@ -762,7 +762,7 @@ type
     case TRttiKind of
       rkFloat: (
         RttiFloat: TRttiFloat;
-        IsDateTime: boolean);
+        IsDateTime, IsPureDate: boolean);
       rkLString: ( // from TypeInfo() on older Delphi with no CP RTTI
         CodePage: cardinal; // RawBlob=CP_RAWBYTESTRING not CP_RAWBLOB
         Engine: TSynAnsiConvert);
@@ -2392,14 +2392,6 @@ type
   {$else}
   TRttiCustomProp = object
   {$endif USERECORDWITHMETHODS}
-  private
-    fOrigName: RawUtf8; // as set by InternalAdd()
-    function InitFrom(RttiProp: PRttiProp): PtrInt;
-    function ValueIsVoidGetter(Data: pointer): boolean;
-    procedure GetRttiVarDataDirect(Data: PByte; rvd: PRttiVarData);
-    procedure GetRttiVarDataGetter(Instance: TObject; rvd: PRttiVarData);
-    function CompareValueComplex(Data, Other: pointer;
-      OtherRtti: PRttiCustomProp; CaseInsensitive: boolean): integer;
   public
     /// contains standard TypeInfo/PRttiInfo of this field/property
     // - for instance, Value.Size contains its memory size in bytes
@@ -2486,6 +2478,14 @@ type
     // ! if RVD.NeedsClear then VarClearProc(RVD.Data);
     procedure GetRttiVarData(Data: pointer; out RVD: TRttiVarData);
       {$ifdef HASINLINE}inline;{$endif}
+  private
+    fOrigName: RawUtf8; // as set by InternalAdd()
+    function InitFrom(RttiProp: PRttiProp): PtrInt;
+    function ValueIsVoidGetter(Data: pointer): boolean;
+    procedure GetRttiVarDataDirect(Data: PByte; rvd: PRttiVarData);
+    procedure GetRttiVarDataGetter(Instance: TObject; rvd: PRttiVarData);
+    function CompareValueComplex(Data, Other: pointer;
+      OtherRtti: PRttiCustomProp; CaseInsensitive: boolean): integer;
   end;
 
   /// store information about the properties/fields of a given TypeInfo/PRttiInfo
@@ -4252,6 +4252,7 @@ begin
         else if IsDate then
         begin
           Cache.IsDateTime := true;
+          Cache.IsPureDate := (@self = TypeInfo(TDate)); // force truncate time
           Cache.VarDataVType := varDate;
           Cache.RttiVarDataVType := varDate;
         end
