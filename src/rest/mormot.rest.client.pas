@@ -354,7 +354,8 @@ type
     /// access to the low-level HTTP header used for authentication
     // - you can force here your own header, e.g. a JWT as authentication bearer
     // or as in TRestClientAuthenticationHttpAbstract.ClientSetUserHttpOnlyUser
-    // - used e.g. by TRestClientAuthenticationHttpBasic
+    // - used e.g. by TRestClientAuthenticationHttpBasic or if /auth returned a
+    // "bearer":"xxx" field from rsoAuthenticationBearerHeader in Server options
     HttpHeader: RawUtf8;
     /// the remote server executable name, as retrieved after a SetUser() success
     Server: RawUtf8;
@@ -690,7 +691,7 @@ type
     function CallBackGet(const aMethodName: RawUtf8;
       const aNameValueParameters: array of const;
       out aResponse: RawUtf8; aTable: TOrmClass = nil; aID: TID = 0;
-      aResponseHead: PRawUtf8 = nil): integer;
+      aResponseHead: PRawUtf8 = nil; noLog: boolean = false): integer;
     /// wrapper to the protected URI method to call a method on the server, using
     // a ModelRoot/[TableName/[ID/]]MethodName RESTful GET request
     // - returns the UTF-8 decoded JSON result (server must reply with one
@@ -1226,7 +1227,7 @@ end;
 { TRestClientAuthentication }
 
 const
-  AUTH_N: array[0..9] of PUtf8Char = (
+  AUTH_N: array[0..10] of PUtf8Char = (
     'result',        // 0
     'data',          // 1
     'server',        // 2
@@ -1236,7 +1237,8 @@ const
     'logondisplay',  // 6
     'logongroup',    // 7
     'timeout',       // 8
-    'algo');         // 9
+    'algo',          // 9
+    'bearer');       // 10
 
 class function TRestClientAuthentication.ClientGetSessionKey(
   Sender: TRestClientUri; User: TAuthUser;
@@ -1247,8 +1249,8 @@ var
   cookie: PUtf8Char;
   a: integer;
 begin
-  if (Sender.CallBackGet('auth',
-        aNameValueParameters, resp, nil, 0, @hdr) <> HTTP_SUCCESS) or
+  if (Sender.CallBackGet('auth', aNameValueParameters, resp,
+        nil, 0, @hdr, {nolog=}true) <> HTTP_SUCCESS) or
      (JsonDecode(pointer({%H-}resp), @AUTH_N, length(AUTH_N), @values) = nil) then
   begin
     Sender.fSession.Data := ''; // reset temporary 'data' field
@@ -1267,8 +1269,12 @@ begin
   if Sender.fSession.ServerTimeout <= 0 then
     Sender.fSession.ServerTimeout := 60; // default 1 hour if not suppplied
   Sender.fSession.IDHexa8 := '';
+  if values[10].Text <> nil then
+    // from rsoAuthenticationBearerHeader in Server.Options
+    Make(['Authorization: Bearer ', values[10].Text], Sender.fSession.HttpHeader);
   if values[9].Text <> nil then
   begin
+    // specific TRestClientAuthenticationSignedUri algorithm
     a := GetEnumNameValueTrimmed(TypeInfo(TRestAuthenticationSignedUriAlgo),
       values[9].Text, values[9].Len);
     if a >= 0 then
@@ -1279,7 +1285,7 @@ begin
   begin
     cookie := FindNameValue(pointer(hdr), 'SET-COOKIE: ');
     if cookie = nil then
-      exit;
+      exit; // use the default suaCRC32 algorithm by default
     cookie := GotoNextNotSpace(cookie);
     if IdemPChar(cookie, '__SECURE-') then
       inc(cookie, 9); // e.g. if rsoCookieSecure is in Server.Options
@@ -1350,7 +1356,8 @@ begin
     values[0].ToUtf8(servernonce);
     if servernonce = '' then
       exit;
-    if values[1].Text <> nil then // this user has a "Modular Crypt" hash
+    // hash the password, with proper "Modular Crypt" support
+    if values[1].Text <> nil then // this user got a mcf specific format
       mcfhash := ModularCryptHash(values[1].ToUtf8, User.PasswordHashHexa);
     if mcfhash <> '' then
       User.PasswordHashHexa := mcfhash
@@ -1362,6 +1369,7 @@ begin
     servernonce := Sender.CallBackGetResult('auth', ['username', User.LogonName]);
   if servernonce = '' then
     exit;
+  // compute and return a proof, challenged against client and server nonces
   Random128(@rnd); // unpredictable
   Join([CardinalToHex(OSVersionInt32), '_', BinToHexLower(@rnd, SizeOf(rnd))],
     clientnonce); // 160-bit nonce
@@ -2356,6 +2364,7 @@ begin
     fSession.IDHexa8 := '';
     fSession.PrivateKey := 0;
     fSession.Authentication := nil;
+    fSession.HttpHeader := '';
     fSession.Server := '';
     fSession.Version := '';
     FillZero(fSession.Data);
@@ -2655,7 +2664,7 @@ end;
 
 function TRestClientUri.CallBackGet(const aMethodName: RawUtf8;
   const aNameValueParameters: array of const; out aResponse: RawUtf8;
-  aTable: TOrmClass; aID: TID; aResponseHead: PRawUtf8): integer;
+  aTable: TOrmClass; aID: TID; aResponseHead: PRawUtf8; noLog: boolean): integer;
 var
   url, header: RawUtf8;
   {%H-}log: ISynLog; // for Enter auto-leave to work with FPC / Delphi 10.4+
@@ -2671,7 +2680,8 @@ begin
     result := Uri(url, 'GET', @aResponse, @header);
     if aResponseHead <> nil then
       aResponseHead^ := header;
-    if sllServiceReturn in fLogLevel then
+    if (sllServiceReturn in fLogLevel) and
+       not noLog then
       InternalLogResponse(aResponse, 'CallBackGet');
   end;
 end;

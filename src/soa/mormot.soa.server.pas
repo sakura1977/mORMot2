@@ -1518,7 +1518,7 @@ begin
       begin
         // wrong request returns HTTP error 406
         if err[0] <> #0 then
-          Ctxt.Error('%', [err], HTTP_NOTACCEPTABLE)
+          Ctxt.Error('%', [err], HTTP_NOTACCEPTABLE) // 406
         else
           ExecuteError(self, Ctxt, 'execution failed (probably due to bad ' +
             'input parameters: e.g. did you initialize your input record(s)?)',
@@ -1741,7 +1741,7 @@ begin
     call.Init;
     ctxt := TRestServerUriContext.Create;
     try
-      ctxt.Prepare(fRestServer, call);
+      ctxt.Prepare(fRestServer, call, mPOST);
       for i := fFakeCallbacks.Count - 1 downto 0 do // backward for safety
       begin
         fake := fFakeCallbacks.List[i];
@@ -1816,6 +1816,7 @@ begin
     F := TServiceFactoryServer.Create(fRestServer, aInterfaces[j],
       aInstanceCreation, aImplementationClass, aContractExpected,
       fSessionTimeout, aSharedImplementation);
+    F.fInterfaceMethodIndex := length(fInterfaceMethod);
     if result = nil then
     begin
       result := F; // returns the first registered interface
@@ -2032,7 +2033,7 @@ begin
   call.Init;
   ctxt := TRestServerUriContext.Create;
   try
-    ctxt.Prepare(fRestServer, call);
+    ctxt.Prepare(fRestServer, call, mPOST);
     fFakeCallbacks.Safe.WriteLock; // may include a nested WriteLock (reentrant)
     try
       for i := fFakeCallbacks.Count - 1 downto 0 do // backward for safety

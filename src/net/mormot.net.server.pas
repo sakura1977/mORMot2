@@ -691,12 +691,6 @@ type
     // - called in the corresponding thread context
     // - the TThread.OnTerminate event will be called within a Synchronize()
     // wrapper, so it won't fit our purpose
-    // - to be used e.g. to call CoUnInitialize from thread in which CoInitialize
-    // was made, for instance via a method defined as such:
-    // ! procedure TMyServer.OnHttpThreadTerminate(Sender: TThread);
-    // ! begin // TSqlDBConnectionPropertiesThreadSafe
-    // !   fMyConnectionProps.EndCurrentThread;
-    // ! end;
     // - is used e.g. by TRest.EndCurrentThread for proper multi-threading
     property OnHttpThreadTerminate: TOnNotifyThread
       read fOnThreadTerminate write SetOnTerminate;
@@ -6278,7 +6272,7 @@ var
     res := sock.SendTo(@frame, SizeOf(frame), remote);
     sock.Close;
     if fOwner.fVerboseLog then
-      DoLog('send %=%', [ToText(resp.Kind)^, ToText(res)^]);
+      DoLog('send %=%', [ToText(resp.Kind)^, _NR[res]]);
     inc(fSent);
   end;
 
@@ -6415,7 +6409,7 @@ begin
       res := sock.SendTo(@frame, SizeOf(frame), fBroadcastAddr);
       if fOwner.fVerboseLog then
         fOwner.fLog.Add.Log(sllTrace, 'Broadcast: % % = %',
-          [fBroadcastIpPort, ToText(aReq), ToText(res)^], self);
+          [fBroadcastIpPort, ToText(aReq), _NR[res]], self);
       if res <> nrOk then
         exit;
     finally
@@ -6759,7 +6753,7 @@ begin
   result := HTTP_NOTFOUND;
   if size = 0 then
     exit; // not existing
-  result := HTTP_NOTACCEPTABLE;
+  result := HTTP_NOTACCEPTABLE; // 406
   if (aMessage.Size <> 0) and
      // ExpectedSize may be 0 if waoNoHeadFirst was set, or for pcfBearerDirect*
      (size <> aMessage.Size) then
@@ -7319,7 +7313,7 @@ begin
         [fn, id, size, aMessage.Size, aMessage.RangeStart, aMessage.RangeEnd], self);
   if size = 0 then
     exit; // not existing
-  result := HTTP_NOTACCEPTABLE;
+  result := HTTP_NOTACCEPTABLE; // 406
   if (aMessage.Size <> 0) and // ExpectedSize may be 0 if waoNoHeadFirst was set
      (size <> aMessage.Size) then
     exit; // invalid file
@@ -7718,12 +7712,12 @@ begin
     if fSettings = nil then
     begin
       err := oreShutdown;
-      result := HTTP_BADGATEWAY;
+      result := HTTP_BADGATEWAY; // 502
     end
     else if result <> HTTP_SUCCESS then
     begin
       // no local/partial known file: nothing to return
-      if result = HTTP_NOTACCEPTABLE then
+      if result = HTTP_NOTACCEPTABLE then // 406
         err := oreLocalFileNotAcceptable
       else
         err := oreNoLocalFile;

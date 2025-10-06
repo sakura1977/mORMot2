@@ -357,10 +357,10 @@ type
     // - first method to call before using this object for encryption
     // - KeySize is in bits, i.e. 128, 192 or 256
     function EncryptInit(const Key; KeySize: cardinal): boolean;
-    /// Initialize AES context for cipher, using 128-bit and CSPRNG
+    /// Initialize AES context for cipher, using CSPRNG as transient key source
     // - also set the internal IV field to a random value
     // - used e.g. by TAesSignature or Random128() for their initialization
-    procedure EncryptInitRandom;
+    procedure EncryptInitRandom(Bits: integer = 128);
     /// encrypt an AES data block into another data block
     // - this method is thread-safe, unless you call EncryptInit/DecryptInit
     procedure Encrypt(const BI: TAesBlock; var BO: TAesBlock); overload;
@@ -421,9 +421,6 @@ type
     /// TRUE if the context was initialized via EncryptInit/DecryptInit
     function Initialized: boolean;
       {$ifdef FPC}inline;{$endif}
-    /// return TRUE if the AES-NI instruction sets are available on this CPU
-    function UsesAesni: boolean;
-      {$ifdef HASINLINE}inline;{$endif}
     /// returns the key size in bits (128/192/256)
     function KeyBits: integer;
       {$ifdef FPC}inline;{$endif}
@@ -522,10 +519,14 @@ type
       allowavx: boolean = true): boolean;
   end;
 
-  /// transient simple digital signature of a 32-bit number using AES-128
+  /// transient simple digital signature of a 32-bit number/ID using AES-128
   // - typical use is e.g. TRestServerAuthenticationHttpAbstract cookie process
   // when TBinaryCookieGenerator from mormot.crypt.secure is overkill since
   // TRestServer maintains a list of active sessions with proper expiration
+  // - uses a 96-bit signature with AES encryption as secure MAC with a random
+  // nonce (stored in TAesContext.iv), which is similar to CMAC or TLS/AES-GCM
+  // - modern standards consider this sufficient for authenticity in scenarios
+  // with limited message volumes (not billions of tokens issued per secret key)
   {$ifdef USERECORDWITHMETHODS}
   TAesSignature = record
   {$else}
@@ -537,19 +538,29 @@ type
     /// create the transient random secret key needed for this process
     // - the internal secret can't be persisted, and will remain in memory
     procedure Init;
-    /// compute the 128-bit digital signature of given 32-bit value <> 0
+    /// compute the 128-bit digital signature from a given 32-bit value <> 0
     procedure Generate(aValue: cardinal; aSignature: PHash128Rec);
-    /// compute an hexadecimal cookie of given 32-bit value
+    /// compute a 32-chars hexadecimal cookie from a given 32-bit value
     function GenerateCookie(aValue: cardinal): RawUtf8;
     /// check and extract the 32-bit value from a 128-bit digital signature
     // - return 0 if the signature is invalid, or the decoded 32-bit value
     function Validate(aSignature: PHash128Rec): cardinal;
-    /// check and extract the 32-bit value from hexadecimal cookie
+    /// check and extract the 32-bit value from 32-chars hexadecimal cookie
     // - return 0 if the cookie is invalid, or the decoded 32-bit value
     function ValidateCookie(aHex: PUtf8Char; aHexLen: PtrInt): cardinal; overload;
-    /// check and extract the 32-bit value from hexadecimal cookie
+    /// check and extract the 32-bit value from 32-chars hexadecimal cookie
     // - return 0 if the cookie is invalid, or the decoded 32-bit value
     function ValidateCookie(const aCookie: RawUtf8): cardinal; overload;
+      {$ifdef HASSAFEINLINE} inline; {$endif}
+    /// extract the 32-bit value from a 128-bit digital signature
+    // - without validating the AES-128 signature itself
+    // - could be used e.g. when Validate() has already been called once
+    function Extract(const aSignature: THash128Rec): cardinal; overload;
+      {$ifdef FPC} inline; {$endif}
+    /// extract the 32-bit value from a 32-chars hexadecimal bearer
+    // - without validating the AES-128 signature itself
+    // - could be used e.g. when Validate() has already been called once
+    function Extract(aHex: PUtf8Char): cardinal; overload;
   end;
   PAesSignature = ^TAesSignature;
 
@@ -3641,12 +3652,12 @@ begin
   rnd128safe.Lock; // ensure thread safe with minimal contention
   aes := @rnd128gen;
   if PPtrUInt(aes)^ = 0 then
-    PAes(aes)^.EncryptInitRandom; // initialize once at startup
+    PAes(aes)^.EncryptInitRandom;   // initialize AES-128 once at startup
   iv^ := aes^.iv.b;
-  inc(aes^.iv.Lo); // AES-CTR with little endian 64-bit counter
+  inc(aes^.iv.Lo);                  // AES-CTR with little endian 64-bit counter
   if iv2 <> nil then
   begin
-    iv2^ := aes^.iv.b;
+    iv2^ := aes^.iv.b;              // additional 128-bit
     inc(aes^.iv.Lo);
   end;
   rnd128safe.UnLock;
@@ -4085,13 +4096,14 @@ begin
   result := true;
 end;
 
-procedure TAes.EncryptInitRandom;
+procedure TAes.EncryptInitRandom(Bits: integer);
 var
   rnd: THash256Rec;
 begin // note: we can't use Random128() here to avoid endless recursion
-  TAesPrng.Main.FillRandom(rnd.b);    // 256-bit from CSPRNG
-  EncryptInit(rnd.Lo, 128);           // transient AES-128 secret
-  TAesContext(Context).iv := rnd.h;   // safe IV
+  TAesPrng.Main.FillRandom(rnd.b);    // up to 256-bit from CSPRNG
+  EncryptInit(rnd, Bits);             // transient AES-128/256 secret
+  TAesPrng.Main.FillRandom(rnd.Lo);
+  TAesContext(Context).iv := rnd.l;   // safe IV from CSPRNG
   FillZero(rnd.b);                    // anti-forensic
 end;
 
@@ -4315,15 +4327,6 @@ end;
 function TAes.Initialized: boolean;
 begin
   result := aesInitialized in TAesContext(Context).Flags;
-end;
-
-function TAes.UsesAesni: boolean;
-begin
-  {$ifdef ASMINTEL}
-  result := cfAESNI in CpuFeatures; // Flags may not have been set yet/anymore
-  {$else}
-  result := false;
-  {$endif ASMINTEL}
 end;
 
 function TAes.KeyBits: integer;
@@ -5078,19 +5081,20 @@ end;
 { TAesSignature }
 
 procedure TAesSignature.Init;
-begin
-  fEngine.EncryptInitRandom;
+begin // AES-256 is 40% slower but twice stronger against Quantum attacks
+  fEngine.EncryptInitRandom(128 shl ord(HasHWAes)); // AES-128 or AES-256
 end;
 
 procedure TAesSignature.Generate(aValue: cardinal; aSignature: PHash128Rec);
 var
   aes: TAesContext absolute fEngine;
-begin // 32-bit lower = session, 96-bit upper = digital signature
-  if aValue = 0 then
+begin // 32-bit lower = masked session, 96-bit upper = digital signature
+  if (@self = nil) or
+     (aValue = 0) then
     ESynCrypto.RaiseU('Unexpected TAesSignature.Generate(0)');
-  aValue := aValue xor aes.iv.c0;
+  aValue := aValue xor aes.iv.c0; // masked/obfuscated session ID
   aSignature^.c0 := aValue;
-  aSignature^.c1 := aes.iv.c1;
+  aSignature^.c1 := aes.iv.c1;    // aes.iv is a transient hidden CSPRNG secret
   aSignature^.H  := aes.iv.H;
   aes.DoBlock(aes, aSignature^, aSignature^); // fast and thread-safe
   aSignature^.c0 := aValue;
@@ -5110,7 +5114,8 @@ var
   sign: THash128Rec;
 begin
   result := 0; // failure
-  if aSignature = nil then
+  if (@self = nil) or
+     (aSignature = nil) then
     exit;
   sign.c0 := aSignature^.c0;
   sign.c1 := aes.iv.c1;
@@ -5134,7 +5139,25 @@ end;
 
 function TAesSignature.ValidateCookie(const aCookie: RawUtf8): cardinal;
 begin
-  result := ValidateCookie(pointer(aCookie), length(aCookie));
+  result := 0;
+  if aCookie <> '' then
+    result := ValidateCookie(pointer(aCookie),
+      PStrLen(PAnsiChar(pointer(aCookie)) - _STRLEN)^);
+end;
+
+function TAesSignature.Extract(const aSignature: THash128Rec): cardinal;
+begin
+  result := aSignature.c0 xor TAesContext(fEngine).iv.c0; // just de-obfuscate
+end;
+
+function TAesSignature.Extract(aHex: PUtf8Char): cardinal;
+var
+  sign: THash128Rec;
+begin
+  if HexDisplayToBin(pointer(aHex), @sign, SizeOf(sign)) then
+    result := Extract(sign)
+  else
+    result := 0;
 end;
 
 

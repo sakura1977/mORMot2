@@ -1441,12 +1441,12 @@ const
   // see https://tools.ietf.org/html/rfc6455
   SALT: string[36] = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
 var
-  SHA: TSha1;
+  sha1: TSha1;
 begin
-  SHA.Init;
-  SHA.Update(pointer(Base64), length(Base64));
-  SHA.Update(@SALT[1], 36);
-  SHA.Final(Digest);
+  sha1.Init;
+  sha1.Update(pointer(Base64), length(Base64));
+  sha1.Update(@SALT[1], 36);
+  sha1.Final(Digest);
 end;
 
 procedure ProcessMask(data: PCardinalArray; mask: PtrUInt; len: PtrInt);
@@ -2767,7 +2767,7 @@ var
   uri, version, prot, subprot, key, extin, extout, protout: RawUtf8;
   extins: TRawUtf8DynArray;
   P: PUtf8Char;
-  Digest: TSha1Digest;
+  dig: TSha1Digest;
 begin
   // validate WebSockets protocol upgrade request
   Protocol := nil;
@@ -2845,12 +2845,12 @@ begin
     if not Protocol.ProcessHandshake(extins, extout, nil) then
     begin
       Protocol.Free;
-      result := HTTP_NOTACCEPTABLE;
+      result := HTTP_NOTACCEPTABLE; // 406
       exit;
     end;
   end;
   // return the 101 header and switch protocols
-  ComputeChallenge(key, Digest);
+  ComputeChallenge(key, dig);
   if {%H-}extout <> '' then
     extout := Join(['Sec-WebSocket-Extensions: ', extout, #13#10]);
   FormatUtf8('HTTP/1.1 101 Switching Protocols'#13#10 +
@@ -2858,11 +2858,12 @@ begin
              'Connection: Upgrade'#13#10 +
              'Sec-WebSocket-Connection-ID: %'#13#10 +
              '%' +
-             '%Sec-WebSocket-Accept: %'#13#10#13#10,
+             '%' +
+             'Sec-WebSocket-Accept: %'#13#10#13#10,
     [ConnectionID,
      protout,
      extout,
-     BinToBase64Short(@Digest, SizeOf(Digest))], Response);
+     BinToBase64Short(@dig, SizeOf(dig))], Response);
   result := HTTP_SUCCESS;
   // on connection upgrade, will never be back to plain HTTP/1.1
 end;
@@ -3252,10 +3253,14 @@ begin
     result := fProtocol.fRemoteIP;
 end;
 
+const
+   WSC_TXT: array[TWebSocketProcessNotifyCallback] of AnsiChar = ('B', 'W', 'N');
+
 function TWebSocketProcess.NotifyCallback(aRequest: THttpServerRequestAbstract;
   aMode: TWebSocketProcessNotifyCallback): cardinal;
 var
   request, answer: TWebSocketFrame;
+  bak: PUtf8Char;
   i: integer;
   start, max, tix: Int64;
   head: RawUtf8;
@@ -3266,8 +3271,15 @@ begin
      not fProtocol.InheritsFrom(TWebSocketProtocolRest) then
     exit;
   if WebSocketLog <> nil then
-    WebSocketLog.Add.Log(sllTrace, 'NotifyCallback(%,%)',
-      [aRequest.Url, _TWebSocketProcessNotifyCallback[aMode]^], self);
+  begin
+    bak := PosCharU(aRequest.Url, '?');
+    if bak <> nil then
+      bak^ := #0;  // truncate URI before query parameters
+    WebSocketLog.Add.Log(sllTrace,
+      'NotifyCallback(%,%)', [aRequest.Url, WSC_TXT[aMode]], self);
+    if bak <> nil then
+      bak^ := '?'; // restore
+  end;
   TWebSocketProtocolRest(fProtocol).InputToFrame(aRequest,
     aMode in [wscBlockWithoutAnswer, wscNonBlockWithoutAnswer], request, head);
   case aMode of
@@ -3283,9 +3295,9 @@ begin
         // frame gathering and delayed output has been disabled with SendDelay=0
         aMode := wscBlockWithoutAnswer;
     wscBlockWithAnswer:
-      // need to block until all previous answers are received
       if fIncoming.AnswerToIgnore > 0 then
       begin
+        // need to block until all previous answers are received
         WebSocketLog.Add.Log(sllDebug,
           'NotifyCallback: Waiting for AnswerToIgnore=%',
           [fIncoming.AnswerToIgnore], self);
@@ -3321,7 +3333,7 @@ begin
       exit;
     if aMode = wscBlockWithoutAnswer then
     begin
-      result := HTTP_SUCCESS;
+      result := HTTP_SUCCESS; // no need to wait for the answer
       exit;
     end;
     tix := GetTickCount64;

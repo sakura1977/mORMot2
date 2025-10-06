@@ -3164,9 +3164,11 @@ type
   // - records should have field-level extended RTTI (since Delphi 2010 / FPC
   // trunk), or have been properly defined with Rtti.RegisterFromText() on
   // oldest Delphi or FPC
-  // - allow RTTI or custom mapping, e.g. with Data Transfer Objects (DTO)
-  // - ToA() / ToB() methods are thread-safe by design: once Init() and Map()
-  // have been made, you can safely share a single TRttiMap between threads
+  // - allow RTTI or custom mapping, e.g. between isolated Domain Objects and
+  // Data Transfer Objects (DTO) - also for testing via RandomA/B() and Compare()
+  // - processing methods are thread-safe by design: once Init() and Map()
+  // have been made, you can safely share a single TRttiMap between threads,
+  // e.g. as a global variables in your DTO type definitions unit
   {$ifdef USERECORDWITHMETHODS}
   TRttiMap = record
   {$else}
@@ -3201,7 +3203,7 @@ type
     /// map fields by A,B pairs of names
     // - returns self to continue manual calls to Map() in a fluid interface
     function Map(const ABPairs: array of RawUtf8): PRttiMap; overload;
-    /// thread-safe copy B fields values into A
+    /// thread-safe copy mapped B fields values into A
     // - A and B are either a TObject instance or a @record pointer, depending
     // on Init() supplied types, for instance:
     // !var c: TMyClass;
@@ -3211,10 +3213,10 @@ type
     // !  map.ToA(c, @r); // from TMyRecord to TMyClass
     // !  map.ToB(c, @r); // from TMyClass to TMyRecord
     procedure ToA(A, B: pointer); overload;
-    /// thread-safe copy A fields values into B
+    /// thread-safe copy mapped A fields values into B
     // - A/B are either TObject instance or @record pointer, depending on Init()
     procedure ToB(A, B: pointer); overload;
-    /// thread-safe create a new A, copying field values from B
+    /// thread-safe create a new A, copying mapped field values from B
     // - if Init(A) was a class, returned pointer is a new class instance,
     // which should be released via Free
     // - if Init(A) was a record, returned pointer if a heap-allocated record,
@@ -3245,7 +3247,7 @@ type
     // !  end;
     // !end;
     function ToA(B: pointer): pointer; overload;
-    /// thread-safe create a new B, copying field values from A
+    /// thread-safe create a new B, copying mapped field values from A
     // - if Init(B) was a class, returned pointer is a new class instance,
     // which should be released via Free
     // - if Init(B) was a record, returned pointer if a heap-allocated record,
@@ -3253,20 +3255,16 @@ type
     // - returned B is a newly allocated instance of the TClass specified to Init()
     function ToB(A: pointer): pointer; overload;
     /// compare A and B fields, using the registered properties mapping
-    // - could be useful e.g. for regression tests
+    // - could be useful e.g. for regression tests between DTOs and Domain Objects
     // - A/B are either TObject instance or @record pointer, depending on Init()
     function Compare(A, B: pointer; CaseInsensitive: boolean = false): integer;
-    /// fill one A instance fields with zero / '' values
-    // - A is either a TObject instance or @record pointer, depending on Init()
-    procedure ZeroA(A: pointer);
-    /// fill one B instance fields with zero / '' values
-    // - B is either a TObject instance or @record pointer, depending on Init()
-    procedure ZeroB(B: pointer);
     /// fill one A instance fields with some random values
     // - A is either a TObject instance or @record pointer, depending on Init()
+    // - could be useful e.g. for filling some objects during regression tests
     procedure RandomA(A: pointer);
     /// fill one B instance fields with some random values
     // - B is either a TObject instance or @record pointer, depending on Init()
+    // - could be useful e.g. for filling some objects during regression tests
     procedure RandomB(B: pointer);
   end;
 
@@ -6998,6 +6996,19 @@ end;
 
 { ************* Managed Types Finalization, Random or Copy }
 
+procedure TRttiCustom.ValueRandom(Data: pointer); // defined here for inlining
+begin
+  fSetRandom(Data, self); // handle most simple kind of values from RTTI
+end;
+
+function TRttiCustom.PropsCount: integer;
+begin
+  if self = nil then
+    result := 0
+  else
+    result := fProps.Count;
+end;
+
 { RTTI_FINALIZE[] implementation functions }
 
 function _StringClear(V: PPointer; Info: PRttiInfo): PtrInt;
@@ -7111,11 +7122,16 @@ procedure _NoRandom(V: PPointer; RC: TRttiCustom);
 begin
 end;
 
-// we use SharedRandom since TLightLock may be faster than a threadvar
+// we use SharedRandom since TLightLock is likely to be faster than a threadvar
 
 procedure _FillRandom(V: PByte; RC: TRttiCustom);
-begin
-  SharedRandom.Fill(V, RC.Cache.Size);
+var
+  lec: ^TLecuyerThreadSafe;
+begin // inlined SharedRandom.Fill() for this most common method
+  lec := @SharedRandom;
+  lec^.Safe.Lock;
+  lec^.Generator.Fill(V, RC.Cache.Size);
+  lec^.Safe.UnLock
 end;
 
 procedure _StringRandom(V: PPointer; RC: TRttiCustom);
@@ -7299,7 +7315,7 @@ var
     @_FillRandom,     //  ptHash128
     @_FillRandom,     //  ptHash256
     @_FillRandom,     //  ptHash512
-    @_NoRandom,       //  ptOrm
+    @_FillRandom,     //  ptOrm
     @_FillRandom,     //  ptTimeLog
     {$ifdef HASVARUSTRING}
     @_UStringRandom,
@@ -7571,11 +7587,11 @@ begin
   end;
   if nfo <> nil then
   begin
-    p := pointer(nfo.Props.List); // for both records and classes
     if Info^.Kind = rkClass then
       v := PPointer(Value)^ // classes are passed by reference
     else
       v := @Value;          // records are passed by value
+    p := pointer(nfo.Props.List); // for both records and classes
     for i := 1 to nfo.Props.Count do
     begin
       if (p^.OffsetSet >= 0) and
@@ -9282,11 +9298,6 @@ begin
     {$ifdef FPC} at get_caller_addr(get_frame), get_caller_frame(get_frame) {$endif}
 end;
 
-procedure TRttiCustom.ValueRandom(Data: pointer);
-begin
-  fSetRandom(Data, self); // handle most simple kind of values from RTTI
-end;
-
 function TRttiCustom.ValueFullHash(const Elem): cardinal;
 begin
   result := DefaultHasher(PtrUInt(self), @Elem, fCache.ItemSize);
@@ -9822,13 +9833,6 @@ begin
   r.fArrayRtti := Rtti.RegisterClass(aItemClass);
 end; // no need to set other fields like Name
 
-function TRttiCustom.PropsCount: integer;
-begin
-  if self = nil then
-    result := 0
-  else
-    result := fProps.Count;
-end;
 
 
 { TRttiCustomList }
@@ -10640,35 +10644,27 @@ begin
     inc(pb);
     dec(n);
   until n = 0;
-  result := ComparePointer(A, B);
-end;
-
-procedure TRttiMap.ZeroA(A: pointer);
-begin
-  if aRtti.Kind = rkClass then
-    A := @A; // low-level TRttiCustom methods expect a PObject
-  aRtti.ValueFinalizeAndClear(A); // just use the RTTI
-end;
-
-procedure TRttiMap.ZeroB(B: pointer);
-begin
-  if aRtti.Kind = rkClass then
-    B := @B; // low-level TRttiCustom methods expect a PObject
-  bRtti.ValueFinalizeAndClear(B);
+  result := 0;
 end;
 
 procedure TRttiMap.RandomA(A: pointer);
+var
+  tmp: pointer;
 begin
+  tmp := A;
   if aRtti.Kind = rkClass then
-    A := @A; // low-level TRttiCustom methods expect a PObject
-  aRtti.ValueRandom(A); // just use the RTTI
+    tmp := @A; // low-level TRttiCustom methods expect a PObject
+  aRtti.ValueRandom(tmp); // just use the RTTI
 end;
 
 procedure TRttiMap.RandomB(B: pointer);
+var
+  tmp: pointer;
 begin
-  if aRtti.Kind = rkClass then
-    B := @B; // low-level TRttiCustom methods expect a PObject
-  bRtti.ValueRandom(B);
+  tmp := B;
+  if bRtti.Kind = rkClass then
+    tmp := @B; // low-level TRttiCustom methods expect a PObject
+  bRtti.ValueRandom(tmp);
 end;
 
 

@@ -483,7 +483,7 @@ begin
               'Bandwidth: 1500000'#13#10 +
               'Accept-Language: en-US'#13#10 +
               'User-Agent: QTS (qtver=4.1;cpu=PPC;os=Mac 8.6)'#13#10#13#10,
-              'describe res=% raw=%', [ToText(res)^, raw]);
+              'describe res=% raw=%', [_NR[res], raw]);
           end;
         end;
         // stream output should be redirected to the GET request
@@ -499,7 +499,7 @@ begin
             //if log <> nil then
             //  log.Log(sllCustom1, 'RegressionTests % #%/% received %',
             //    [clientcount, r, rmax, text], proxy);
-            test.CheckUtf8(text = session, 'session res=% raw=%', [ToText(res)^, raw]);
+            test.CheckUtf8(text = session, 'session res=% raw=%', [_NR[res], raw]);
           end;
       end;
       if log <> nil then
@@ -1601,10 +1601,10 @@ begin
     log.Log(sllTrace, 'TunnelTest: sockets start', self);
   nr := NewSocket('127.0.0.1', clientinstance.LocalPort, nlTcp, {bind=}false,
     1000, 1000, 1000, 0, clientsock);
-  CheckUtf8(nr = nrOk, 'clientsock=%', [ToText(nr)^]);
+  CheckUtf8(nr = nrOk, 'clientsock=%', [_NR[nr]]);
   nr := NewSocket('127.0.0.1', serverinstance.LocalPort, nlTcp, {bind=}false,
     1000, 1000, 1000, 0, serversock);
-  CheckUtf8(nr = nrOk, 'serversock=%', [ToText(nr)^]);
+  CheckUtf8(nr = nrOk, 'serversock=%', [_NR[nr]]);
   if not CheckFailed(Assigned(clientinstance.Thread), 'no client thread') and
      not CheckFailed(Assigned(serverinstance.Thread), 'no server thread') then
   try
@@ -1618,17 +1618,25 @@ begin
     for i := 1 to packets do
     begin
       rnd.FillAscii(rnd.Next(200) + 1, sent);
+      PByteArray(sent)[length(sent) shr 1] := 0;
       rnd.FillAscii(rnd.Next(200) + 1, sent2);
-      Check(clientsock.SendAll(pointer(sent), length(sent)) = nrOk);
-      Check(serversock.RecvWait(1000, received) = nrOk);
+      PByteArray(sent2)[length(sent2) shr 1] := ord('"');
+      nr := clientsock.SendAll(pointer(sent), length(sent));
+      CheckUtf8(nr = nrOk, 'SendAll1=%', [_NR[nr]]);
+      nr := serversock.RecvWait(1000, received);
+      CheckUtf8(nr = nrOk, 'RecvWait1=%', [_NR[nr]]);
       CheckBlocks(log, sent, received, 1);
       if CheckFailed(clientinstance.Thread.Processing, 'no client process') or
          CheckFailed(serverinstance.Thread.Processing, 'no server process') then
         break; // don't try any further
-      Check(clientsock.SendAll(pointer(sent2), length(sent2)) = nrOk);
-      Check(serversock.SendAll(pointer(sent), length(sent)) = nrOk);
-      Check(clientsock.RecvWait(1000, received) = nrOk);
-      Check(serversock.RecvWait(1000, received2) = nrOk);
+      nr := clientsock.SendAll(pointer(sent2), length(sent2));
+      CheckUtf8(nr = nrOk, 'SendAll2=%', [_NR[nr]]);
+      nr := serversock.SendAll(pointer(sent), length(sent));
+      CheckUtf8(nr = nrOk, 'SendAll3=%', [_NR[nr]]);
+      nr := clientsock.RecvWait(1000, received);
+      CheckUtf8(nr = nrOk, 'RecvWait2=%', [_NR[nr]]);
+      nr := serversock.RecvWait(1000, received2);
+      CheckUtf8(nr = nrOk, 'RecvWait3=%', [_NR[nr]]);
       CheckBlocks(log, sent, received, 2);
       CheckBlocks(log, sent2, received2, 3);
       CheckEqual(clientinstance.BytesIn, serverinstance.BytesOut);
@@ -1781,7 +1789,7 @@ begin
       local := consolelocal[i].Open(
         session[i], console[c], tunneloptions, 1000, tunnelappsec, cLocalhost,
         ['agentNumber', i]);
-      check(local <> 0);
+      check(local <> 0, 'local');
       checkEqual(local, consolelocal[i].Port);
     end;
     if Assigned(log) then
@@ -1867,7 +1875,7 @@ begin
   SetLength(console, CONSOLE_COUNT); // several agents per console
   relay := TTunnelRelay.Create(TSynLog, {timeoutsecs=}120);
   try
-    // no SOA transmission first
+    // 2.1. no SOA transmission first
     TSynLog.Add.Log(sllInfo, 'Tunnel: retrieve SOA endpoints', self);
     SetLength(agent, 1);
     Check(relay.Resolve(ITunnelAgent, agent[0]), 'sicShared agent');
@@ -1878,12 +1886,18 @@ begin
     TunnelRelay(relay, agent, console, rnd, {packets=}10);
     agent := nil;
     console := nil;
-    // setup a SOA WebSockets server as actual relay over WebSockets
+    // 2.2. setup a SOA WebSockets server as actual relay over WebSockets
     TSynLog.Add.Log(sllInfo, 'Tunnel: start WebSockets server', self);
     restserver := TRestServerFullMemory.CreateWithOwnModel(
       [], {withauth=}true, 'tun');
     try
+      restserver.Options := restserver.Options +
+        [rsoSessionInConnectionOpaque, // also validate some security options :)
+         rsoPerConnectionNonce];
+      // validate SetUser('User', 'password') below using mcfMd5Crypt
+      AuthUserDefaultPassword := '$1$3azHgidD$SrJPt7B.9rekpmwJwtON31';
       restserver.Server.CreateMissingTables;
+      AuthUserDefaultPassword := DEFAULT_HASH_SYNOPSE;
       restserver.ServiceDefine(relay.Agent, [ITunnelAgent]);
       restserver.ServiceContainer.InjectResolver([relay]);
       restserver.ServiceDefine(TTunnelconsole, [ITunnelConsole], sicPerSession);
@@ -1903,7 +1917,7 @@ begin
           agentclient[i] := TRestHttpClientWebsockets.CreateWithOwnModel(
             'localhost', '8888', 'tun');
           agentclient[i].WebSocketsUpgrade(WS_KEY, false, []);
-          check(agentclient[i].SetUser('User', 'synopse'));
+          check(agentclient[i].SetUser('User', 'password'), 'setuser1');
           agentclient[i].ServiceDefine(ITunnelAgent, sicShared);
           agentclient[i].Resolve(ITunnelAgent, agent[i]);
         end;
@@ -1915,7 +1929,7 @@ begin
           consoleclient[i] := TRestHttpClientWebsockets.CreateWithOwnModel(
             'localhost', '8888', 'tun');
           consoleclient[i].WebSocketsUpgrade(WS_KEY, false, []);
-          check(consoleclient[i].SetUser('User', 'synopse'));
+          check(consoleclient[i].SetUser('User', 'password'), 'setuser2');
           consoleclient[i].ServiceDefine(ITunnelConsole, sicPerSession);
           consoleclient[i].Resolve(ITunnelConsole, console[i]);
         end;

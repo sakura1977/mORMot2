@@ -436,8 +436,9 @@ type
   // and mormot.soa.server.pas
   TServiceFactoryServerAbstract = class(TServiceFactory)
   protected
-    fOptions: TInterfaceOptions;
-    fMethods: TUriMethods;
+    fOptions: TInterfaceOptions;    // 8-bit
+    fMethods: TUriMethods;          // 16-bit
+    fInterfaceMethodIndex: integer; // 32-bit
     fResultAsXMLObjectNameSpace: RawUtf8;
     function GetOption(opt: TInterfaceOption): boolean;
       {$ifdef HASINLINE} inline; {$endif}
@@ -634,6 +635,12 @@ type
     /// the HTTP methods used for TRestServerUriContext.UriComputeRoutes
     property Methods: TUriMethods
       read fMethods;
+    /// index of the first method of this interface in the global container
+    // TRestServer.Services.InterfaceMethod[] array
+    // - used e.g. by TAuthSession.StatsInterfaces to gather stats for each
+    // method as ctxt.Service^.InterfaceMethodIndex + ctxt.ServiceMethodIndex
+    property InterfaceMethodIndex: integer
+      read fInterfaceMethodIndex;
   end;
 
 
@@ -675,7 +682,7 @@ type
   /// used to store all methods in a global list of interface-based services
   TServiceContainerInterfaceMethods = array of TServiceContainerInterfaceMethod;
 
-  /// used in TServiceContainer to identify fListInterfaceMethod[] entries
+  /// used to identify TServiceContainer.InterfaceMethod[] entries
   // - maximum bit count of 255 is a limitation of the pascal compiler itself
   TServiceContainerInterfaceMethodBits = set of 0..255;
 

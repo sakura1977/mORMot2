@@ -1115,10 +1115,11 @@ function ModularCryptHash(format: TModularCryptFormat; const password: RawUtf8;
   rounds: cardinal = 0; saltsize: cardinal = 0; const salt: RawUtf8 = ''): RawUtf8; overload;
 
 /// compute the "Modular Crypt" hash of a given password from expected format
-// - the format is the value returned by info^ in ModularCryptIdentify(), e.g.
+// - the format is the value returned by info^ in ModularCryptIdentify(), able
+// to identify the algorithm, its parameters, and the associated salt, e.g.
 // !ModularCryptHash('$1$gV5s/FALJ/0x8nyo$', 'password') = '$1$gV5s/FALJ/0x8nyo$6yO.DIuu/ZF/eJaK5oHu90'
 // - the format can e.g. be send back to the client to make the proper modular
-// crypt hashing on its side, and then the hash (or nonced proof) to the server
+// crypt hashing on its side, and send back the hash (or nonced proof) to the server
 function ModularCryptHash(const format, password: RawUtf8): RawUtf8; overload;
 
 /// identify if a given hash matches any "Modular Crypt" format
@@ -8852,7 +8853,7 @@ begin
   // same logic than TJwtAbstract.Verify, but (slower and) with no cache
   // -> TJwtAbstract is to be preferred if the ICryptCert is reused
   result := cvWrongUsage;
-  P := PosChar(pointer(Jwt), '.');
+  P := PosCharU(Jwt, '.');
   if P = nil then
     exit;
   S := PosChar(P + 1, '.');

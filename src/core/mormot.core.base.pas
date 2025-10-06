@@ -3207,6 +3207,11 @@ function PosChar(Str: PUtf8Char; Chr: AnsiChar): PUtf8Char; overload;
 function PosChar(Str: PUtf8Char; StrLen: PtrInt; Chr: AnsiChar): PUtf8Char; overload;
   {$ifdef HASINLINE}inline;{$endif}
 
+/// fast retrieve the pointer of a given character in a UTF-8 string
+// - will use fast SSE2 asm on x86_64
+function PosCharU(const Str: RawUtf8; Chr: AnsiChar): PUtf8Char;
+  {$ifdef HASINLINE}inline;{$endif}
+
 {$ifndef PUREMORMOT2}
 /// fast dedicated RawUtf8 version of Trim()
 // - in the middle of UI code, consider using TrimU() which won't have name
@@ -4190,8 +4195,8 @@ function SetVariantUnRefSimpleValue(const Source: variant; var Dest: TVarData): 
 
 /// convert any numerical Variant into a 32-bit integer
 // - it will expect true numerical Variant and won't convert any string nor
-// floating-pointer Variant, which will return FALSE and won't change the
-// Value variable content
+// floating-pointer Variant, which will return FALSE and won't change the Value
+// variable content - but accept cardinal/Int64/QWord values fitting into 32-bit
 function VariantToInteger(const V: Variant; var Value: integer): boolean;
 
 /// convert any numerical Variant into a 64-bit integer
@@ -9541,6 +9546,20 @@ begin
     result := Str + StrLen;
 end;
 
+function PosCharU(const Str: RawUtf8; Chr: AnsiChar): PUtf8Char;
+var
+  len: PtrInt;
+begin
+  result := pointer(Str);
+  if Str = '' then
+    exit;
+  len := ByteScanIndex(pointer(result), PStrLen(result - _STRLEN)^, byte(Chr));
+  if len >= 0 then
+    inc(result, len)
+  else
+    result := nil;
+end;
+
 {$ifdef UNICODE}
 
 function PosExString(const SubStr, S: string; Offset: PtrUInt): PtrInt;
@@ -12902,7 +12921,7 @@ begin
   result := false;
   vd := VarDataFromVariant(V);
   repeat
-    case cardinal(vd^.VType) of
+    case cardinal(vd^.VType) of // use a jmp table on FPC
       varNull,
       varEmpty:
         Value := 0;
@@ -12940,13 +12959,6 @@ begin
           Value := vd^.VInt64
         else
           exit;
-      varDouble,
-      varDate,
-      varSingle,
-      varCurrency,
-      varString,
-      varOleStr:
-        exit;
     else
       begin
         vd := SetVarDataUnRefSimpleValue(vd, tmp{%H-});
@@ -13044,19 +13056,16 @@ begin
         exit;
       varBoolean: // 16-bit WordBool to 8-bit boolean
         if vd^.VBoolean then
-          Value := true // normalize
+          Value := true // normalize (an OLE WordBool may be $ffff)
         else
           Value := false;
       varInteger: // coming e.g. from TGetJsonField
         Value := vd^.VInteger = 1;
       varString:
         Value := GetBoolean(vd^.VAny);
+      {$ifdef HASVARUSTRING}  varUString, {$endif HASVARUSTRING}
       varOleStr:
         Value := GetBooleanW(vd^.VAny);
-    {$ifdef HASVARUSTRING}
-      varUString:
-        Value := GetBooleanW(vd^.VAny);
-    {$endif HASVARUSTRING}
     else
       begin
         vd := SetVarDataUnRefSimpleValue(vd, tmp{%H-});
@@ -13077,15 +13086,15 @@ var
 begin
   vd := VarDataFromVariant(V);
   repeat
-    case cardinal(vd^.VType) of
+    case cardinal(vd^.VType) of // use a jmp table on FPC
       varNull,
       varEmpty:
         Value := 0;
       varBoolean:
         if vd^.VBoolean then
-          Value := 1
+          Value := 1 // normalize (an OLE WordBool may be $ffff)
         else
-          Value := 0; // normalize
+          Value := 0;
       varSmallint:
         Value := vd^.VSmallInt;
       varShortInt:
@@ -13105,7 +13114,7 @@ begin
           Value := vd^.VInt64
         else
         begin
-          result := false;
+          result := false; // too huge to fit a signed 64-bit integer
           exit;
         end;
       varInt64:
