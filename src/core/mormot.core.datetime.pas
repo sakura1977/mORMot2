@@ -601,7 +601,7 @@ function TryEncodeTime(Hour, Min, Sec, MSec: cardinal; out Time: TDateTime): boo
   {$ifdef HASINLINE} inline; {$endif}
 
 /// our own faster version of the corresponding RTL function
-// - returns 0 if TryEncodeDate/TryEncodeTime failed
+// - returns 0 if TryEncodeDate() failed but just ignore TryEncodeTime() failure
 function EncodeDateTime(Year, Month, Day, Hour, Min, Sec, MSec: cardinal): TDateTime;
 
 /// our own faster version of the corresponding RTL function
@@ -2038,11 +2038,10 @@ function EncodeDateTime(Year, Month, Day, Hour, Min, Sec, MSec: cardinal): TDate
 var
   time: TDateTime;
 begin
-  if mormot.core.datetime.TryEncodeDate(Year, Month, Day, result) and
-     mormot.core.datetime.TryEncodeTime(Hour, Min, Sec, MSec, time) then
-    result := result + time
-  else
-    result := 0;
+  if not mormot.core.datetime.TryEncodeDate(Year, Month, Day, result) then
+    result := 0
+  else if mormot.core.datetime.TryEncodeTime(Hour, Min, Sec, MSec, time) then
+    result := result + time;
 end;
 
 
@@ -2205,6 +2204,7 @@ end;
 function TSynSystemTime.EncodeForTimeChange(const aYear: word): TDateTime;
 var
   dow, d: word;
+  t: TDateTime;
 begin
   if DayOfWeek = 0 then
     dow := 7 // Delphi/FPC Sunday = 7
@@ -2224,7 +2224,8 @@ begin
     dec(d);
   end;
   // finally add the time when change is due
-  result := result + EncodeTime(Hour, Minute, Second, MilliSecond);
+  if TryEncodeTime(Hour, Minute, Second, MilliSecond, t) then
+    result := result + t;
 end;
 
 procedure TSynSystemTime.Clear;
@@ -2472,7 +2473,8 @@ begin
       dec(zone, TimeZoneLocalBias);
     dt := ToDateTime - zone div MinsPerDay;
     v := abs(zone mod MinsPerDay);
-    t := EncodeTime(v div 60, v mod 60, 0, 0);
+    if not TryEncodeTime(v div 60, v mod 60, 0, 0, t) then
+      exit;
     if zone < 0 then
       dt := dt + t
     else
@@ -3328,12 +3330,10 @@ begin
   {$else}
   lo := PCardinal(@Value)^;
   {$endif CPU64}
-  if lo and (1 shl SHR_DD - 1) = 0 then
-    result := 0
-  else
-    result := EncodeTime((lo shr SHR_H) and AND_H,
-                         (lo shr SHR_M) and AND_M,
-                         lo and AND_S, 0);
+  if (lo and (1 shl SHR_DD - 1) = 0) or
+     not mormot.core.datetime.TryEncodeTime((lo shr SHR_H) and AND_H,
+           (lo shr SHR_M) and AND_M, lo and AND_S, 0, PDateTime(@result)^) then
+    result := 0;
 end;
 
 function TTimeLogBits.ToDate: TDate;
@@ -3739,6 +3739,7 @@ procedure TTextDateWriter.AddDateTime(Value: PDateTime; FirstChar: AnsiChar;
   QuoteChar: AnsiChar; WithMS: boolean; AlwaysDateAndTime: boolean);
 var
   T: TSynSystemTime;
+  d: double; // avoid EBusError on arm32
 begin
   if (PInt64(Value)^ = 0) and
      (QuoteChar = #0) then
@@ -3750,16 +3751,17 @@ begin
   if PInt64(Value)^ <> 0 then
   begin
     inc(B);
+    d := unaligned(Value^);
     if AlwaysDateAndTime or
-       (trunc(Value^) <> 0) then
+       (trunc(d) <> 0) then
     begin
-      T.FromDate(Value^);
+      T.FromDate(d);
       B := DateToIso8601PChar(B, true, T.Year, T.Month, T.Day);
     end;
     if AlwaysDateAndTime or
-       (frac(Value^) <> 0) then
+       (frac(d) <> 0) then
     begin
-      T.FromTime(Value^);
+      T.FromTime(d);
       B := TimeToIso8601PChar(B, true, T.Hour, T.Minute, T.Second,
         T.MilliSecond, FirstChar, WithMS);
       if twoDateTimeWithZ in fCustomOptions then
